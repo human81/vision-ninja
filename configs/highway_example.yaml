@@ -1,0 +1,17 @@
+# Example: full traffic pipeline on the highway clip — counts, zone, speed.
+#   python run.py run --config configs/highway_example.yaml --out out/highway.mp4
+source:
+  uri: "assets/videos/vehicles-2.mp4"
+  loop: false
+
+annotations: "configs/highway_lines.json"
+
+# rough sample calibration (replace with a real 4-point ground survey per camera)
+calibration:
+  image_points: [[0.35, 0.62], [0.65, 0.62], [0.95, 0.95], [0.05, 0.95]]
+  world_points: [[0, 40], [12, 40], [12, 0], [0, 0]]   # meters
+  units: "kmh"
+
+analytics:
+  enabled: true
+  interval_seconds: 5

@@ -1,0 +1,107 @@
+# Default configuration — every knob lives here. Override per-camera by copying
+# this file, or override any field on the CLI: `run.py run --set detector.model=yolo11s`.
+# Cost levers are flagged 💰 — they trade compute/accuracy for speed (and battery).
+
+source:
+  uri: "assets/videos/vehicles.mp4"   # file path | rtsp://... | int webcam index (e.g. "0")
+  # newest-frame-wins capture: for live RTSP/cameras we always serve the latest frame
+  # so network jitter never accumulates as latency. Auto-detected for rtsp/cam.
+  rtsp_transport: "tcp"               # tcp (reliable) | udp (lowest latency)
+  reconnect: true                     # auto-reconnect live streams with backoff
+  loop: true                          # loop video files (false = stop at EOF)
+  max_long_side: 1920                 # 💰 downscale frames so the long side ≤ this (0 = native). 4K→1080p is a big win.
+
+detector:
+  backend: "yolo"                     # yolo | rfdetr (Phase 3)
+  model: "yolo11n.pt"                 # 💰 n < s < m < l < x  (speed → accuracy). Auto-downloaded.
+  device: "mps"                       # mps | cpu | cuda
+  half: true                          # 💰 FP16 on MPS — faster, lower memory
+  imgsz: 640                          # 💰 inference resolution (lower = faster)
+  conf: 0.25                          # confidence threshold
+  iou: 0.7                            # NMS IoU threshold
+  # COCO classes to keep. Named groups expand to ids; or pass explicit ids.
+  classes: ["person", "vehicle"]      # vehicle = car+motorcycle+bus+truck+bicycle
+  rfdetr_checkpoint: "Roboflow/rf-detr-nano"   # nano|small|medium|base (when backend=rfdetr)
+
+tracker:
+  algorithm: "bytetrack"              # bytetrack | botsort | ocsort | sort  (roboflow/trackers)
+  # params: passed straight to the chosen tracker's constructor. Keys that the
+  # selected algorithm doesn't accept are ignored (with a warning), so you can keep
+  # a superset here. See each tracker's signature for the full knob list.
+  params:
+    lost_track_buffer: 30             # frames a track survives without detection
+    frame_rate: 30                    # set to source fps for correct buffer math
+    track_activation_threshold: 0.25  # bytetrack/botsort
+    minimum_consecutive_frames: 2     # frames before a track is confirmed
+    # botsort-only camera-motion compensation (great for PTZ / shaky RTSP):
+    enable_cmc: true
+    cmc_method: "sparseOptFlow"       # orb | sift | sparseOptFlow | ecc
+
+# Zones/lines drawn with `run.py edit`. null = none (full-frame counts only).
+annotations: null                     # e.g. configs/intersection7.json
+
+geometry:
+  min_dwell: 1.0                      # seconds in a zone before it counts as "dwelling"
+
+# Speed estimation (Phase 4). null = off. Calibrate 4 image points (normalized)
+# to their real-world ground coordinates in meters.
+calibration: null
+# calibration:
+#   image_points: [[0.30,0.62],[0.70,0.62],[0.95,0.95],[0.05,0.95]]
+#   world_points: [[0,30],[12,30],[12,0],[0,0]]    # meters on the ground
+#   units: "kmh"                                   # kmh | mph | ms
+#   window: 0.5                                    # smoothing window (s)
+
+# Emit the OccupancyCountingPredictionResult protobuf stream.
+emit:
+  proto: null                         # path; null = don't emit
+
+# Traffic analytics: roll counts into fixed time intervals → CSV + JSON.
+analytics:
+  enabled: false
+  interval_seconds: 900               # 15-min bins (use small values for short clips)
+  csv: null                           # e.g. out/counts.csv
+  json: null                          # e.g. out/summary.json
+
+runtime:
+  detect_every: 1                     # 💰 run the detector every N frames; tracker predicts between.
+                                      #    The single biggest real-time lever. 1 = every frame.
+  max_fps: 0                          # cap processing fps (0 = unlimited). Saves power on easy scenes.
+
+render:
+  show: true                         # open an OpenCV window
+  draw_boxes: true
+  draw_labels: true                  # class + track id + score
+  draw_trails: true                  # track motion trails
+  trail_length: 30
+  draw_zones: true                    # (Phase 2) overlay zones/lines
+  draw_counts: true                   # (Phase 2) live count HUD
+  thickness: 2
+  font_scale: 0.5
+
+# Open-vocab VLM grounding (Phase 4) — off the hot path. Used by `run.py ground`.
+grounding:
+  backend: "locate_anything"          # locate_anything | molmo2
+  checkpoint: "nvidia/LocateAnything-3B"
+  device: "mps"                       # mps | cpu | cuda
+  dtype: "float32"                    # float32 (safest on MPS) | bfloat16 | float16
+  generation_mode: "hybrid"           # fast | slow | hybrid
+  max_new_tokens: 2048
+  # endpoint: null                    # set to a GCP URL to offload inference
+
+# Per-source overrides: applied when the substring (key) appears in source.uri.
+# Explicit --set / config values always win over these. Add an entry per tricky camera.
+source_overrides:
+  market-square:                      # dense wide plaza: tiny people need higher imgsz
+    detector.imgsz: 1280
+    detector.conf: 0.15
+
+# Named COCO class groups → ids. Extend freely.
+class_groups:
+  person:  [0]
+  vehicle: [1, 2, 3, 5, 7]            # bicycle, car, motorcycle, bus, truck
+  bicycle: [1]
+  car:     [2]
+  motorcycle: [3]
+  bus:     [5]
+  truck:   [7]

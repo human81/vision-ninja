@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Models (auto-downloaded)
+*.pt
+
+# Test footage (re-fetch with assets/fetch_assets.sh)
+assets/videos/
+
+# Run artifacts
+out/
+
+# Local editor/tool state
+.claude/settings.local.json
+.DS_Store

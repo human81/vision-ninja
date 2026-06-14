@@ -1,0 +1,9 @@
+{
+  "source": "assets/videos/vehicles-2.mp4",
+  "annotations": [
+    {"id": "midline", "type": "crossing_line", "display_name": "count",
+     "vertices": [[0.05, 0.80], [0.95, 0.80]]},
+    {"id": "roi", "type": "active_zone", "display_name": "roi",
+     "vertices": [[0.2, 0.6], [0.8, 0.6], [0.8, 0.95], [0.2, 0.95]]}
+  ]
+}

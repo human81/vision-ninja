@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["occ*", "proto*"]
+
+[project]
+name = "occupancy-analysis"
+version = "0.1.0"
+description = "Real-time local occupancy & traffic analytics (detect → track → spatial math → OccupancyCountingPredictionResult protobuf + overlays)"
+requires-python = ">=3.12,<3.13"   # 3.14 has no torch/ultralytics/transformers wheels yet
+
+# Phase 0 (data contract) deps — installed now.
+dependencies = [
+    "protobuf>=5.27",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# Phase 1+ real-time spine. Install with: uv pip install -e ".[cv]"
+cv = [
+    "opencv-python>=4.10",
+    "ultralytics>=8.3",      # YOLO11/12, MPS
+    "torch>=2.4",            # Apple Silicon MPS backend
+    "trackers>=0.1",         # roboflow/trackers (ByteTrack, BoT-SORT, OC-SORT, SORT)
+    "supervision>=0.23",     # Detections type + annotators
+    "pyyaml>=6.0",
+]
+# Phase 3 alternate detector.
+rfdetr = [
+    "transformers>=4.46",
+]
+# Phase 4 local VLMs on MPS (LocateAnything / Molmo2).
+vlm = [
+    "transformers>=4.46",
+    "accelerate>=1.0",
+    "pillow>=10.0",
+]
+# Browser UI + Playwright end-to-end driving. After install: playwright install chromium
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "playwright>=1.44",
+]
+# Build-time only (proto compilation).
+build = [
+    "grpcio-tools>=1.66",
+]
+
+[tool.occ]
+# Vendored proto is wire-identical to google/cloud/visionai/v1/annotations.proto.
+proto = "proto/visionai_annotations.proto"
