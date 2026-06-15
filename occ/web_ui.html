@@ -95,6 +95,7 @@
       <button id=stop>Stop</button>
       <button id=clear>Clear</button>
       <button id=save>Save</button>
+      <button id=snap>📷 Snapshot</button>
       <button id=record>● Record</button>
     </div>
     <div id=reclink class=hint></div>
@@ -191,6 +192,10 @@ $('start').onclick=()=>fetch('/start',{method:'POST'});
 $('stop').onclick=()=>fetch('/stop',{method:'POST'});
 $('save').onclick=async()=>{let r=await(await fetch('/save',{method:'POST'})).json();
   $('mode').textContent='saved '+r.count+' → '+r.saved;};
+$('snap').onclick=()=>{const a=document.createElement('a');
+  a.href='/snapshot.png?t='+Date.now();a.download='';
+  document.body.appendChild(a);a.click();a.remove();
+  $('mode').textContent='snapshot saved';};
 let recording=false;
 $('record').onclick=async()=>{
   if(!recording){await fetch('/record/start',{method:'POST'});$('reclink').innerHTML='';}

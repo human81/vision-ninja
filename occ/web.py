@@ -25,7 +25,7 @@ import cv2
 import supervision as sv
 from fastapi import FastAPI, Request
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
-                               StreamingResponse)
+                               Response, StreamingResponse)
 
 from .annotations import Annotation, AnnotationSet
 from .config import Config, _set_dotted
@@ -53,6 +53,7 @@ class WebPipeline:
         self.ann_path: str | None = None
         self._lock = threading.Lock()
         self._jpeg: bytes | None = None
+        self._frame = None                    # latest annotated frame (for PNG snapshot)
         self._stats: dict = {"full_frame": {}, "lines": {}, "zones": {}, "tracks": 0}
         self._fps = 0.0
         self._status = "idle"
@@ -223,6 +224,7 @@ class WebPipeline:
                 with self._lock:
                     if ok:
                         self._jpeg = buf.tobytes()
+                    self._frame = vis
                     self._stats = stats
                     self._fps = 0.9 * self._fps + 0.1 * inst
                 n += 1
@@ -313,6 +315,17 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     def rec_stop():
         name, n = pipe.stop_recording()
         return {"recording": False, "file": name, "frames": n}
+
+    @app.get("/snapshot.png")
+    def snapshot():
+        with pipe._lock:
+            frame = None if pipe._frame is None else pipe._frame.copy()
+        if frame is None:
+            return JSONResponse({"error": "no frame yet"}, status_code=503)
+        ok, buf = cv2.imencode(".png", frame)
+        name = "snap_" + time.strftime("%Y%m%d_%H%M%S") + ".png"
+        return Response(content=buf.tobytes(), media_type="image/png",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     @app.get("/download/{name}")
     def download(name: str):
