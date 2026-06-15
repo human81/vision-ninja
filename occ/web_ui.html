@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1">
+<title>Occupancy &amp; Traffic — Control Panel</title>
+<style>
+  :root{--bg:#0e1117;--panel:#171c26;--line:#262d3a;--fg:#e6edf3;--mut:#8b97a7;
+        --accent:#3fb950;--accent2:#ffb400;--blue:#3b82f6;--danger:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       background:var(--bg);color:var(--fg)}
+  header{display:flex;align-items:center;gap:14px;padding:10px 16px;
+         border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  .pill{font-size:12px;padding:3px 9px;border-radius:999px;background:#22272e;color:var(--mut)}
+  .pill.run{background:rgba(63,185,80,.15);color:var(--accent)}
+  .pill.load{background:rgba(255,180,0,.15);color:var(--accent2)}
+  .pill.err{background:rgba(248,81,73,.15);color:var(--danger)}
+  .grid{display:grid;grid-template-columns:280px 1fr 280px;gap:14px;padding:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
+           margin:0 0 10px}
+  label{display:block;font-size:12px;color:var(--mut);margin:10px 0 4px}
+  select,input[type=range]{width:100%}
+  select,button{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+                border-radius:7px;padding:7px 8px;font-size:13px}
+  select[multiple]{height:104px}
+  button{cursor:pointer}button:hover{border-color:#3a4252}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff;width:100%;
+                 padding:9px;font-weight:600;margin-top:12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .row button{flex:1}
+  .val{float:right;color:var(--fg)}
+  #wrap{position:relative;display:inline-block;line-height:0;max-width:100%}
+  #img{max-width:100%;border-radius:10px;display:block}
+  #cv{position:absolute;left:0;top:0;cursor:crosshair}
+  .stat{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--line);font-size:13px}
+  .stat:last-child{border:0}
+  .stat b{color:var(--accent)}
+  .big{font-size:26px;font-weight:700}
+  .muted{color:var(--mut);font-size:12px}
+  .chip{display:inline-block;background:#22272e;border-radius:6px;padding:2px 7px;margin:2px;font-size:12px}
+  .toolbar{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .toolbar button{flex:1;min-width:64px;padding:6px}
+  .hint{font-size:11px;color:var(--mut);margin-top:8px;line-height:1.5}
+</style>
+</head>
+<body>
+<header>
+  <h1>🚦 Occupancy &amp; Traffic</h1>
+  <span id=status class=pill>connecting…</span>
+  <span class=pill>fps <b id=fps>–</b></span>
+  <span class=pill>tracks <b id=tracks>–</b></span>
+  <span style=flex:1></span>
+  <span id=mode class=pill>idle</span>
+</header>
+
+<div class=grid>
+  <!-- LEFT: configuration -->
+  <div class=card>
+    <h2>Pipeline</h2>
+    <label>Source</label>
+    <select id=source></select>
+    <label>Detector</label>
+    <select id=detector><option>yolo</option><option>rfdetr</option></select>
+    <div id=modelRow><label>YOLO model</label><select id=model></select></div>
+    <div id=rfRow style=display:none><label>RF-DETR checkpoint</label><select id=rfdetr></select></div>
+    <label>Tracker</label>
+    <select id=tracker></select>
+    <label>Confidence <span class=val id=confV>0.25</span></label>
+    <input type=range id=conf min=0.05 max=0.9 step=0.05 value=0.25>
+    <label>Inference size</label>
+    <select id=imgsz><option>320</option><option>480</option><option selected>640</option><option>960</option><option>1280</option></select>
+    <label>Detect every N frames <span class=val id=everyV>1</span></label>
+    <input type=range id=every min=1 max=8 step=1 value=1>
+    <label>Classes</label>
+    <select id=classes multiple></select>
+    <button class=primary id=apply>Apply</button>
+    <div class=hint>Changing these rebuilds the running pipeline live (no restart).</div>
+  </div>
+
+  <!-- CENTER: video + drawing -->
+  <div class=card>
+    <h2>Live view</h2>
+    <div id=wrap><img id=img src=/stream.mjpg><canvas id=cv></canvas></div>
+    <div class=toolbar>
+      <button id=zone>+ Zone</button>
+      <button id=line>+ Line</button>
+      <button id=finish>Finish</button>
+      <button id=start>Start</button>
+      <button id=stop>Stop</button>
+      <button id=clear>Clear</button>
+      <button id=save>Save</button>
+    </div>
+    <div class=hint>Click the video to drop vertices. Zone = ≥3 points then Finish.
+      Line = 2 points (arrow shows the + crossing direction).</div>
+  </div>
+
+  <!-- RIGHT: live stats -->
+  <div class=card>
+    <h2>Counts</h2>
+    <div class=big><span id=total>0</span> <span class=muted>objects in frame</span></div>
+    <div id=fullframe style=margin:8px0></div>
+    <h2 style=margin-top:16px>Line crossings</h2>
+    <div id=lines class=muted>—</div>
+    <h2 style=margin-top:16px>Zone occupancy</h2>
+    <div id=zones class=muted>—</div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let mode='idle',draft=[],shapes=[];
+
+/* ---- config controls ---- */
+async function loadOptions(){
+  const o=await(await fetch('/options')).json();
+  fill($('source'),o.sources); fill($('model'),o.models);
+  fill($('rfdetr'),o.rfdetr_checkpoints); fill($('tracker'),o.trackers);
+  fill($('classes'),o.classes);
+}
+function fill(sel,arr){sel.innerHTML='';arr.forEach(v=>{let op=document.createElement('option');
+  op.value=v;op.textContent=v;sel.appendChild(op);});}
+async function loadConfig(){
+  const c=await(await fetch('/config')).json();
+  setSel('source',c['source.uri']); setSel('detector',c['detector.backend']);
+  setSel('model',c['detector.model']); setSel('rfdetr',c['detector.rfdetr_checkpoint']);
+  setSel('tracker',c['tracker.algorithm']);
+  $('conf').value=c['detector.conf'];$('confV').textContent=c['detector.conf'];
+  setSel('imgsz',String(c['detector.imgsz']));
+  $('every').value=c['runtime.detect_every'];$('everyV').textContent=c['runtime.detect_every'];
+  (c['detector.classes']||[]).forEach(v=>{for(let o of $('classes').options)if(o.value==v)o.selected=true;});
+  toggleDetector();
+}
+function setSel(id,v){for(let o of $(id).options)if(o.value==v){o.selected=true;return;}}
+function toggleDetector(){let y=$('detector').value==='yolo';
+  $('modelRow').style.display=y?'':'none';$('rfRow').style.display=y?'none':'';}
+$('detector').onchange=toggleDetector;
+$('conf').oninput=e=>$('confV').textContent=e.target.value;
+$('every').oninput=e=>$('everyV').textContent=e.target.value;
+$('apply').onclick=async()=>{
+  const cls=[...$('classes').selectedOptions].map(o=>o.value);
+  const body={'source.uri':$('source').value,'detector.backend':$('detector').value,
+    'detector.model':$('model').value,'detector.rfdetr_checkpoint':$('rfdetr').value,
+    'tracker.algorithm':$('tracker').value,'detector.conf':parseFloat($('conf').value),
+    'detector.imgsz':parseInt($('imgsz').value),'runtime.detect_every':parseInt($('every').value)};
+  if(cls.length)body['detector.classes']=cls;
+  $('mode').textContent='applying…';
+  await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+};
+
+/* ---- drawing ---- */
+let img=$('img'),cv=$('cv'),ctx=cv.getContext('2d');
+function resize(){cv.width=img.clientWidth;cv.height=img.clientHeight;draw();}
+img.onload=resize;window.addEventListener('resize',resize);
+$('zone').onclick=()=>{mode='zone';draft=[];setmode()};
+$('line').onclick=()=>{mode='line';draft=[];setmode()};
+$('clear').onclick=()=>{shapes=[];draft=[];mode='idle';post();setmode();draw()};
+function setmode(){$('mode').textContent=mode==='idle'?'idle':('drawing '+mode)}
+cv.onclick=e=>{let r=cv.getBoundingClientRect();
+  draft.push([(e.clientX-r.left)/cv.width,(e.clientY-r.top)/cv.height]);
+  if(mode==='line'&&draft.length===2)finish();draw();};
+$('finish').onclick=finish;
+function finish(){if(mode==='zone'&&draft.length>=3||mode==='line'&&draft.length===2){
+  shapes.push({type:mode==='zone'?'active_zone':'crossing_line',id:mode+shapes.length,vertices:draft});post();}
+  draft=[];mode='idle';setmode();draw();}
+function post(){fetch('/annotations',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(shapes)});}
+function draw(){ctx.clearRect(0,0,cv.width,cv.height);ctx.lineWidth=2;
+  for(let s of shapes){ctx.strokeStyle=s.type==='active_zone'?'#ffb400':'#3fb950';ctx.beginPath();
+    s.vertices.forEach((v,i)=>{let x=v[0]*cv.width,y=v[1]*cv.height;i?ctx.lineTo(x,y):ctx.moveTo(x,y)});
+    if(s.type==='active_zone')ctx.closePath();ctx.stroke();
+    s.vertices.forEach(v=>{ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();
+      ctx.arc(v[0]*cv.width,v[1]*cv.height,3,0,7);ctx.fill()});}
+  if(draft.length){ctx.strokeStyle='#3b82f6';ctx.beginPath();
+    draft.forEach((v,i)=>{let x=v[0]*cv.width,y=v[1]*cv.height;i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();}}
+$('start').onclick=()=>fetch('/start',{method:'POST'});
+$('stop').onclick=()=>fetch('/stop',{method:'POST'});
+$('save').onclick=async()=>{let r=await(await fetch('/save',{method:'POST'})).json();
+  $('mode').textContent='saved '+r.count+' → '+r.saved;};
+async function loadShapes(){try{let a=await(await fetch('/annotations')).json();
+  shapes=a.map(s=>({type:s.type,id:s.id,vertices:s.vertices}));draw();}catch(e){}}
+
+/* ---- live stats ---- */
+function renderStats(s){
+  let p=$('status');p.textContent=s.status||'—';
+  p.className='pill '+(s.status==='running'?'run':(s.status||'').startsWith('error')?'err':'load');
+  $('fps').textContent=s.fps??'–';$('tracks').textContent=s.tracks??'–';
+  let ff=s.full_frame||{};
+  $('total').textContent=Object.values(ff).reduce((a,b)=>a+b,0);
+  $('fullframe').innerHTML=Object.keys(ff).length?
+    Object.entries(ff).map(([k,v])=>`<span class=chip>${k}: <b>${v}</b></span>`).join(''):
+    '<span class=muted>none</span>';
+  let L=s.lines||{};
+  $('lines').innerHTML=Object.keys(L).length?Object.entries(L).map(([id,d])=>
+    `<div class=stat><span>${id}</span><span>+${d.positive} / −${d.negative}</span></div>`).join(''):'—';
+  let Z=s.zones||{};
+  $('zones').innerHTML=Object.keys(Z).length?Object.entries(Z).map(([id,c])=>
+    `<div class=stat><span>${id}</span><b>${c}</b></div>`).join(''):'—';
+}
+async function poll(){try{renderStats(await(await fetch('/stats')).json());}catch(e){}
+  setTimeout(poll,400);}
+
+loadOptions().then(loadConfig);loadShapes();poll();setTimeout(resize,400);
+</script>
+</body>
+</html>

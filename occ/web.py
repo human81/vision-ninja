@@ -1,11 +1,15 @@
-"""Browser UI over the pipeline — so it can be fully driven (and Playwright-tested)
-without an OpenCV window.
+"""Browser UI over the pipeline — rich, interactive control panel.
 
-  GET  /                 control page (MJPEG view + canvas zone editor + live stats)
-  GET  /stream.mjpg      annotated frames as multipart MJPEG
-  GET  /stats            live counts JSON (full-frame, per-line +/- , per-zone, tracks)
-  POST /annotations      replace zones/lines (normalized verts); geometry rebuilds live
-  POST /start /stop      control the worker
+Live-reconfigurable: switch source / detector / model / tracker / conf / classes /
+frame-skip from the browser and the worker rebuilds without a restart. Draw zones &
+lines on the canvas, see live per-class / per-line / per-zone counts, Save to JSON.
+
+  GET  /                 the control-panel page
+  GET  /options          available sources/detectors/models/trackers/classes
+  GET  /config           current settings        POST /config   apply settings (dotted keys)
+  GET  /stream.mjpg      annotated MJPEG          GET  /stats    live counts + fps + status
+  GET  /annotations      current shapes           POST /annotations   replace shapes
+  POST /save             persist shapes to JSON   POST /start /stop    worker control
 
 Run:  OCC_SOURCE=assets/videos/vehicles-2.mp4 uvicorn occ.web:app --port 8000
 """
@@ -23,29 +27,41 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from .annotations import Annotation, AnnotationSet
-from .config import Config
+from .config import Config, _set_dotted
 from .detectors import build_detector
 from .geometry import GeometryEngine
 from .render import Renderer
 from .sources import open_source
 from .tracking import Tracker
 
+_UI = (Path(__file__).resolve().parent / "web_ui.html")
+
+MODELS = ["yolo11n.pt", "yolo11s.pt", "yolo11m.pt", "yolo11l.pt", "yolo11x.pt"]
+RFDETR = ["Roboflow/rf-detr-nano", "Roboflow/rf-detr-small",
+          "Roboflow/rf-detr-medium", "Roboflow/rf-detr-base"]
+TRACKERS = ["bytetrack", "botsort", "ocsort", "sort"]
+CLASS_OPTS = ["person", "vehicle", "car", "truck", "bus", "motorcycle", "bicycle"]
+
 
 class WebPipeline:
-    """Runs source→detect→track→geometry→render in a thread; serves latest frame+stats."""
+    """Runs source→detect→track→geometry→render in a thread; live-reconfigurable."""
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.annotations = AnnotationSet()
+        self.ann_path: str | None = None
         self._lock = threading.Lock()
         self._jpeg: bytes | None = None
         self._stats: dict = {"full_frame": {}, "lines": {}, "zones": {}, "tracks": 0}
+        self._fps = 0.0
+        self._status = "idle"
         self._ann_version = 0
-        self.ann_path: str | None = None
         self._run = threading.Event()
         self._stop = threading.Event()
+        self._dirty = threading.Event()       # config changed → rebuild
         self._thread: threading.Thread | None = None
 
+    # ---- annotations ----
     def set_annotations(self, items: list[dict]):
         anns = [Annotation(id=i.get("id") or f"a{n}", type=i["type"],
                            vertices=[tuple(v) for v in i["vertices"]],
@@ -73,6 +89,28 @@ class WebPipeline:
             self.annotations.save(p)
         return p
 
+    # ---- config ----
+    def reconfigure(self, updates: dict):
+        with self._lock:
+            for k, v in updates.items():
+                _set_dotted(self.cfg.data, k, v)
+            self.cfg._apply_source_overrides(set(updates))
+            self._status = "loading"
+        self._dirty.set()
+
+    def current_config(self) -> dict:
+        g = self.cfg.get
+        return {"source.uri": g("source.uri"),
+                "detector.backend": g("detector.backend"),
+                "detector.model": g("detector.model"),
+                "detector.rfdetr_checkpoint": g("detector.rfdetr_checkpoint"),
+                "tracker.algorithm": g("tracker.algorithm"),
+                "detector.conf": g("detector.conf"),
+                "detector.imgsz": g("detector.imgsz"),
+                "runtime.detect_every": g("runtime.detect_every"),
+                "detector.classes": g("detector.classes")}
+
+    # ---- worker ----
     def start(self):
         self._run.set()
         if self._thread is None:
@@ -85,104 +123,81 @@ class WebPipeline:
     def shutdown(self):
         self._stop.set()
 
-    def _loop(self):
-        src = open_source(self.cfg)
-        det = build_detector(self.cfg)
-        tcfg = self.cfg.section("tracker")
+    def _build(self):
+        with self._lock:
+            cfg = self.cfg
+        src = open_source(cfg)
+        det = build_detector(cfg)
+        tcfg = cfg.section("tracker")
         trk = Tracker(tcfg.get("algorithm", "bytetrack"),
                       {**tcfg.get("params", {}), "frame_rate": round(src.fps)})
-        renderer = Renderer(self.cfg)
-        fps = src.fps or 30.0
-        n = 0
-        geo_engine = GeometryEngine(self.annotations)
-        seen_version = self._ann_version
-        for frame in src.frames():
-            if self._stop.is_set():
-                break
-            if not self._run.is_set():
-                time.sleep(0.05)
-                continue
-            with self._lock:
-                ann = self.annotations
-                version = self._ann_version
-            # rebuild geometry ONLY when annotations change — otherwise the per-track
-            # line-crossing side history must persist across frames.
-            if version != seen_version:
-                geo_engine = GeometryEngine(ann)
-                seen_version = version
-            tracked = trk.update(det.detect(frame), frame)
-            geo = geo_engine.update(tracked, frame.shape[1], frame.shape[0], n / fps)
-            vis = renderer.draw(frame, tracked)
-            vis = renderer.draw_annotations(vis, ann, geo)
-            vis = renderer.draw_counts(vis, geo)
-            ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            stats = {
-                "full_frame": dict(geo.full_frame),
-                "lines": {lid: {"positive": sum(d["positive"].values()),
-                                "negative": sum(d["negative"].values())}
-                          for lid, d in geo.line_counts.items()},
-                "zones": {zid: sum(c.values()) for zid, c in geo.zone_counts.items()},
-                "tracks": 0 if tracked.tracker_id is None else len(tracked),
-            }
-            with self._lock:
-                if ok:
-                    self._jpeg = buf.tobytes()
-                self._stats = stats
-            n += 1
+        return src, det, trk, Renderer(cfg), int(cfg.get("runtime.detect_every", 1) or 1)
 
-    def latest_jpeg(self) -> bytes | None:
+    def _loop(self):
+        while not self._stop.is_set():
+            self._dirty.clear()
+            try:
+                src, det, trk, renderer, every = self._build()
+            except Exception as e:
+                with self._lock:
+                    self._status = f"error: {e}"
+                time.sleep(1.0)
+                continue
+            fps = src.fps or 30.0
+            with self._lock:
+                self._status = "running"
+            geo_engine = GeometryEngine(self.annotations)
+            seen_ann = self._ann_version
+            last_tracked = sv.Detections.empty()
+            t_prev = None
+            n = 0
+            for frame in src.frames():
+                if self._stop.is_set() or self._dirty.is_set():
+                    break
+                if not self._run.is_set():
+                    time.sleep(0.05)
+                    continue
+                with self._lock:
+                    ann = self.annotations
+                    version = self._ann_version
+                if version != seen_ann:
+                    geo_engine = GeometryEngine(ann)
+                    seen_ann = version
+                if n % every == 0:
+                    last_tracked = trk.update(det.detect(frame), frame)
+                tracked = last_tracked
+                geo = geo_engine.update(tracked, frame.shape[1], frame.shape[0], n / fps)
+                vis = renderer.draw(frame, tracked)
+                vis = renderer.draw_annotations(vis, ann, geo)
+                vis = renderer.draw_counts(vis, geo)
+                ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                now = time.perf_counter()
+                inst = 1.0 / max(now - t_prev, 1e-6) if t_prev else self._fps
+                t_prev = now
+                stats = {
+                    "full_frame": dict(geo.full_frame),
+                    "lines": {lid: {"positive": sum(d["positive"].values()),
+                                    "negative": sum(d["negative"].values())}
+                              for lid, d in geo.line_counts.items()},
+                    "zones": {zid: sum(c.values()) for zid, c in geo.zone_counts.items()},
+                    "tracks": 0 if tracked.tracker_id is None else len(tracked)}
+                with self._lock:
+                    if ok:
+                        self._jpeg = buf.tobytes()
+                    self._stats = stats
+                    self._fps = 0.9 * self._fps + 0.1 * inst
+                n += 1
+            src.release()
+            if not (self._dirty.is_set() or self._stop.is_set()):
+                time.sleep(0.2)
+
+    def latest_jpeg(self):
         with self._lock:
             return self._jpeg
 
     def stats(self) -> dict:
         with self._lock:
-            return dict(self._stats)
-
-
-_PAGE = """<!doctype html><html><head><meta charset=utf-8><title>Occupancy</title>
-<style>body{font-family:system-ui;margin:16px}#wrap{position:relative;display:inline-block}
-#cv{position:absolute;left:0;top:0;cursor:crosshair}#stats{font-family:monospace;white-space:pre}
-button{margin-right:8px;padding:6px 10px}</style></head><body>
-<h3>Occupancy / Traffic — browser control</h3>
-<div><button id=zone>Add zone</button><button id=line>Add line</button>
-<button id=finish>Finish shape</button><button id=start>Start</button>
-<button id=stop>Stop</button><button id=save>Save</button><span id=mode>running</span></div>
-<div id=wrap><img id=img src=/stream.mjpg width=640><canvas id=cv width=640 height=360></canvas></div>
-<pre id=stats>stats…</pre>
-<script>
-let img=document.getElementById('img'),cv=document.getElementById('cv'),ctx=cv.getContext('2d');
-let mode='idle',draft=[],shapes=[];
-function resize(){cv.width=img.clientWidth;cv.height=img.clientHeight;draw();}
-img.onload=resize;window.onload=resize;
-document.getElementById('zone').onclick=()=>{mode='zone';draft=[];setmode()};
-document.getElementById('line').onclick=()=>{mode='line';draft=[];setmode()};
-function setmode(){document.getElementById('mode').textContent='mode: '+mode;}
-cv.onclick=e=>{let r=cv.getBoundingClientRect();
- draft.push([(e.clientX-r.left)/cv.width,(e.clientY-r.top)/cv.height]);
- if(mode==='line'&&draft.length===2)finish();draw();};
-document.getElementById('finish').onclick=finish;
-function finish(){if(mode==='zone'&&draft.length>=3||mode==='line'&&draft.length===2){
- shapes.push({type:mode==='zone'?'active_zone':'crossing_line',id:mode+shapes.length,vertices:draft});
- fetch('/annotations',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify(shapes)});}
- draft=[];mode='idle';setmode();draw();}
-function draw(){ctx.clearRect(0,0,cv.width,cv.height);ctx.lineWidth=2;
- for(let s of shapes){ctx.strokeStyle=s.type==='active_zone'?'#ffb400':'#00ff00';ctx.beginPath();
-  s.vertices.forEach((v,i)=>{let x=v[0]*cv.width,y=v[1]*cv.height;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
-  if(s.type==='active_zone')ctx.closePath();ctx.stroke();}
- ctx.strokeStyle='#ff00ff';ctx.beginPath();
- draft.forEach((v,i)=>{let x=v[0]*cv.width,y=v[1]*cv.height;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();}
-document.getElementById('start').onclick=()=>fetch('/start',{method:'POST'});
-document.getElementById('stop').onclick=()=>fetch('/stop',{method:'POST'});
-document.getElementById('save').onclick=async()=>{let r=await(await fetch('/save',{method:'POST'})).json();
- document.getElementById('mode').textContent='saved '+r.count+' → '+r.saved;};
-async function poll(){try{let s=await(await fetch('/stats')).json();
- document.getElementById('stats').textContent=JSON.stringify(s,null,2);}catch(e){}
- setTimeout(poll,500);}poll();
-async function loadShapes(){try{let a=await(await fetch('/annotations')).json();
- shapes=a.map(s=>({type:s.type,id:s.id,vertices:s.vertices}));draw();}catch(e){}}
-loadShapes();
-</script></body></html>"""
+            return {**self._stats, "fps": round(self._fps, 1), "status": self._status}
 
 
 def create_app(cfg: Config | None = None) -> FastAPI:
@@ -190,19 +205,35 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         f"source.uri={os.environ.get('OCC_SOURCE', 'assets/videos/vehicles-2.mp4')}",
         "source.loop=true"])
     pipe = WebPipeline(cfg)
-    # pre-load zones/lines so counts appear immediately (env > config > default file)
     ann_path = (os.environ.get("OCC_ANNOTATIONS") or cfg.get("annotations")
                 or "configs/highway_lines.json")
     pipe.ann_path = ann_path
     if ann_path and Path(ann_path).exists():
         pipe.load_annotations(ann_path)
-    pipe.start()                 # show the live annotated stream by default
+    pipe.start()
+    sources = sorted(str(p) for p in Path("assets/videos").glob("*.mp4"))
+
     app = FastAPI()
     app.state.pipe = pipe
 
     @app.get("/", response_class=HTMLResponse)
     def index():
-        return _PAGE
+        return _UI.read_text()
+
+    @app.get("/options")
+    def options():
+        return {"sources": sources, "detectors": ["yolo", "rfdetr"],
+                "models": MODELS, "rfdetr_checkpoints": RFDETR,
+                "trackers": TRACKERS, "classes": CLASS_OPTS}
+
+    @app.get("/config")
+    def get_config():
+        return JSONResponse(pipe.current_config())
+
+    @app.post("/config")
+    async def set_config(req: Request):
+        pipe.reconfigure(await req.json())
+        return JSONResponse(pipe.current_config())
 
     @app.get("/stream.mjpg")
     def stream():
@@ -229,6 +260,10 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         pipe.set_annotations(await req.json())
         return {"ok": True, "count": len(pipe.annotations.annotations)}
 
+    @app.post("/save")
+    def save():
+        return {"saved": pipe.save_annotations(), "count": len(pipe.annotation_dicts())}
+
     @app.post("/start")
     def start():
         pipe.start()
@@ -238,11 +273,6 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     def stop():
         pipe.stop()
         return {"running": False}
-
-    @app.post("/save")
-    def save():
-        path = pipe.save_annotations()
-        return {"saved": path, "count": len(pipe.annotation_dicts())}
 
     return app
 
