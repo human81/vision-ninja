@@ -95,9 +95,12 @@
       <button id=stop>Stop</button>
       <button id=clear>Clear</button>
       <button id=save>Save</button>
+      <button id=record>● Record</button>
     </div>
+    <div id=reclink class=hint></div>
     <div class=hint>Click the video to drop vertices. Zone = ≥3 points then Finish.
-      Line = 2 points (arrow shows the + crossing direction).</div>
+      Line = 2 points (arrow shows the + crossing direction). Record captures the
+      annotated stream to a downloadable clip.</div>
   </div>
 
   <!-- RIGHT: live stats -->
@@ -188,6 +191,12 @@ $('start').onclick=()=>fetch('/start',{method:'POST'});
 $('stop').onclick=()=>fetch('/stop',{method:'POST'});
 $('save').onclick=async()=>{let r=await(await fetch('/save',{method:'POST'})).json();
   $('mode').textContent='saved '+r.count+' → '+r.saved;};
+let recording=false;
+$('record').onclick=async()=>{
+  if(!recording){await fetch('/record/start',{method:'POST'});$('reclink').innerHTML='';}
+  else{let r=await(await fetch('/record/stop',{method:'POST'})).json();
+    $('reclink').innerHTML=r.frames?`<a href="/download/${r.file}" download style="color:#3b82f6">⬇ download ${r.file} (${r.frames} frames)</a>`:'no frames captured';}
+};
 async function loadShapes(){try{let a=await(await fetch('/annotations')).json();
   shapes=a.map(s=>({type:s.type,id:s.id,vertices:s.vertices}));draw();}catch(e){}}
 
@@ -207,6 +216,9 @@ function renderStats(s){
   let Z=s.zones||{};
   $('zones').innerHTML=Object.keys(Z).length?Object.entries(Z).map(([id,c])=>
     `<div class=stat><span>${id}</span><b>${c}</b></div>`).join(''):'—';
+  recording=!!s.recording;
+  $('record').textContent=recording?('■ Stop · '+(s.rec_frames||0)+'f'):'● Record';
+  $('record').style.color=recording?'#f85149':'';
   pushHist(s);drawChart();
 }
 

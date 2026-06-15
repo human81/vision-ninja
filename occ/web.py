@@ -24,7 +24,8 @@ from pathlib import Path
 import cv2
 import supervision as sv
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               StreamingResponse)
 
 from .annotations import Annotation, AnnotationSet
 from .config import Config, _set_dotted
@@ -60,6 +61,10 @@ class WebPipeline:
         self._stop = threading.Event()
         self._dirty = threading.Event()       # config changed → rebuild
         self._thread: threading.Thread | None = None
+        self._rec = False                     # recording the annotated stream?
+        self._rec_name: str | None = None
+        self._rec_frames = 0
+        self._writer = None
 
     # ---- annotations ----
     def set_annotations(self, items: list[dict]):
@@ -123,6 +128,39 @@ class WebPipeline:
     def shutdown(self):
         self._stop.set()
 
+    # ---- recording the annotated stream ----
+    def start_recording(self) -> str:
+        name = "rec_" + time.strftime("%Y%m%d_%H%M%S") + ".mp4"
+        with self._lock:
+            self._rec, self._rec_name, self._rec_frames = True, name, 0
+        return name
+
+    def stop_recording(self):
+        with self._lock:
+            self._rec = False
+        for _ in range(60):                 # wait for the loop to flush + close
+            if self._writer is None:
+                break
+            time.sleep(0.05)
+        with self._lock:
+            return self._rec_name, self._rec_frames
+
+    def _record_frame(self, vis, fps):
+        """Called inside the loop thread only — all VideoWriter ops live here."""
+        if self._rec:
+            if self._writer is None and self._rec_name:
+                os.makedirs("out/recordings", exist_ok=True)
+                h, w = vis.shape[:2]
+                self._writer = cv2.VideoWriter(
+                    f"out/recordings/{self._rec_name}",
+                    cv2.VideoWriter_fourcc(*"mp4v"), max(1, round(fps)), (w, h))
+            if self._writer is not None and self._writer.isOpened():
+                self._writer.write(vis)
+                self._rec_frames += 1
+        elif self._writer is not None:
+            self._writer.release()
+            self._writer = None
+
     def _build(self):
         with self._lock:
             cfg = self.cfg
@@ -170,6 +208,7 @@ class WebPipeline:
                 vis = renderer.draw(frame, tracked)
                 vis = renderer.draw_annotations(vis, ann, geo)
                 vis = renderer.draw_counts(vis, geo)
+                self._record_frame(vis, fps)
                 ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 now = time.perf_counter()
                 inst = 1.0 / max(now - t_prev, 1e-6) if t_prev else self._fps
@@ -197,7 +236,9 @@ class WebPipeline:
 
     def stats(self) -> dict:
         with self._lock:
-            return {**self._stats, "fps": round(self._fps, 1), "status": self._status}
+            return {**self._stats, "fps": round(self._fps, 1), "status": self._status,
+                    "recording": self._rec, "rec_frames": self._rec_frames,
+                    "rec_name": self._rec_name}
 
 
 def create_app(cfg: Config | None = None) -> FastAPI:
@@ -263,6 +304,22 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     @app.post("/save")
     def save():
         return {"saved": pipe.save_annotations(), "count": len(pipe.annotation_dicts())}
+
+    @app.post("/record/start")
+    def rec_start():
+        return {"recording": True, "file": pipe.start_recording()}
+
+    @app.post("/record/stop")
+    def rec_stop():
+        name, n = pipe.stop_recording()
+        return {"recording": False, "file": name, "frames": n}
+
+    @app.get("/download/{name}")
+    def download(name: str):
+        p = Path("out/recordings") / Path(name).name      # prevent path traversal
+        if not p.exists():
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return FileResponse(str(p), media_type="video/mp4", filename=p.name)
 
     @app.post("/start")
     def start():
