@@ -10,8 +10,11 @@ from .base import GroundBox, Grounder, parse_locate_anything_boxes, suggest_zone
 
 
 def build_grounder(cfg):
-    backend = cfg.get("grounding.backend", "locate_anything").lower()
-    if backend == "locate_anything":
+    backend = cfg.get("grounding.backend", "owlv2").lower()
+    if backend == "owlv2":                         # Mac-native (MPS), no decord
+        from .owlv2 import Owlv2Grounder
+        return Owlv2Grounder(cfg)
+    if backend == "locate_anything":               # heavy VLM; GCP/Linux (needs decord)
         from .locate_anything import LocateAnythingGrounder
         return LocateAnythingGrounder(cfg)
     if backend == "molmo2":

@@ -79,15 +79,19 @@ render:
   thickness: 2
   font_scale: 0.5
 
-# Open-vocab VLM grounding (Phase 4) — off the hot path. Used by `run.py ground`.
+# Open-vocab grounding (Phase 4) — off the hot path. Used by `run.py ground`.
 grounding:
-  backend: "locate_anything"          # locate_anything | molmo2
-  checkpoint: "nvidia/LocateAnything-3B"
+  backend: "owlv2"                    # owlv2 (Mac/MPS) | locate_anything (GCP/Linux) | molmo2
   device: "mps"                       # mps | cpu | cuda
-  dtype: "float32"                    # float32 (safest on MPS) | bfloat16 | float16
+  # --- owlv2 (Mac-native, runs on MPS, ~600MB, no decord) ---
+  owlv2_checkpoint: "google/owlv2-base-patch16-ensemble"
+  threshold: 0.1
+  # --- locate_anything (heavy 3B VLM; needs decord → GCP/Linux only) ---
+  checkpoint: "nvidia/LocateAnything-3B"
+  dtype: "float32"                    # float32 (safest) | bfloat16 | float16
   generation_mode: "hybrid"           # fast | slow | hybrid
   max_new_tokens: 2048
-  # endpoint: null                    # set to a GCP URL to offload inference
+  # endpoint: null                    # set to a GCP URL to offload heavy VLM inference
 
 # Per-source overrides: applied when the substring (key) appears in source.uri.
 # Explicit --set / config values always win over these. Add an entry per tricky camera.
