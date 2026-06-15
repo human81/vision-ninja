@@ -98,7 +98,7 @@ def main(argv=None):
     r = sub.add_parser("run", help="run the real-time pipeline")
     r.add_argument("--config", default=None, help="path to a config YAML")
     r.add_argument("--source", help="override source.uri (file | rtsp:// | cam index)")
-    r.add_argument("--detector", choices=["yolo", "rfdetr"], help="detector backend")
+    r.add_argument("--detector", choices=["yolo", "rfdetr", "owlv2"], help="detector backend")
     r.add_argument("--model", help="override detector.model (e.g. yolo11s.pt)")
     r.add_argument("--tracker", choices=["bytetrack", "botsort", "ocsort", "sort"])
     r.add_argument("--detect-every", type=int, dest="detect_every",

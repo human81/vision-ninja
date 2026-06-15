@@ -66,9 +66,13 @@
     <label>Source</label>
     <select id=source></select>
     <label>Detector</label>
-    <select id=detector><option>yolo</option><option>rfdetr</option></select>
+    <select id=detector><option>yolo</option><option>rfdetr</option><option>owlv2</option></select>
     <div id=modelRow><label>YOLO model</label><select id=model></select></div>
     <div id=rfRow style=display:none><label>RF-DETR checkpoint</label><select id=rfdetr></select></div>
+    <div id=ovRow style=display:none><label>Open-vocab classes (type, comma-separated)</label>
+      <input id=ovprompt placeholder="forklift, stroller, ambulance"
+             style="width:100%;background:#0d1117;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:7px 8px;font-size:13px">
+      <div class=hint>OWLv2 on MPS — slower; raise “Detect every N” to keep it smooth.</div></div>
     <label>Tracker</label>
     <select id=tracker></select>
     <label>Confidence <span class=val id=confV>0.25</span></label>
@@ -142,13 +146,16 @@ async function loadConfig(){
   setSel('tracker',c['tracker.algorithm']);
   $('conf').value=c['detector.conf'];$('confV').textContent=c['detector.conf'];
   setSel('imgsz',String(c['detector.imgsz']));
+  $('ovprompt').value=c['detector.owlv2_prompt']||'';
   $('every').value=c['runtime.detect_every'];$('everyV').textContent=c['runtime.detect_every'];
   (c['detector.classes']||[]).forEach(v=>{for(let o of $('classes').options)if(o.value==v)o.selected=true;});
   toggleDetector();
 }
 function setSel(id,v){for(let o of $(id).options)if(o.value==v){o.selected=true;return;}}
-function toggleDetector(){let y=$('detector').value==='yolo';
-  $('modelRow').style.display=y?'':'none';$('rfRow').style.display=y?'none':'';}
+function toggleDetector(){let v=$('detector').value;
+  $('modelRow').style.display=v==='yolo'?'':'none';
+  $('rfRow').style.display=v==='rfdetr'?'':'none';
+  $('ovRow').style.display=v==='owlv2'?'':'none';}
 $('detector').onchange=toggleDetector;
 $('conf').oninput=e=>$('confV').textContent=e.target.value;
 $('every').oninput=e=>$('everyV').textContent=e.target.value;
@@ -157,7 +164,8 @@ $('apply').onclick=async()=>{
   const body={'source.uri':$('source').value,'detector.backend':$('detector').value,
     'detector.model':$('model').value,'detector.rfdetr_checkpoint':$('rfdetr').value,
     'tracker.algorithm':$('tracker').value,'detector.conf':parseFloat($('conf').value),
-    'detector.imgsz':parseInt($('imgsz').value),'runtime.detect_every':parseInt($('every').value)};
+    'detector.imgsz':parseInt($('imgsz').value),'runtime.detect_every':parseInt($('every').value),
+    'detector.owlv2_prompt':$('ovprompt').value};
   if(cls.length)body['detector.classes']=cls;
   $('mode').textContent='applying…';
   await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});

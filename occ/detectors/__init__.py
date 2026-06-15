@@ -12,6 +12,9 @@ def build_detector(cfg) -> Detector:
     if backend == "rfdetr":
         from .rfdetr import RfDetrDetector  # Phase 3, optional dep
         return RfDetrDetector(cfg)
+    if backend == "owlv2":
+        from .owlv2 import Owlv2Detector    # open-vocab, MPS
+        return Owlv2Detector(cfg)
     raise ValueError(f"unknown detector backend: {backend!r}")
 
 

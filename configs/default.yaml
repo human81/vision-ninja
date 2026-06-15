@@ -22,6 +22,11 @@ detector:
   # COCO classes to keep. Named groups expand to ids; or pass explicit ids.
   classes: ["person", "vehicle"]      # vehicle = car+motorcycle+bus+truck+bicycle
   rfdetr_checkpoint: "Roboflow/rf-detr-nano"   # nano|small|medium|base (when backend=rfdetr)
+  # open-vocab detector (backend=owlv2): type any comma-separated classes. Slow —
+  # pair with a high detect_every. Runs on MPS.
+  owlv2_prompt: "person, car, truck, bus, bicycle"
+  owlv2_threshold: 0.1
+  owlv2_checkpoint: "google/owlv2-base-patch16-ensemble"
 
 tracker:
   algorithm: "bytetrack"              # bytetrack | botsort | ocsort | sort  (roboflow/trackers)

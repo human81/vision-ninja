@@ -110,6 +110,7 @@ class WebPipeline:
                 "detector.backend": g("detector.backend"),
                 "detector.model": g("detector.model"),
                 "detector.rfdetr_checkpoint": g("detector.rfdetr_checkpoint"),
+                "detector.owlv2_prompt": g("detector.owlv2_prompt"),
                 "tracker.algorithm": g("tracker.algorithm"),
                 "detector.conf": g("detector.conf"),
                 "detector.imgsz": g("detector.imgsz"),
@@ -265,7 +266,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get("/options")
     def options():
-        return {"sources": sources, "detectors": ["yolo", "rfdetr"],
+        return {"sources": sources, "detectors": ["yolo", "rfdetr", "owlv2"],
                 "models": MODELS, "rfdetr_checkpoints": RFDETR,
                 "trackers": TRACKERS, "classes": CLASS_OPTS}
 
