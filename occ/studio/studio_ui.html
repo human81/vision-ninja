@@ -183,7 +183,7 @@
         <div id=wrap>
           <img id=img src=/stream.mjpg>
           <img id=media style=display:none>
-          <video id=video controls loop muted playsinline style=display:none></video>
+          <video id=video controls playsinline preload=metadata style=display:none></video>
           <div class=hud><span class=pill id=src>source</span>
             <span class=pill id=canvasmode>live</span></div>
           <button id=livebtn class="pill on" onclick="setCanvas('live')">● live</button>
@@ -336,7 +336,7 @@ function setCanvas(mode,src,caption){
     $('livebtn').classList.remove('on');}
   else if(mode==='video'&&src){img.style.display='none';hide(media);
     vid.src=src;vid.style.display='block';$('livebtn').classList.remove('on');
-    vid.play().catch(()=>{});}
+    vid.load();}   /* show native controls + big play button; user controls playback w/ audio */
   else{hide(media);hide(vid);try{vid.pause();}catch(e){}img.style.display='block';
     $('canvasmode').textContent='live';$('livebtn').classList.add('on');}
 }

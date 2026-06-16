@@ -76,11 +76,6 @@ class StreamSource:
         self._seq = 0
         self._stop = threading.Event()
 
-        if str(uri).startswith("rtsp"):
-            # must be set before VideoCapture is created
-            os.environ.setdefault(
-                "OPENCV_FFMPEG_CAPTURE_OPTIONS",
-                f"rtsp_transport;{rtsp_transport}")
         self.cap = self._open()
         self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
 
@@ -88,13 +83,27 @@ class StreamSource:
         self._thread.start()
 
     def _open(self) -> cv2.VideoCapture:
-        src: int | str = int(self.uri) if str(self.uri).isdigit() else self.uri
-        cap = cv2.VideoCapture(src)
-        try:
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # minimize internal buffering
-        except Exception:
-            pass
+        """Open the stream FAIL-FAST. An unreachable/bad RTSP or http URL must never
+        block the caller indefinitely (that freezes the whole pipeline), so we bound
+        the FFMPEG open + read with timeouts before constructing the capture."""
+        uri = str(self.uri)
+        if uri.startswith(("rtsp", "http")):
+            # microsecond FFMPEG timeouts — set BEFORE VideoCapture is created.
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                f"rtsp_transport;{self.rtsp_transport}|stimeout;5000000|timeout;8000000")
+            cap = cv2.VideoCapture(uri, cv2.CAP_FFMPEG)
+        else:
+            src: int | str = int(uri) if uri.isdigit() else uri
+            cap = cv2.VideoCapture(src)
+        for prop, val in ((cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 6000),
+                          (cv2.CAP_PROP_READ_TIMEOUT_MSEC, 6000),
+                          (cv2.CAP_PROP_BUFFERSIZE, 1)):
+            try:
+                cap.set(prop, val)
+            except Exception:
+                pass
         if not cap.isOpened():
+            cap.release()
             raise RuntimeError(f"cannot open stream: {self.uri}")
         return cap
 
@@ -122,8 +131,12 @@ class StreamSource:
 
     def frames(self) -> Iterator[np.ndarray]:
         last_seq = -1
-        # wait for first frame
+        # wait for first frame — but BOUNDED, so a stream that opens yet never
+        # delivers (dead URL) can't hang the pipeline thread forever.
+        t0 = time.time()
         while self._latest is None and not self._stop.is_set():
+            if time.time() - t0 > 10.0:
+                return
             time.sleep(0.01)
         while not self._stop.is_set():
             with self._lock:

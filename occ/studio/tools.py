@@ -739,15 +739,21 @@ def use_source(item_id: int = 0, query: str = "") -> dict:
         return {"status": "error", "error": "no matching live source"}
     url = item["path"]
     if item["kind"] == "youtube_live":
+        stream = None
         try:
             p = subprocess.run([sys.executable, "-m", "yt_dlp", "-g", "-f",
                                 "best[height<=720]/best", url],
                                capture_output=True, text=True, timeout=60)
-            lines = (p.stdout or "").strip().splitlines()
-            if lines:
-                url = lines[-1]
-        except Exception:
-            pass
+            for ln in reversed((p.stdout or "").strip().splitlines()):
+                if ln.startswith("http") and "youtube.com/watch" not in ln and "youtu.be" not in ln:
+                    stream = ln.strip(); break
+        except Exception as e:
+            return {"status": "error", "error": f"could not resolve YouTube live: {e}"}
+        if not stream:
+            return {"status": "error",
+                    "error": "could not resolve a playable stream from that YouTube URL "
+                             "(it may not be live, or geo-blocked)"}
+        url = stream
     ctx().pipe.reconfigure({"source.uri": url})
     return {"status": "success", "source": url, "name": item["caption"], "ui": "config"}
 

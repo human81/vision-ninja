@@ -188,17 +188,24 @@ class StudioPipeline:
     def _loop(self):
         while not self._stop.is_set():
             self._dirty.clear()
+            uri = str(self.cfg.get("source.uri", ""))
             try:
                 src, det, trk, renderer, every = self._build()
             except Exception as e:
+                # never freeze: show a clear card, then retry (a new switch wins via dirty)
+                self._set_placeholder("cannot open source", os.path.basename(uri))
                 with self._lock:
                     self._status = f"error: {e}"
-                time.sleep(1.0)
+                for _ in range(10):                     # ~1s, but bail early on a new switch
+                    if self._dirty.is_set() or self._stop.is_set():
+                        break
+                    time.sleep(0.1)
                 continue
             fps = src.fps or 30.0
             model = str(self.cfg.get("detector.model", "yolo11m.pt"))
             with self._lock:
                 self._status = "running"
+            self._set_placeholder("connecting…", os.path.basename(uri))
             geo_engine = GeometryEngine(self.annotations)
             seen_ann = self._ann_version
             last_tracked = sv.Detections.empty()
@@ -258,6 +265,20 @@ class StudioPipeline:
             src.release()
             if not (self._dirty.is_set() or self._stop.is_set()):
                 time.sleep(0.2)
+
+    def _set_placeholder(self, title: str, sub: str = ""):
+        """Render a status card so the canvas shows state, never a frozen frame."""
+        img = np.full((360, 640, 3), 22, np.uint8)
+        cv2.putText(img, title, (28, 168), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                    (90, 200, 255), 2, cv2.LINE_AA)
+        if sub:
+            cv2.putText(img, sub[:54], (28, 205), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (170, 170, 170), 1, cv2.LINE_AA)
+        ok, buf = cv2.imencode(".jpg", img)
+        with self._lock:
+            if ok:
+                self._jpeg = buf.tobytes()
+            self._frame_vis = img
 
     # ---- reads for tools / server ----
     def latest_jpeg(self):
