@@ -172,12 +172,22 @@ class Overlay:
     errors: int = 0
 
 
-_SAFE_BUILTINS = {k: __builtins__[k] if isinstance(__builtins__, dict)
-                  else getattr(__builtins__, k)
-                  for k in ("abs", "min", "max", "len", "range", "enumerate",
-                            "zip", "sorted", "sum", "round", "int", "float",
-                            "str", "list", "dict", "tuple", "set", "bool",
-                            "map", "filter", "any", "all", "reversed")}
+# Builtins the agent's cv2 code may use. The overlay sandbox is for avoiding
+# accidents (no open/eval/exec/__import__), not real security — the agent is
+# trusted to author arbitrary cv2, so include the everyday introspection/number/
+# sequence helpers it reaches for (hasattr/getattr/isinstance were missing and
+# raised NameError at render time, so overlays silently never drew).
+_SAFE_BUILTIN_NAMES = (
+    "abs", "min", "max", "len", "range", "enumerate", "zip", "sorted", "sum",
+    "round", "int", "float", "str", "list", "dict", "tuple", "set", "frozenset",
+    "bool", "bytes", "bytearray", "map", "filter", "any", "all", "reversed",
+    "hasattr", "getattr", "setattr", "isinstance", "issubclass", "callable",
+    "divmod", "pow", "chr", "ord", "hex", "bin", "oct", "format", "repr",
+    "slice", "type", "iter", "next", "print", "hash", "complex",
+)
+_SAFE_BUILTINS = {k: (__builtins__[k] if isinstance(__builtins__, dict)
+                      else getattr(__builtins__, k))
+                  for k in _SAFE_BUILTIN_NAMES}
 
 
 def compile_overlay(code: str):
