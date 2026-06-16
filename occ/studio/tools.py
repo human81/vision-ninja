@@ -143,10 +143,26 @@ def draw_line(points: list, name: str = "") -> dict:
     return {"status": "success", "annotation": item, "ui": "annotations"}
 
 
+def _clear_all_overlays() -> int:
+    n = ctx().overlays.clear() if ctx().overlays else 0
+    if ctx().brain:
+        for o in list(ctx().brain.d.get("overlays", [])):
+            ctx().brain.forget_overlay(o["name"])
+    return n
+
+
 def clear_annotations() -> dict:
-    """Remove all zones and lines."""
+    """Clear EVERYTHING drawn on the video — all zones, lines AND dynamic overlays
+    (rings, heatmaps, trails, …). Detection boxes are the core output, not cleared."""
     ctx().pipe.set_annotations([])
-    return {"status": "success", "ui": "annotations"}
+    n = _clear_all_overlays()
+    return {"status": "success", "cleared_overlays": n, "ui": "annotations"}
+
+
+def clear_overlays() -> dict:
+    """Remove ALL dynamic OpenCV overlays (keep zones/lines). Use to wipe the
+    rings/heatmaps/trails without touching counting zones or lines."""
+    return {"status": "success", "removed": _clear_all_overlays(), "ui": "overlays"}
 
 
 # ---------- the OpenCV overlay ninja ----------
@@ -989,7 +1005,7 @@ def direct_story(brief: str, scenes: int = 3, mode: str = "fast",
 ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_tracker, set_detect_every,
     draw_zone, draw_line, clear_annotations,
-    list_overlays, toggle_overlay, create_overlay, remove_overlay,
+    list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, extend_video, narrate, generate_music,

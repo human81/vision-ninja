@@ -486,7 +486,9 @@ async function pollOverlays(){try{let o=await(await fetch('/overlays')).json();
   let active=o.overlays.map(v=>`<span class="chip ${v.enabled?'on':''}" onclick="toggleOv('${v.name}',${!v.enabled})">${v.enabled?'◉':'○'} ${v.name} <span class=x onclick="event.stopPropagation();rmOv('${v.name}')">✕</span></span>`).join('');
   let presets=o.presets.filter(p=>!o.overlays.find(v=>v.name===p))
     .map(p=>`<span class=chip onclick="toggleOv('${p}',true)">+ ${p}</span>`).join('');
-  $('ovchips').innerHTML=active+presets||'<span class=muted>no overlays yet — ask the ninja</span>';}catch(e){}}
+  let clearall=o.overlays.length?`<span class=chip style="border-color:var(--danger);color:var(--danger)" onclick="clearAllOv()">✕ clear all</span>`:'';
+  $('ovchips').innerHTML=clearall+active+presets||'<span class=muted>no overlays yet — ask the ninja</span>';}catch(e){}}
+window.clearAllOv=async()=>{await fetch('/overlays/clear',{method:'POST'});pollOverlays();toast('overlays cleared');};
 window.toggleOv=async(n,on)=>{await fetch('/overlays/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,on})});pollOverlays();};
 window.rmOv=async(n)=>{await fetch('/overlays/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});pollOverlays();};
 

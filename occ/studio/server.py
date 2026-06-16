@@ -163,6 +163,13 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         b = await req.json()
         return {"ok": overlays.remove(b.get("name", ""))}
 
+    @app.post("/overlays/clear")
+    def clear_overlays_route():
+        n = overlays.clear()
+        for o in list(brain.d.get("overlays", [])):
+            brain.forget_overlay(o["name"])
+        return {"removed": n}
+
     # ---------- meter / brain / graph / settings ----------
     @app.get("/usage")
     def usage():

@@ -63,7 +63,8 @@ def _ui_action(res: dict) -> dict:
 
 _LIVE_TOOLS = {"set_source", "set_detector", "set_tracker", "set_detect_every",
                "draw_zone", "draw_line", "clear_annotations", "toggle_overlay",
-               "create_overlay", "remove_overlay", "use_source", "load_youtube"}
+               "create_overlay", "remove_overlay", "clear_overlays", "use_source",
+               "load_youtube"}
 
 
 def _file_url(path: str) -> str:
@@ -128,7 +129,8 @@ def frames_for(name: str, res) -> list[dict]:
                                          "detail": res.get("error", "")}})
     if res.get("ui"):
         out.append({"type": "refresh", "data": {"panel": res["ui"]}})
-    if name in ("create_overlay", "toggle_overlay", "remove_overlay"):
+    if name in ("create_overlay", "toggle_overlay", "remove_overlay", "clear_overlays",
+                "clear_annotations"):
         out.append({"type": "refresh", "data": {"panel": "overlays"}})
     if name in ("nano_banana", "virtual_try_on", "describe_image", "analyze_image",
                 "save_to_library", "generate_video", "extend_video"):
@@ -213,6 +215,15 @@ class SimRunner:
             m = m.replace(img.lower(), " ")
             add("analyze_image", {"image": img, "caption": "shared image"}, None,
                 "ingest + analyze the image")
+
+        # clear annotations / overlays
+        if any(p in m for p in ("clear all", "clear annotation", "clear overlay",
+                                "clear everything", "remove all overlay", "wipe the",
+                                "clear the annotation", "clear the overlay", "reset the overlay")):
+            if "overlay" in m and not any(w in m for w in ("annotation", "all", "everything")):
+                add("clear_overlays", {}, "Removed all overlays.", "clear overlays")
+            else:
+                add("clear_annotations", {}, "Cleared all zones, lines and overlays.", "clear all")
 
         # Co-Director generative storytelling (generate footage)
         ms = re.search(r"(?:direct a story|generate (?:a )?(?:video|story|reel|footage)|"

@@ -204,6 +204,13 @@ class OverlayEngine:
         with self._lock:
             return self.overlays.pop(name, None) is not None
 
+    def clear(self) -> int:
+        """Remove ALL overlays. Returns how many were removed."""
+        with self._lock:
+            n = len(self.overlays)
+            self.overlays = {}
+            return n
+
     def toggle(self, name: str, on: bool | None = None) -> bool:
         with self._lock:
             ov = self.overlays.get(name)
