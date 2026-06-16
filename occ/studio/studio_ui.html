@@ -90,6 +90,27 @@
   #graph{width:100%;height:260px;display:block}
   .note{font-size:12px;background:#0e1521;border:1px solid var(--line);border-radius:7px;
     padding:6px 8px;margin-top:6px}
+  .tabs{flex-wrap:wrap}
+  .tabs button{min-width:74px;font-size:11px;padding:6px 4px}
+  .srch{width:100%;background:#0a0f17;color:var(--fg);border:1px solid var(--line);
+    border-radius:8px;padding:7px 9px;margin-bottom:9px;font-size:12px}
+  .lib{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .lib .it{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#0b1019;cursor:pointer}
+  .lib .it:hover{border-color:var(--cyan)}
+  .lib .it img{width:100%;height:78px;object-fit:cover;display:block}
+  .lib .it .vid{height:78px;display:flex;align-items:center;justify-content:center;
+    color:var(--cyan);font-size:24px;background:#0a1018}
+  .lib .it .cap{font-size:10px;padding:4px 6px;color:var(--mut);white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .srcrow{display:flex;justify-content:space-between;align-items:center;gap:6px;
+    border-bottom:1px dashed var(--line);padding:7px 0;font-size:12px}
+  .srcrow .u{color:var(--cyan)}.srcrow small{color:var(--mut)}
+  .srcrow button{font-size:11px;padding:3px 9px;background:#141c29;border:1px solid var(--line);
+    color:var(--fg);border-radius:6px;cursor:pointer}
+  .mrow{margin:9px 0}.mrow label{display:block;font-size:11px;color:var(--mut);margin-bottom:3px}
+  .mrow select{width:100%}
+  .savebtn{width:100%;background:var(--blue);border:0;color:#fff;border-radius:8px;
+    padding:9px;font-weight:600;margin-top:10px;cursor:pointer}
   #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#17202e;
     border:1px solid var(--cyan);color:var(--fg);padding:9px 15px;border-radius:10px;
     font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:50;max-width:70vw}
@@ -147,9 +168,12 @@
   <div class=col>
     <div class="card flex" id=panel-right>
       <div class=tabs>
-        <button data-tab=meter class=active>Cost Meter</button>
-        <button data-tab=brain>Vision Brain</button>
-        <button data-tab=graph>Neuron Graph</button>
+        <button data-tab=meter class=active>Meter</button>
+        <button data-tab=brain>Brain</button>
+        <button data-tab=graph>Graph</button>
+        <button data-tab=library>Library</button>
+        <button data-tab=sources>Sources</button>
+        <button data-tab=models>Models</button>
       </div>
       <div class="pane active" id=pane-meter>
         <div class=big><span id=mpts>0</span> <span class=muted style=font-size:13px>points today</span></div>
@@ -174,6 +198,21 @@
       <div class=pane id=pane-graph>
         <canvas id=graph></canvas>
         <div class=muted style=font-size:11px>Senses → Perception → Analytics → Render → Export → Brain → Agent. Node glow = live compute. Edges = data flow.</div>
+      </div>
+      <div class=pane id=pane-library>
+        <input class=srch id=libq placeholder="search media (e.g. 'car gif', 'snapshot')…">
+        <div class=lib id=libgrid></div>
+      </div>
+      <div class=pane id=pane-sources>
+        <input class=srch id=srcurl placeholder="rtsp://… or a YouTube live URL">
+        <input class=srch id=srcname placeholder="name (optional)" style=margin-top:-4px>
+        <button class=savebtn style=margin-top:0 onclick=addSource()>+ Save live source</button>
+        <div id=srcgrid style=margin-top:10px></div>
+      </div>
+      <div class=pane id=pane-models>
+        <div class=muted style=font-size:11px;margin-bottom:6px>AI model per capability — the agent + media tools use these.</div>
+        <div id=models></div>
+        <button class=savebtn onclick=saveModels()>Save model configuration</button>
       </div>
     </div>
   </div>
@@ -221,6 +260,8 @@ function handleFrame(f){
       `<a href="/download/${name}" download>⬇ ${d.kind||'file'}</a>`;
     t.appendChild(div);}
   else if(f.type==='canvas'){setCanvas(d.mode,d.src,d.caption);}
+  else if(f.type==='library'){renderLib(d.items);if(d.query!==undefined)$('libq').value=d.query;switchTab('library');}
+  else if(f.type==='sources'){renderSources(d.items);switchTab('sources');}
   else if(f.type==='ui_action'){driveUI(d);}
   else if(f.type==='refresh'){refreshPanel(d.panel);}
   else if(f.type==='final'){if(curText.trim()==='')cur._text.textContent=d.text||'';}
@@ -280,7 +321,9 @@ function refreshPanel(p){
   if(p==='overlays'){pollOverlays();flash('panel-live');}
   else if(p==='config'||p==='annotations'){pollConfig();}
   else if(p==='brain'){pollBrain();}
-  else if(p==='settings'){pollMode();}
+  else if(p==='library'){pollLibrary('');}
+  else if(p==='sources'){pollSources();}
+  else if(p==='settings'||p==='models'){pollMode();pollModels();}
   pollUsage();
 }
 
@@ -288,7 +331,10 @@ function refreshPanel(p){
 function switchTab(name){if(!name)return;
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
   document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('active',p.id==='pane-'+name));
-  if(name==='graph')drawGraph();}
+  if(name==='graph')drawGraph();
+  if(name==='library')pollLibrary($('libq').value);
+  if(name==='sources')pollSources();
+  if(name==='models')pollModels();}
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
 
 /* ---------------- polling ---------------- */
@@ -373,6 +419,43 @@ function drawGraph(){
   if(GRAPH._pulse&&Object.values(GRAPH._pulse).some(t=>performance.now()-t<900))requestAnimationFrame(drawGraph);
 }
 window.addEventListener('resize',drawGraph);
+
+/* ---------------- library / sources / models ---------------- */
+function renderLib(items){
+  $('libgrid').innerHTML=(items||[]).map(it=>{
+    const url='/download/'+it.name, isVid=/\.(mp4|mov|webm)$/i.test(it.name),
+          isAud=/\.mp3$/i.test(it.name);
+    const media=isVid?'<div class=vid>▶</div>':isAud?'<div class=vid>♪</div>':`<img src="${url}" loading=lazy>`;
+    return `<div class=it onclick="showLib('${it.name}',${isVid})" title="${(it.caption||'').replace(/"/g,'')}">${media}<div class=cap>${it.caption||it.kind}</div></div>`;
+  }).join('')||'<span class=muted style=grid-column:1/3>no media yet — ask the ninja to analyze, edit, snapshot or export</span>';
+}
+window.showLib=(name,isVid)=>setCanvas(isVid?'video':'image','/download/'+name,name);
+async function pollLibrary(q){try{let r=await(await fetch('/library?q='+encodeURIComponent(q||''))).json();renderLib(r.items);}catch(e){}}
+let _libT;$('libq').oninput=e=>{clearTimeout(_libT);_libT=setTimeout(()=>pollLibrary(e.target.value),250);};
+
+function renderSources(items){
+  $('srcgrid').innerHTML=(items||[]).map(it=>
+    `<div class=srcrow><span><b class=u>${it.kind}</b> ${it.caption}<br><small>${it.path}</small></span>
+     <span><button onclick="useSource(${it.id})">Use</button> <button onclick="rmSource(${it.id})">✕</button></span></div>`
+  ).join('')||'<span class=muted>no saved live sources — add an RTSP or YouTube-live URL above</span>';
+}
+async function pollSources(){try{let r=await(await fetch('/sources')).json();renderSources(r.items);}catch(e){}}
+window.addSource=async()=>{let url=$('srcurl').value.trim();if(!url)return;
+  await fetch('/sources',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,name:$('srcname').value.trim()})});
+  $('srcurl').value='';$('srcname').value='';pollSources();};
+window.useSource=async(id)=>{await fetch('/sources/use',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});toast('switched to live source');pollConfig();};
+window.rmSource=async(id)=>{await fetch('/sources/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});pollSources();};
+
+const TASK_LABEL={agent:'Agent Root (brain)',vision:'Vision / Understanding',
+  image_edit:'Image Editing (nano-banana)',image_gen:'Image Generation',video:'Video Generation (Veo)'};
+async function pollModels(){try{let s=await(await fetch('/settings')).json();
+  let opts=s.model_options||{},cur=s.models||{};
+  $('models').innerHTML=Object.keys(TASK_LABEL).map(t=>{
+    let os=(opts[t]||[cur[t]]).map(o=>`<option ${o===cur[t]?'selected':''}>${o}</option>`).join('');
+    return `<div class=mrow><label>${TASK_LABEL[t]}</label><select data-task="${t}">${os}</select></div>`;
+  }).join('');}catch(e){}}
+window.saveModels=async()=>{let models={};document.querySelectorAll('#models select').forEach(s=>models[s.dataset.task]=s.value);
+  await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({models})});toast('model configuration saved');};
 
 /* ---------------- suggestions ---------------- */
 const SUGG=["find the cars and highlight the busiest lane with a heatmap",

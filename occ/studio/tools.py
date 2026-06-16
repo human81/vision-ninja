@@ -11,6 +11,8 @@ from __future__ import annotations
 import base64
 import glob
 import os
+import subprocess
+import sys
 import time
 import urllib.request
 
@@ -26,6 +28,23 @@ def _meter(checkpoint, **kw):
     c = ctx()
     fake = c.settings.is_node_fake(checkpoint.split(":", 1)[0]) if c.settings else False
     return c.ledger.record(checkpoint, simulated=fake, **kw) if c.ledger else None
+
+
+def _has_key() -> bool:
+    return bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
+
+
+def _lib(res, caption="", tags=None, source=""):
+    """Auto-register a produced artifact into the media library."""
+    c = ctx()
+    if (isinstance(res, dict) and res.get("status") == "success"
+            and res.get("output") and c.library):
+        kind = res.get("kind", "image")
+        c.library.add("image" if kind == "display" else kind, res["output"],
+                      caption=caption or res.get("caption", ""), tags=tags or [kind],
+                      source=source, meta={k: res[k] for k in ("counts", "resolution",
+                      "seconds") if res.get(k) is not None})
+    return res
 
 
 # ---------- planning + UI driving ----------
@@ -250,8 +269,9 @@ def test_image(label: str = "") -> dict:
     out = f"out/studio/exports/testcard_{time.strftime('%H%M%S')}.png"
     cv2.imwrite(out, img)
     _meter("snapshot", units={"ops": 1}, label="test_image")
-    return {"status": "success", "kind": "image", "output": out,
-            "caption": label or "test card", "resolution": [w, h]}
+    return _lib({"status": "success", "kind": "image", "output": out,
+                 "caption": label or "test card", "resolution": [w, h]},
+                tags=["test"])
 
 
 def display_media(kind: str, src: str = "", caption: str = "") -> dict:
@@ -283,9 +303,237 @@ def analyze_image(image: str, caption: str = "") -> dict:
     _meter("snapshot", units={"ops": 1}, label="render still")
     n = int(len(det))
     summary = ", ".join(f"{v} {k}" for k, v in counts.items()) or "no known objects"
-    return {"status": "success", "kind": "image", "output": out, "objects": n,
-            "counts": counts, "resolution": [frame.shape[1], frame.shape[0]],
-            "caption": caption or f"shared image — {summary}", "summary": summary}
+    return _lib({"status": "success", "kind": "image", "output": out, "objects": n,
+                 "counts": counts, "resolution": [frame.shape[1], frame.shape[0]],
+                 "caption": caption or f"shared image — {summary}", "summary": summary},
+                tags=["analysis", "detection"], source="shared")
+
+
+# ---------- visual analysis + generative media (Gemini) ----------
+def _frame_jpg(which: str = "frame", image: str = ""):
+    """Resolve a frame to (jpg_bytes, bgr_frame): a shared image, or the live frame."""
+    frame = _load_image(image) if image else None
+    if frame is None and which in ("frame", "live", "scene", "", None):
+        frame = ctx().pipe.snapshot_clean()
+    if frame is None:
+        return None, None
+    ok, buf = cv2.imencode(".jpg", frame)
+    return buf.tobytes(), frame
+
+
+def _save_png(frame_or_bytes, stem: str) -> str:
+    os.makedirs("out/studio/exports", exist_ok=True)
+    out = f"out/studio/exports/{stem}_{time.strftime('%H%M%S')}.png"
+    if isinstance(frame_or_bytes, (bytes, bytearray)):
+        open(out, "wb").write(frame_or_bytes)
+    else:
+        cv2.imwrite(out, frame_or_bytes)
+    return out
+
+
+def describe_image(question: str = "", which: str = "frame", image: str = "") -> dict:
+    """SEMANTIC visual analysis with Gemini Vision — describe or answer a question
+    about the live frame (which='frame') or a shared image (data URI / path / URL).
+    Goes beyond detection: scene, mood, text/OCR, identity of objects. Use when the
+    user asks 'what is this / what's happening / read the sign'."""
+    jpg, frame = _frame_jpg(which, image)
+    if jpg is None:
+        return {"status": "error", "error": "no frame/image to analyze"}
+    out = _save_png(frame, "look")
+    q = question or ("Describe this image in 1-2 sentences. Note notable objects, "
+                     "any text, colors, and activity.")
+    if _has_key():
+        from . import genmedia
+        try:
+            model = ctx().settings.model_for("vision")
+            text, r = genmedia.describe(jpg, q, model=model)
+            um = getattr(r, "usage_metadata", None)
+            ctx().ledger.record("agent_brain", model=model,
+                                input_tokens=getattr(um, "prompt_token_count", 320) or 320,
+                                output_tokens=getattr(um, "candidates_token_count", 90) or 90,
+                                label="vision")
+        except Exception as e:
+            text = f"(vision error: {e})"
+    else:
+        _det, _vis, counts = ctx().pipe.detect_still(frame)
+        text = ("I detect " + (", ".join(f"{v} {k}" for k, v in counts.items())
+                or "no known objects") + ". (Add a Gemini key for full visual analysis.)")
+        _meter("vision_brain", units={"synthesis": 1}, label="describe (fallback)")
+    if ctx().brain:
+        ctx().brain.remember("last_look", text[:160])
+    return _lib({"status": "success", "kind": "image", "output": out, "text": text,
+                 "caption": text[:140]}, tags=["vision"], source=which)
+
+
+def nano_banana(prompt: str, which: str = "frame", image: str = "") -> dict:
+    """NANO-BANANA image edit: transform a frame with Gemini's image model — restyle,
+    add/remove things, change time-of-day/weather, recolor. Works on the live frame
+    (which='frame') or a shared image. e.g. 'make it night with wet roads'."""
+    if not _has_key():
+        return {"status": "error", "error": "nano-banana needs a Gemini key"}
+    jpg, frame = _frame_jpg(which, image)
+    if jpg is None:
+        return {"status": "error", "error": "no frame/image"}
+    from . import genmedia
+    try:
+        out_bytes, text, r = genmedia.edit_image(
+            [jpg], prompt, model=ctx().settings.model_for("image_edit"))
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    if not out_bytes:
+        return {"status": "error", "error": text or "no image returned"}
+    out = _save_png(out_bytes, "nano")
+    ctx().ledger.record("agent_brain", model=ctx().settings.model_for("image_edit"),
+                        input_tokens=300, output_tokens=1300, label="nano_banana")
+    return _lib({"status": "success", "kind": "image", "output": out,
+                 "caption": prompt, "text": text}, tags=["nano-banana", "edit"], source=which)
+
+
+def virtual_try_on(garment: str, which: str = "frame", image: str = "") -> dict:
+    """VIRTUAL TRY-ON: put a garment (image path / URL / data URI) onto the person in
+    the frame, preserving their pose, identity and background (Gemini image model)."""
+    if not _has_key():
+        return {"status": "error", "error": "try-on needs a Gemini key"}
+    jpg, frame = _frame_jpg(which, image)
+    g = _load_image(garment)
+    if jpg is None or g is None:
+        return {"status": "error", "error": "need a person frame + a garment image"}
+    ok, gbuf = cv2.imencode(".jpg", g)
+    from . import genmedia
+    prompt = ("Dress the person in the first image with the garment shown in the second "
+              "image. Keep the person's identity, pose, lighting and background.")
+    try:
+        out_bytes, text, r = genmedia.edit_image(
+            [jpg, gbuf.tobytes()], prompt, model=ctx().settings.model_for("image_edit"))
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    if not out_bytes:
+        return {"status": "error", "error": text or "no image returned"}
+    out = _save_png(out_bytes, "tryon")
+    ctx().ledger.record("agent_brain", model=ctx().settings.model_for("image_edit"),
+                        input_tokens=400, output_tokens=1300, label="virtual_try_on")
+    return _lib({"status": "success", "kind": "image", "output": out,
+                 "caption": "virtual try-on"}, tags=["try-on", "edit"], source=which)
+
+
+def generate_video(prompt: str, from_frame: bool = True) -> dict:
+    """VEO: generate a short video from a prompt, optionally seeded by the current
+    frame (from_frame=True). SLOW — Veo takes minutes — and costs real money. Use
+    sparingly, only when the user explicitly asks to generate/animate a video."""
+    if not _has_key():
+        return {"status": "error", "error": "Veo needs a Gemini key"}
+    from . import genmedia
+    img = _frame_jpg("frame", "")[0] if from_frame else None
+    data, err = genmedia.generate_video(prompt, image_jpg=img,
+                                        model=ctx().settings.model_for("video"))
+    if not data:
+        return {"status": "error", "error": err or "veo failed"}
+    os.makedirs("out/studio/exports", exist_ok=True)
+    out = f"out/studio/exports/veo_{time.strftime('%H%M%S')}.mp4"
+    open(out, "wb").write(data)
+    ctx().ledger.record("agent_brain", model=ctx().settings.model_for("video"),
+                        input_tokens=400, output_tokens=4000, label="veo")
+    return _lib({"status": "success", "kind": "clip", "output": out, "caption": prompt,
+                 "seconds": ff.probe(out).get("duration", 0)}, tags=["veo", "video"],
+                source="generated")
+
+
+def extend_video(prompt: str = "continue the scene naturally", which: str = "recording") -> dict:
+    """VEO video extension: take a clip's LAST frame as a seed, generate a continuation
+    with Veo, and stitch it on. SLOW + costs money."""
+    if not _has_key():
+        return {"status": "error", "error": "Veo needs a Gemini key"}
+    src = _resolve_target(which)
+    if not src:
+        return {"status": "error", "error": f"no {which} file"}
+    dur = ff.probe(src).get("duration", 1)
+    fr = ff.frame_at(src, max(0, dur - 0.1))
+    if fr.get("status") != "success":
+        return fr
+    frame = cv2.imread(fr["output"])
+    ok, buf = cv2.imencode(".jpg", frame)
+    from . import genmedia
+    data, err = genmedia.generate_video(prompt, image_jpg=buf.tobytes(),
+                                        model=ctx().settings.model_for("video"))
+    if not data:
+        return {"status": "error", "error": err or "veo failed"}
+    cont = f"out/studio/exports/veo_ext_{time.strftime('%H%M%S')}.mp4"
+    open(cont, "wb").write(data)
+    ctx().ledger.record("agent_brain", model=ctx().settings.model_for("video"),
+                        input_tokens=400, output_tokens=4000, label="veo extend")
+    joined = ff.concat([src, cont])
+    res = joined if joined.get("status") == "success" else {
+        "status": "success", "kind": "clip", "output": cont, "caption": prompt}
+    return _lib(res, tags=["veo", "extension"], source=which)
+
+
+# ---------- media library + search ----------
+def search_library(query: str = "") -> dict:
+    """Search the media library in natural language (over captions/tags/source).
+    Empty query lists everything recent."""
+    lib = ctx().library
+    items = lib.search(query) if query else lib.list()
+    return {"status": "success", "query": query, "items": items[:40], "ui": "library"}
+
+
+def list_library() -> dict:
+    """List recent media library items (snapshots, clips, gifs, analyses, …)."""
+    return {"status": "success", "items": ctx().library.list(), "ui": "library"}
+
+
+def show_media(item_id: int = 0, query: str = "") -> dict:
+    """Show a library item on the canvas — by id, or the best match for `query`."""
+    lib = ctx().library
+    item = lib.get(item_id) if item_id else ((lib.search(query)[:1] or [None])[0])
+    if not item:
+        return {"status": "error", "error": "no matching media"}
+    mode = "video" if item["name"].lower().endswith((".mp4", ".mov", ".webm")) else "image"
+    return {"status": "success", "kind": "display", "mode": mode,
+            "src": "/download/" + item["name"], "caption": item["caption"]}
+
+
+def save_to_library(caption: str = "", tags: str = "") -> dict:
+    """Save the CURRENT annotated frame (with overlays) to the media library."""
+    vis = ctx().pipe.snapshot_vis()
+    if vis is None:
+        return {"status": "error", "error": "no frame yet"}
+    out = _save_png(vis, "saved")
+    _meter("snapshot", units={"ops": 1}, label="save_to_library")
+    item = ctx().library.add("image", out, caption=caption or "saved frame",
+                             tags=[t.strip() for t in tags.split(",") if t.strip()] or ["saved"],
+                             source=str(ctx().pipe.cfg.get("source.uri", "")))
+    return {"status": "success", "kind": "image", "output": out, "item": item, "ui": "library"}
+
+
+# ---------- YouTube ingestion ----------
+def load_youtube(url: str, seconds: int = 30) -> dict:
+    """Download a YouTube (or any yt-dlp-supported) video and play it as the live
+    source — then you can detect/overlay/analyze it. `seconds` caps the download."""
+    os.makedirs("out/studio/cache", exist_ok=True)
+    base = f"out/studio/cache/yt_{int(time.time())}"
+    out = base + ".mp4"
+    args = [sys.executable, "-m", "yt_dlp", "-f",
+            "mp4[height<=720]/best[height<=720]/best", "-o", out,
+            "--no-playlist", "--quiet", "--no-warnings", "--force-overwrites"]
+    if seconds and int(seconds) > 0:
+        args += ["--download-sections", f"*0-{int(seconds)}"]
+    args.append(url)
+    try:
+        p = subprocess.run(args, capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        return {"status": "error", "error": f"yt-dlp: {e}"}
+    produced = out if os.path.exists(out) else next(iter(glob.glob(base + "*")), None)
+    if p.returncode != 0 or not produced or not os.path.exists(produced):
+        return {"status": "error", "error": (p.stderr or p.stdout or "download failed")[-300:]}
+    ctx().pipe.reconfigure({"source.uri": produced})
+    _meter("ffmpeg:youtube", units={"out_seconds": int(seconds or 0), "ops": 1},
+           label="youtube")
+    ctx().library.add("video", produced, caption=f"YouTube: {url}",
+                      tags=["youtube", "source"], source=url)
+    if ctx().brain:
+        ctx().brain.observe({}, source=produced)
+    return {"status": "success", "output": produced, "source": produced, "url": url,
+            "ui": "config"}
 
 
 # ---------- ffmpeg export ----------
@@ -302,7 +550,44 @@ def _ff_meter(res):
         _meter("ffmpeg:" + res.get("kind", "op"),
                units={"out_seconds": float(res.get("seconds", 0)), "ops": 1},
                label=res.get("kind", "ffmpeg"))
+        out = str(res.get("output", ""))
+        if out and ctx().library:
+            kind = ("video" if out.lower().endswith((".mp4", ".mov", ".webm"))
+                    else "audio" if out.lower().endswith(".mp3") else "image")
+            ctx().library.add(kind, out, caption=res.get("kind", "clip"),
+                              tags=[res.get("kind", "ffmpeg"), "export"])
     return res
+
+
+def edit_video(op: str, which: str = "recording", text: str = "", look: str = "grayscale",
+               factor: float = 2.0, degrees: int = 90, seconds: float = 4.0,
+               x: int = 0, y: int = 0, w: int = 640, h: int = 360) -> dict:
+    """The ffmpeg multitool. op = filter | crop | rotate | flip | reverse | boomerang
+    | fade | caption | loop | speed | extract_audio | frame. which = 'recording' |
+    'source'. Params by op: look (grayscale/sepia/invert/sharpen/blur/vintage/edges),
+    text (caption), factor (speed/loop), degrees (rotate), x/y/w/h (crop), seconds
+    (frame time). Output auto-saves to the media library + canvas."""
+    src = _resolve_target(which)
+    if not src:
+        return {"status": "error", "error": f"no {which} file"}
+    o = op.lower().strip()
+    table = {
+        "filter": lambda: ff.vfilter(src, look), "crop": lambda: ff.crop(src, x, y, w, h),
+        "rotate": lambda: ff.rotate(src, degrees), "flip": lambda: ff.flip(src, "h"),
+        "mirror": lambda: ff.flip(src, "h"), "reverse": lambda: ff.reverse(src),
+        "boomerang": lambda: ff.boomerang(src), "fade": lambda: ff.fade(src),
+        "caption": lambda: ff.overlay_text(src, text or "Vision Ninja"),
+        "text": lambda: ff.overlay_text(src, text or "Vision Ninja"),
+        "loop": lambda: ff.loop(src, int(factor) or 3),
+        "speed": lambda: ff.speed_ramp(src, factor),
+        "timelapse": lambda: ff.speed_ramp(src, max(2.0, factor)),
+        "slowmo": lambda: ff.speed_ramp(src, min(0.5, 1.0 / max(factor, 1))),
+        "extract_audio": lambda: ff.extract_audio(src), "audio": lambda: ff.extract_audio(src),
+        "frame": lambda: ff.frame_at(src, seconds), "grab": lambda: ff.frame_at(src, seconds),
+    }
+    if o not in table:
+        return {"status": "error", "error": f"unknown op {op!r}; have {list(table)}"}
+    return _ff_meter(table[o]())
 
 
 def export_gif(which: str = "source", start: float = 0, duration: float = 4,
@@ -355,8 +640,12 @@ def record_start() -> dict:
 
 
 def record_stop() -> dict:
-    """Stop recording; returns the file + frame count."""
+    """Stop recording; returns the file + frame count, and adds it to the library."""
     name, n = ctx().pipe.stop_recording()
+    path = f"out/recordings/{name}" if name else ""
+    if path and os.path.exists(path) and ctx().library:
+        ctx().library.add("video", path, caption="recording", tags=["recording"],
+                          source=str(ctx().pipe.cfg.get("source.uri", "")))
     return {"status": "success", "file": name, "frames": n, "recording": False}
 
 
@@ -365,11 +654,11 @@ def snapshot() -> dict:
     vis = ctx().pipe.snapshot_vis()
     if vis is None:
         return {"status": "error", "error": "no frame yet"}
-    os.makedirs("out/studio/exports", exist_ok=True)
-    path = f"out/studio/exports/snap_{time.strftime('%H%M%S')}.png"
-    cv2.imwrite(path, vis)
+    path = _save_png(vis, "snap")
     _meter("snapshot", units={"ops": 1}, label="snapshot")
-    return {"status": "success", "output": path, "kind": "snapshot"}
+    return _lib({"status": "success", "output": path, "kind": "snapshot"},
+                caption="annotated snapshot", tags=["snapshot"],
+                source=str(ctx().pipe.cfg.get("source.uri", "")))
 
 
 # ---------- Vision Brain ----------
@@ -396,13 +685,53 @@ def set_simulation(level: str) -> dict:
 
 
 # ---- registry: name -> function, and the list ADK gets ----
+# ---------- live sources library (RTSP cameras / YouTube live) ----------
+def save_source(url: str, name: str = "") -> dict:
+    """Save a LIVE source — an RTSP url (rtsp://…) or a YouTube live URL — to the
+    live-sources library so you can switch to it anytime."""
+    kind = ("youtube_live" if ("youtube.com" in url or "youtu.be" in url)
+            else "rtsp" if url.startswith("rtsp") else "stream")
+    item = ctx().sources.add(kind, url, caption=name or url, tags=["live", kind], source=url)
+    return {"status": "success", "item": item, "ui": "sources"}
+
+
+def list_sources() -> dict:
+    """List saved live sources (RTSP cameras / YouTube live)."""
+    return {"status": "success", "items": ctx().sources.list(), "ui": "sources"}
+
+
+def use_source(item_id: int = 0, query: str = "") -> dict:
+    """Switch the live pipeline to a saved live source by id or name. Resolves a
+    YouTube-live URL to a playable stream via yt-dlp."""
+    lib = ctx().sources
+    item = lib.get(item_id) if item_id else ((lib.search(query)[:1] or [None])[0])
+    if not item:
+        return {"status": "error", "error": "no matching live source"}
+    url = item["path"]
+    if item["kind"] == "youtube_live":
+        try:
+            p = subprocess.run([sys.executable, "-m", "yt_dlp", "-g", "-f",
+                                "best[height<=720]/best", url],
+                               capture_output=True, text=True, timeout=60)
+            lines = (p.stdout or "").strip().splitlines()
+            if lines:
+                url = lines[-1]
+        except Exception:
+            pass
+    ctx().pipe.reconfigure({"source.uri": url})
+    return {"status": "success", "source": url, "name": item["caption"], "ui": "config"}
+
+
 ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_tracker, set_detect_every,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay,
-    analyze_scene, analyze_image, display_media, test_image,
+    analyze_scene, analyze_image, describe_image, display_media, test_image,
+    nano_banana, virtual_try_on, generate_video, extend_video,
+    search_library, list_library, show_media, save_to_library,
+    load_youtube, save_source, list_sources, use_source,
     export_gif, export_clip, export_contact_sheet, speed_ramp, probe_media,
-    record_start, record_stop, snapshot,
+    edit_video, record_start, record_stop, snapshot,
     remember, recall, set_simulation,
 ]
 TOOLS_BY_NAME = {f.__name__: f for f in ALL_TOOLS}

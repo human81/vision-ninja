@@ -17,6 +17,8 @@ class StudioContext:
     ledger: object
     brain: object
     settings: object
+    library: object = None
+    sources: object = None
 
 
 CTX: "StudioContext | None" = None

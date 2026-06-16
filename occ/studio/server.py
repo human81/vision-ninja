@@ -29,10 +29,11 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Respons
                                StreamingResponse)
 
 from ..config import Config
-from . import neurons
+from . import STUDIO_DIR, neurons
 from .agent import StudioAgent, _HAS_KEY
 from .brain import VisionBrain
 from .ledger import Ledger
+from .library import MediaLibrary
 from .overlays import OverlayEngine
 from .pipeline import StudioPipeline
 from .runtime import StudioContext, set_context
@@ -52,14 +53,19 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     ledger = Ledger()
     settings = StudioSettings.load()
     brain = VisionBrain()
+    library = MediaLibrary()
+    sources = MediaLibrary(f"{STUDIO_DIR}/sources.json")     # live RTSP/YT-live
     pipe = StudioPipeline(cfg, overlays=overlays, ledger=ledger, brain=brain,
                           settings=settings)
     set_context(StudioContext(pipe=pipe, overlays=overlays, ledger=ledger,
-                              brain=brain, settings=settings))
+                              brain=brain, settings=settings, library=library,
+                              sources=sources))
     agent = StudioAgent(settings)
+    from . import genmedia
+    genmedia.prewarm()                 # create the genai client on the main thread
     pipe.start()
 
-    sources = sorted(str(p) for p in Path("assets/videos").glob("*.mp4"))
+    video_files = sorted(str(p) for p in Path("assets/videos").glob("*.mp4"))
     app = FastAPI(title="Vision Ninja Studio")
     app.state.pipe = pipe
     app.state.agent = agent
@@ -96,7 +102,7 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     # ---------- config + annotations ----------
     @app.get("/options")
     def options():
-        return {"sources": sources, "models": MODELS, "trackers": TRACKERS,
+        return {"sources": video_files, "models": MODELS, "trackers": TRACKERS,
                 "detectors": ["yolo", "rfdetr", "owlv2"]}
 
     @app.get("/config")
@@ -161,6 +167,35 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         settings.update(await req.json())
         ledger.set_budget(settings.points_budget)
         return JSONResponse(settings.to_dict())
+
+    # ---------- media library + live sources ----------
+    @app.get("/library")
+    def library_list(q: str = ""):
+        return {"items": (library.search(q) if q else library.list())}
+
+    @app.post("/library/remove")
+    async def library_remove(req: Request):
+        return {"ok": library.remove((await req.json()).get("id"))}
+
+    @app.get("/sources")
+    def sources_list():
+        return {"items": sources.list()}
+
+    @app.post("/sources")
+    async def sources_add(req: Request):
+        from .tools import save_source
+        b = await req.json()
+        return save_source(b.get("url", ""), b.get("name", ""))
+
+    @app.post("/sources/use")
+    async def sources_use(req: Request):
+        from .tools import use_source
+        b = await req.json()
+        return use_source(int(b.get("id", 0) or 0), b.get("query", ""))
+
+    @app.post("/sources/remove")
+    async def sources_remove(req: Request):
+        return {"ok": sources.remove((await req.json()).get("id"))}
 
     # ---------- recording + snapshot ----------
     @app.post("/record/start")

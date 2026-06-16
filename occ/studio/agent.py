@@ -74,7 +74,7 @@ def _canvas_frame(name: str, res: dict):
     """Decide what the center canvas should show after this tool — the studio
     'moves between modes' here: artifacts -> media canvas, pipeline work -> live."""
     kind = res.get("kind")
-    if name == "display_media":
+    if name in ("display_media", "show_media"):
         return {"type": "canvas", "data": {"mode": res.get("mode", "live"),
                                            "src": res.get("src", ""),
                                            "caption": res.get("caption", "")}}
@@ -110,12 +110,21 @@ def frames_for(name: str, res) -> list[dict]:
         cf = _canvas_frame(name, res)
         if cf:
             out.append(cf)
+    if name in ("search_library", "list_library"):
+        out.append({"type": "library", "data": {"items": res.get("items", []),
+                                                "query": res.get("query", "")}})
+    if name in ("list_sources", "save_source", "use_source"):
+        srcs = ctx().sources.list() if ctx().sources else []
+        out.append({"type": "sources", "data": {"items": srcs}})
     out.append({"type": "tool", "data": {"name": name, "ok": ok,
                                          "detail": res.get("error", "")}})
     if res.get("ui"):
         out.append({"type": "refresh", "data": {"panel": res["ui"]}})
     if name in ("create_overlay", "toggle_overlay", "remove_overlay"):
         out.append({"type": "refresh", "data": {"panel": "overlays"}})
+    if name in ("nano_banana", "virtual_try_on", "describe_image", "analyze_image",
+                "save_to_library", "generate_video", "extend_video"):
+        out.append({"type": "refresh", "data": {"panel": "library"}})
     return out
 
 
@@ -196,6 +205,54 @@ class SimRunner:
             m = m.replace(img.lower(), " ")
             add("analyze_image", {"image": img, "caption": "shared image"}, None,
                 "ingest + analyze the image")
+
+        # YouTube ingest (URL anywhere in the message)
+        myt = re.search(r"(https?://(?:www\.)?(?:youtube\.com|youtu\.be)/\S+)", original)
+        if myt:
+            add("load_youtube", {"url": myt.group(1), "seconds": 30},
+                "Pulled the YouTube video and set it as the live source.", "load youtube")
+
+        # save an RTSP camera to live sources
+        mrtsp = re.search(r"(rtsp://\S+)", original)
+        if mrtsp:
+            add("save_source", {"url": mrtsp.group(1)},
+                "Saved that RTSP camera to live sources.", "save live source")
+
+        # semantic visual analysis (collision-free phrases)
+        if any(p in m for p in ("what is this", "what's this", "whats this",
+                                "what's happening", "whats happening", "describe the",
+                                "describe this", "read the", "what's in the image",
+                                "whats in the image", "who is", "what do you see in")):
+            add("describe_image", {}, None, "describe with Gemini vision")
+
+        # nano-banana frame edit (visual-restyle phrases that don't collide with overlays)
+        if any(p in m for p in ("make it look", "make it night", "at night", "make night",
+                                "restyle", "cartoon", "anime", "neon", "cyberpunk",
+                                "make it rain", "make it snow", "snowy", "recolor the",
+                                "turn the sky", "vintage look", "make the scene", "repaint")):
+            add("nano_banana", {"prompt": original}, None, "nano-banana edit")
+
+        # search the media library
+        if "library" in m or re.search(r"(?:search|find).*(?:clip|gif|recording|snapshot|media)", m):
+            q = re.sub(r".*(?:search|find|show me)\s+", "", m)
+            q = re.sub(r"\b(?:in (?:the )?library|the library|library)\b.*", "", q).strip()
+            add("search_library", {"query": q}, None, "search library")
+
+        # save current frame to the library
+        if any(p in m for p in ("save this frame", "save the frame", "save to library",
+                                "save to the library", "bookmark this", "keep this frame")):
+            add("save_to_library", {}, "Saved the current frame to the library.",
+                "save to library")
+
+        # ffmpeg edits on a clip
+        for op, words, look in [("reverse", ("reverse",), ""), ("boomerang", ("boomerang",), ""),
+                                ("fade", ("fade ",), ""), ("filter", ("grayscale", "black and white", "b&w"), "grayscale"),
+                                ("filter", ("sepia",), "sepia"), ("filter", ("invert",), "invert")]:
+            if any(w in m for w in words):
+                kw = {"op": op, "which": "recording"}
+                if look:
+                    kw["look"] = look
+                add("edit_video", kw, f"Applied {look or op} with ffmpeg.", f"{look or op} clip")
 
         # test card / sample image
         if any(p in m for p in ("test image", "test card", "test pattern",

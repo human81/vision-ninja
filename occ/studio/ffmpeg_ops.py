@@ -127,6 +127,107 @@ def contact_sheet(src: str, cols: int = 4, rows: int = 3) -> dict:
     return {"status": "success", "output": str(out), "tiles": n, "kind": "sheet"}
 
 
+def _vf(src: str, vf: str, name: str, audio: bool = True) -> dict:
+    out = _out(name, "mp4")
+    args = ["ffmpeg", "-y", "-i", src, "-vf", vf, "-c:v", "libx264",
+            "-crf", "20", "-preset", "veryfast"] + ([] if audio else ["-an"])
+    ok, err = _run(args + [str(out)])
+    if not ok:
+        return {"status": "error", "error": err}
+    return {"status": "success", "output": str(out),
+            "seconds": probe(str(out)).get("duration", 0), "kind": name}
+
+
+def crop(src: str, x: int, y: int, w: int, h: int) -> dict:
+    """Crop to a w×h box at (x,y)."""
+    return _vf(src, f"crop={w}:{h}:{x}:{y}", "crop")
+
+
+def rotate(src: str, degrees: int = 90) -> dict:
+    vf = {90: "transpose=1", 180: "transpose=1,transpose=1",
+          270: "transpose=2"}.get(int(degrees) % 360, f"rotate={degrees}*PI/180")
+    return _vf(src, vf, "rotate")
+
+
+def flip(src: str, direction: str = "h") -> dict:
+    return _vf(src, "hflip" if direction.startswith("h") else "vflip", "flip")
+
+
+def vfilter(src: str, name: str = "grayscale") -> dict:
+    """Named look: grayscale | sepia | invert | sharpen | blur | vintage | edges."""
+    vf = {"grayscale": "format=gray", "invert": "negate",
+          "sepia": "colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131",
+          "sharpen": "unsharp=5:5:1.0", "blur": "boxblur=2:1",
+          "vintage": "curves=vintage", "edges": "edgedetect=mode=colormix"}.get(
+              name, "format=gray")
+    return _vf(src, vf, "filter")
+
+
+def reverse(src: str) -> dict:
+    return _vf(src, "reverse", "reverse", audio=False)
+
+
+def boomerang(src: str) -> dict:
+    """Play forward then backward (a seamless loop)."""
+    rev = reverse(src)
+    if rev.get("status") != "success":
+        return rev
+    return concat([src, rev["output"]])
+
+
+def fade(src: str, fade_in: float = 1.0, fade_out: float = 1.0) -> dict:
+    dur = probe(src).get("duration", 0)
+    if not dur:
+        return {"status": "error", "error": "could not probe source"}
+    vf = f"fade=t=in:st=0:d={fade_in},fade=t=out:st={max(0, dur - fade_out)}:d={fade_out}"
+    return _vf(src, vf, "fade")
+
+
+def loop(src: str, count: int = 3) -> dict:
+    out = _out("loop", "mp4")
+    ok, err = _run(["ffmpeg", "-y", "-stream_loop", str(int(count)), "-i", src,
+                    "-c", "copy", str(out)])
+    if not ok:
+        return {"status": "error", "error": err}
+    return {"status": "success", "output": str(out),
+            "seconds": probe(str(out)).get("duration", 0), "kind": "loop"}
+
+
+def overlay_text(src: str, text: str, size: int = 36) -> dict:
+    safe = text.replace(":", r"\:").replace("'", "")
+    vf = (f"drawtext=text='{safe}':fontcolor=white:fontsize={size}:box=1:"
+          "boxcolor=black@0.5:boxborderw=8:x=(w-text_w)/2:y=h-text_h-30")
+    return _vf(src, vf, "captioned")
+
+
+def stack(a: str, b: str, direction: str = "h") -> dict:
+    """Side-by-side (h) or stacked (v) — great for before/after."""
+    out = _out("stack", "mp4")
+    fc = "hstack=inputs=2" if direction.startswith("h") else "vstack=inputs=2"
+    ok, err = _run(["ffmpeg", "-y", "-i", a, "-i", b, "-filter_complex", fc,
+                    "-c:v", "libx264", "-crf", "20", "-preset", "veryfast", str(out)])
+    if not ok:
+        return {"status": "error", "error": err}
+    return {"status": "success", "output": str(out),
+            "seconds": probe(str(out)).get("duration", 0), "kind": "stack"}
+
+
+def extract_audio(src: str) -> dict:
+    out = _out("audio", "mp3")
+    ok, err = _run(["ffmpeg", "-y", "-i", src, "-vn", "-q:a", "2", str(out)])
+    if not ok:
+        return {"status": "error", "error": err}
+    return {"status": "success", "output": str(out), "kind": "audio"}
+
+
+def frame_at(src: str, t: float = 0.0) -> dict:
+    out = _out("frame", "png")
+    ok, err = _run(["ffmpeg", "-y", "-ss", str(t), "-i", src, "-frames:v", "1", str(out)])
+    if not ok:
+        return {"status": "error", "error": err}
+    return {"status": "success", "output": str(out), "kind": "image"}
+
+
 def concat(paths: list[str]) -> dict:
     paths = [p for p in paths if Path(p).exists()]
     if len(paths) < 2:

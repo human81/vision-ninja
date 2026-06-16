@@ -49,6 +49,7 @@ web = [
 studio = [
     "google-adk>=2.2",
     "python-dotenv>=1.0",     # loads a gitignored .env (GEMINI_API_KEY, …) on boot
+    "yt-dlp>=2025.1",         # YouTube / live-stream ingestion as a source
 ]
 # Build-time only (proto compilation).
 build = [
