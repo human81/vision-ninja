@@ -33,50 +33,82 @@ def _resolve(name: str) -> str | None:
     return hits[0] if hits else None
 
 
+def _scaled(idx: int, c: dict) -> str:
+    """trim -> reset PTS -> scale/pad to canonical size -> fps."""
+    off = float(c.get("offset", 0)); dur = float(c.get("duration", 0)) or None
+    trim = f"trim=start={off}" + (f":duration={dur}" if dur else "")
+    return (f"[{idx}:v]{trim},setpts=PTS-STARTPTS,scale={W}:{H}:"
+            f"force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
+            f"fps={FPS},format=yuv420p")
+
+
 def render(timeline: dict) -> dict:
     vclips = [c for c in (timeline.get("video") or []) if _resolve(c.get("src", ""))]
     aclips = [c for c in (timeline.get("audio") or []) if _resolve(c.get("src", ""))]
+    xfade = float(timeline.get("transitions", 0) or 0)        # crossfade seconds
     if not vclips and not aclips:
         return {"status": "error", "error": "timeline is empty"}
 
     Path("out/studio/exports").mkdir(parents=True, exist_ok=True)
     out = f"out/studio/exports/edit_{time.strftime('%H%M%S')}.mp4"
-    args = ["ffmpeg", "-y"]
-    fc = []                          # filter_complex parts
-    idx = 0                          # ffmpeg input index
+    args, fc, idx = ["ffmpeg", "-y"], [], 0
 
-    # video track: trim -> scale/pad -> reset PTS -> concat
-    vlabels = []
-    for c in sorted(vclips, key=lambda c: c.get("t0", 0)):
-        src = _resolve(c["src"])
-        off = float(c.get("offset", 0)); dur = float(c.get("duration", 0)) or None
-        args += ["-i", src]
-        trim = f"trim=start={off}" + (f":duration={dur}" if dur else "")
-        fc.append(f"[{idx}:v]{trim},setpts=PTS-STARTPTS,scale={W}:{H}:"
-                  f"force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
-                  f"fps={FPS},format=yuv420p[v{idx}]")
-        vlabels.append(f"[v{idx}]")
+    # ---- base video track (track 0): xfade-chain or concat ----
+    base = sorted([c for c in vclips if int(c.get("track", 0)) == 0],
+                  key=lambda c: c.get("t0", 0))
+    base_lbls = []
+    for c in base:
+        args += ["-i", _resolve(c["src"])]
+        fc.append(_scaled(idx, c) + f"[v{idx}]")
+        base_lbls.append((f"[v{idx}]", float(c.get("duration", 0)) or 4.0))
         idx += 1
+    base_out = None
+    if len(base_lbls) == 1:
+        fc.append(f"{base_lbls[0][0]}null[base]"); base_out = "[base]"
+    elif len(base_lbls) > 1 and xfade > 0:
+        acc, cum = base_lbls[0][0], base_lbls[0][1]
+        for k in range(1, len(base_lbls)):
+            lbl, dur = base_lbls[k]
+            off = max(0.0, cum - xfade)
+            nxt = "[base]" if k == len(base_lbls) - 1 else f"[bx{k}]"
+            fc.append(f"{acc}{lbl}xfade=transition=fade:duration={xfade}:"
+                      f"offset={off:.3f}{nxt}")
+            acc, cum = nxt, cum - xfade + dur
+        base_out = "[base]"
+    elif len(base_lbls) > 1:
+        fc.append("".join(l for l, _ in base_lbls)
+                  + f"concat=n={len(base_lbls)}:v=1:a=0[base]"); base_out = "[base]"
 
+    # ---- overlay tracks (track >= 1): picture-in-picture, gated to their window ----
+    cur = base_out
+    for c in [c for c in vclips if int(c.get("track", 0)) >= 1]:
+        if cur is None:
+            break
+        args += ["-i", _resolve(c["src"])]
+        t0, dur = float(c.get("t0", 0)), float(c.get("duration", 0)) or 4.0
+        off = float(c.get("offset", 0))
+        fc.append(f"[{idx}:v]trim=start={off}:duration={dur},"
+                  f"setpts=PTS-STARTPTS+{t0}/TB,scale={W // 3}:-2[ov{idx}]")
+        nxt = f"[ovo{idx}]"
+        fc.append(f"{cur}[ov{idx}]overlay=W-w-24:24:"
+                  f"enable='between(t,{t0:.3f},{t0 + dur:.3f})':eof_action=pass{nxt}")
+        cur, idx = nxt, idx + 1
+    vout = cur
+
+    # ---- audio tracks: delay each to its t0 and mix ----
     alabels = []
     for c in aclips:
-        src = _resolve(c["src"])
+        args += ["-i", _resolve(c["src"])]
         off = float(c.get("offset", 0)); dur = float(c.get("duration", 0)) or None
         t0 = float(c.get("t0", 0)); gain = float(c.get("gain", 1.0))
-        args += ["-i", src]
         atrim = f"atrim=start={off}" + (f":duration={dur}" if dur else "")
         fc.append(f"[{idx}:a]{atrim},asetpts=PTS-STARTPTS,"
                   f"adelay={int(t0 * 1000)}|{int(t0 * 1000)},volume={gain}[a{idx}]")
-        alabels.append(f"[a{idx}]")
-        idx += 1
+        alabels.append(f"[a{idx}]"); idx += 1
 
     maps = []
-    if vlabels:
-        if len(vlabels) == 1:
-            fc.append(f"{vlabels[0]}copy[vout]")
-        else:
-            fc.append("".join(vlabels) + f"concat=n={len(vlabels)}:v=1:a=0[vout]")
-        maps += ["-map", "[vout]"]
+    if vout:
+        maps += ["-map", vout]
     if alabels:
         if len(alabels) == 1:
             fc.append(f"{alabels[0]}anull[aout]")
@@ -89,7 +121,6 @@ def render(timeline: dict) -> dict:
     if alabels:
         args += ["-c:a", "aac"]
     args.append(out)
-
     try:
         p = subprocess.run(args, capture_output=True, text=True, timeout=300)
     except Exception as e:
@@ -97,4 +128,5 @@ def render(timeline: dict) -> dict:
     if p.returncode != 0 or not os.path.exists(out):
         return {"status": "error", "error": (p.stderr or "")[-400:]}
     return {"status": "success", "output": out, "kind": "edit",
-            "clips": len(vclips) + len(aclips)}
+            "clips": len(vclips) + len(aclips),
+            "transitions": xfade, "tracks": 1 + sum(1 for c in vclips if int(c.get("track", 0)) >= 1)}

@@ -63,7 +63,7 @@
   .drawbar button{background:#141c29;border:1px solid var(--line);color:var(--fg);
     border-radius:7px;padding:5px 10px;font-size:12px;cursor:pointer}
   .drawbar button:hover{border-color:#3a4658}
-  .drawbar button[data-tog].on{border-color:var(--cyan);color:var(--cyan)}
+  .drawbar button[data-tog].on,.drawbar button[data-frz].on{border-color:var(--cyan);color:var(--cyan)}
   #livebtn{position:absolute;right:8px;top:8px;cursor:pointer;z-index:6;
     background:#0e1521cc;border:1px solid var(--line);color:var(--mut)}
   #livebtn.on{border-color:var(--accent);color:var(--accent)}
@@ -198,6 +198,7 @@
         <div class=canvascap id=canvascap></div>
         <div class=drawbar id=drawbar>
           <button data-tog onclick="toggleDraw()">✏ Draw</button>
+          <button data-frz onclick="toggleFreeze()">❄ Freeze</button>
           <button onclick="drawTool('zone')">+ Zone</button>
           <button onclick="drawTool('line')">+ Line</button>
           <button onclick="drawFinish()">Finish</button>
@@ -215,6 +216,7 @@
           <button onclick=nlePlay() id=playbtn>▶ Play</button>
           <span id=nletime>0.0 / 0.0</span>
           <button onclick=nleExport()>⤓ Export MP4</button>
+          <button onclick=nleXfade() id=xfadebtn>⤫ Transitions: off</button>
           <button onclick=nleClear()>Clear</button>
           <span class=cs>
             <input id=csprompt placeholder="narration / co-director brief">
@@ -223,11 +225,12 @@
           </span>
         </div>
         <div id=timeline onclick="nleSeek(event)">
-          <div class=track id=vtrack><span class=lab>video</span></div>
+          <div class=track id=vtrack><span class=lab>V1 main</span></div>
+          <div class=track id=vtrack2><span class=lab>V2 overlay (PiP)</span></div>
           <div class=track id=atrack><span class=lab>audio</span></div>
           <div id=playhead></div>
         </div>
-        <div class=muted style=font-size:11px>Click a <b>Library</b> item to add it · drag to move · drag edges to trim · 🎬 lets the agent (Co-Director) build the edit.</div>
+        <div class=muted style=font-size:11px>Click a <b>Library</b> item to add it · drag to move · <b>drag a clip up/down</b> to change track (V2 = picture-in-picture) · drag edges to trim · ⤫ Transitions crossfades V1 clips · 🎬 = Co-Director.</div>
       </div>
     </div>
   </div>
@@ -542,7 +545,7 @@ window.saveModels=async()=>{let models={};document.querySelectorAll('#models sel
   await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({models})});toast('model configuration saved');};
 
 /* ---------------- NLE editor (timeline + synced playback) ---------------- */
-const NLE={mode:'live',video:[],audio:[],ph:0,playing:false,pps:60,sel:null,_a:{},base:0,wall:0,_id:0};
+const NLE={mode:'live',video:[],audio:[],ph:0,playing:false,pps:60,sel:null,_a:{},base:0,wall:0,_id:0,xfade:0};
 function nleSetMode(m){NLE.mode=m;
   $('livewrap').style.display=m==='live'?'':'none';
   $('editwrap').style.display=m==='edit'?'flex':'none';
@@ -557,19 +560,23 @@ function mediaLen(name,kind){return new Promise(res=>{
 async function nleAdd(name,kind){
   let len=await mediaLen(name,kind),track=kind==='audio'?NLE.audio:NLE.video;
   let t0=track.reduce((m,c)=>Math.max(m,c.t0+c.dur),0);
-  track.push({id:++NLE._id,name,kind,t0,off:0,dur:len||3,len:len||3});
+  track.push({id:++NLE._id,name,kind,t0,off:0,dur:len||3,len:len||3,track:0});
   if(NLE.mode!=='edit')nleSetMode('edit');drawTimeline();toast(`added ${name} to ${kind}`);}
 function tlEnd(){return NLE.video.concat(NLE.audio).reduce((m,c)=>Math.max(m,c.t0+c.dur),0);}
+function renderClip(c,el){let d=document.createElement('div');
+  d.className='tclip'+(c.kind==='audio'?' audio':'')+(NLE.sel===c.id?' sel':'');
+  d.style.left=(c.t0*NLE.pps)+'px';d.style.width=Math.max(22,c.dur*NLE.pps)+'px';
+  d.textContent=c.name.slice(0,20);
+  d.innerHTML+='<div class="h l"></div><div class="h r"></div>';
+  d.onmousedown=e=>clipDrag(e,c);el.appendChild(d);}
 function drawTimeline(){
-  [['video','vtrack'],['audio','atrack']].forEach(([tk,id])=>{
-    let el=$(id);el.querySelectorAll('.tclip').forEach(n=>n.remove());
-    NLE[tk].forEach(c=>{let d=document.createElement('div');
-      d.className='tclip'+(tk==='audio'?' audio':'')+(NLE.sel===c.id?' sel':'');
-      d.style.left=(c.t0*NLE.pps)+'px';d.style.width=Math.max(22,c.dur*NLE.pps)+'px';
-      d.textContent=c.name.slice(0,20);
-      d.innerHTML+='<div class="h l"></div><div class="h r"></div>';
-      d.onmousedown=e=>clipDrag(e,c);el.appendChild(d);});});
+  ['vtrack','vtrack2','atrack'].forEach(id=>$(id).querySelectorAll('.tclip').forEach(n=>n.remove()));
+  NLE.video.forEach(c=>renderClip(c,$(c.track?'vtrack2':'vtrack')));
+  NLE.audio.forEach(c=>renderClip(c,$('atrack')));
   $('nletime').textContent=NLE.ph.toFixed(1)+' / '+tlEnd().toFixed(1);drawPlayhead();}
+window.nleXfade=()=>{NLE.xfade=NLE.xfade?0:0.5;
+  $('xfadebtn').textContent='⤫ Transitions: '+(NLE.xfade?'0.5s':'off');
+  $('xfadebtn').style.borderColor=NLE.xfade?'#36d7e0':'';};
 function drawPlayhead(){$('playhead').style.left=(8+NLE.ph*NLE.pps)+'px';}
 function clipDrag(e,c){e.preventDefault();e.stopPropagation();NLE.sel=c.id;
   let edge=e.target.classList.contains('h')?(e.target.classList.contains('l')?'l':'r'):null;
@@ -577,7 +584,9 @@ function clipDrag(e,c){e.preventDefault();e.stopPropagation();NLE.sel=c.id;
   function mv(ev){let dt=(ev.clientX-sx)/NLE.pps;
     if(edge==='r')c.dur=Math.max(0.2,Math.min(c.len-c.off,dur+dt));
     else if(edge==='l'){let nd=Math.max(0.2,dur-dt);c.off=Math.max(0,off+(dur-nd));c.t0=Math.max(0,t0+dt);c.dur=nd;}
-    else c.t0=Math.max(0,t0+dt);
+    else{c.t0=Math.max(0,t0+dt);
+      if(c.kind!=='audio'){let r2=$('vtrack2').getBoundingClientRect();   /* vertical -> track */
+        c.track=(ev.clientY>=r2.top&&ev.clientY<=r2.bottom)?1:0;}}
     drawTimeline();}
   function up(ev){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);
     if(Math.abs(ev.clientX-sx)<3&&!edge){/* click select */}}
@@ -608,7 +617,8 @@ function nleTick(){if(NLE.mode==='edit'){
 requestAnimationFrame(nleTick);
 window.nleExport=async()=>{if(!NLE.video.length&&!NLE.audio.length){toast('timeline is empty');return;}
   toast('rendering timeline…');
-  let tl={video:NLE.video.map(c=>({src:c.name,t0:c.t0,offset:c.off,duration:c.dur})),
+  let tl={transitions:NLE.xfade,
+          video:NLE.video.map(c=>({src:c.name,t0:c.t0,offset:c.off,duration:c.dur,track:c.track||0})),
           audio:NLE.audio.map(c=>({src:c.name,t0:c.t0,offset:c.off,duration:c.dur,gain:1}))};
   let r=await(await fetch('/timeline/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(tl)})).json();
   if(r.status==='success'){toast('rendered ✓');pollLibrary('');nleSetMode('live');setCanvas('video','/download/'+r.output.split('/').pop(),'timeline edit');}
@@ -619,7 +629,7 @@ window.nleNarrate=async()=>{let t=$('csprompt').value.trim();if(!t){toast('type 
 window.nleCoDirect=()=>{let b=$('csprompt').value.trim()||'a short highlight reel of the footage';send('co-direct: '+b);};
 function applyTimeline(d){ // agent-driven (Co-Director)
   if(d.op==='clear'||d.op==='set'){NLE.video=[];NLE.audio=[];NLE._id=0;}
-  (d.video||[]).forEach(c=>NLE.video.push({id:++NLE._id,name:c.src,kind:'video',t0:c.t0||0,off:c.offset||0,dur:c.duration||3,len:c.duration||3}));
+  (d.video||[]).forEach(c=>NLE.video.push({id:++NLE._id,name:c.src,kind:'video',t0:c.t0||0,off:c.offset||0,dur:c.duration||3,len:c.duration||3,track:c.track||0}));
   (d.audio||[]).forEach(c=>NLE.audio.push({id:++NLE._id,name:c.src,kind:'audio',t0:c.t0||0,off:c.offset||0,dur:c.duration||3,len:c.duration||3}));
   nleSetMode('edit');drawTimeline();}
 
@@ -672,6 +682,13 @@ function applyTimeline(d){ // agent-driven (Co-Director)
   window.drawFinish=()=>finish();
   window.drawClear=()=>{shapes=[];draft=[];mode='idle';selected=-1;post();};
   window.drawSave=()=>fetch('/annotations/save',{method:'POST'}).then(()=>toast('annotations saved to disk'));
+  let frozen=false;
+  window.toggleFreeze=()=>{frozen=!frozen;
+    img.src=frozen?('/snapshot.png?t='+Date.now()):'/stream.mjpg';
+    if(frozen)window.setDrawEnabled(true);
+    let b=document.querySelector('.drawbar button[data-frz]');if(b)b.classList.toggle('on',frozen);
+    $('canvasmode').textContent=frozen?'frozen — draw on the still':'live';
+    setTimeout(resize,150);toast(frozen?'frozen — draw on this still':'resumed live');};
 })();
 
 /* ---------------- suggestions ---------------- */
