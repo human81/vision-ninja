@@ -269,6 +269,11 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         b = await req.json()
         return JSONResponse(narrate(b.get("text", ""), b.get("voice", "Puck")))
 
+    @app.post("/timeline/music")
+    async def timeline_music(req: Request):
+        from .tools import generate_music
+        return JSONResponse(generate_music((await req.json()).get("prompt", "")))
+
     @app.post("/timeline/image")
     async def timeline_image(req: Request):
         from . import genmedia

@@ -263,6 +263,7 @@
           <span class=cs>
             <input id=csprompt placeholder="words → narration / image / story…">
             <button onclick=nleNarrate() title="text → narration (TTS)">🎙</button>
+            <button onclick=nleMusic() title="words → music (Lyria) on MUSIC track">🎵</button>
             <button onclick=nleGenImage() title="words → image clip">🖼</button>
             <button onclick=nleCoDirect() title="words → generated story (Co-Director)">🎬</button>
           </span>
@@ -719,6 +720,13 @@ window.nleExport=async()=>{if(!NLE.video.length&&!NLE.audio.length){toast('timel
 window.nleNarrate=async()=>{let t=$('csprompt').value.trim();if(!t){toast('type narration text');return;}
   toast('narrating…');let r=await(await fetch('/timeline/narrate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})})).json();
   if(r.status==='success'){await nleAdd(r.output.split('/').pop(),'audio');pollLibrary('');}else toast('TTS failed: '+(r.error||'').slice(0,60));};
+window.nleMusic=async()=>{let t=$('csprompt').value.trim()||'calm cinematic instrumental, gentle and hopeful';
+  toast('composing music with Lyria… (~30s)');
+  let r=await(await fetch('/timeline/music',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:t})})).json();
+  if(r.status==='success'){let name=r.output.split('/').pop(),len=await mediaLen(name,'audio');
+    NLE.audio.push({id:++NLE._id,name,kind:'audio',t0:0,off:0,dur:len||30,len:len||30,track:2,gain:0.6});
+    if(NLE.mode!=='edit')nleSetMode('edit');drawTimeline();pollLibrary('');toast('music added to MUSIC track');}
+  else toast('Lyria: '+(r.error||'').slice(0,80));};
 window.nleCoDirect=()=>{let b=$('csprompt').value.trim()||'a short highlight reel of the footage';send('co-direct: '+b);};
 function applyTimeline(d){ // agent-driven (Co-Director)
   if(d.op==='clear'||d.op==='set'){NLE.video=[];NLE.audio=[];NLE._id=0;}

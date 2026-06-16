@@ -71,6 +71,61 @@ def edit_image(jpgs: list[bytes], prompt: str, model: str = IMAGE_MODEL):
     return out, text.strip(), r
 
 
+def _vertex_token_project():
+    """ADC token + (project, location) for Vertex AI. Raises with a clear message
+    if credentials need a refresh (run `gcloud auth application-default login`)."""
+    import google.auth
+    import google.auth.transport.requests
+    creds, proj = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(google.auth.transport.requests.Request())
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or proj
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+    return creds.token, project, location
+
+
+def generate_music(prompt: str, negative_prompt: str = "", model: str = "lyria-002"):
+    """Lyria instrumental music on VERTEX AI (not the Gemini Developer API).
+    Returns (wav_bytes | None, error). ~30s, 48kHz."""
+    import base64
+    import json
+    import urllib.request
+    try:
+        token, project, location = _vertex_token_project()
+    except Exception as e:
+        return None, ("Vertex auth needs a refresh — run "
+                      "`gcloud auth application-default login`. (" + str(e)[:120] + ")")
+    if not project:
+        return None, "no GCP project — set GOOGLE_CLOUD_PROJECT"
+    url = (f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/"
+           f"locations/{location}/publishers/google/models/{model}:predict")
+    inst = {"prompt": prompt}
+    if negative_prompt:
+        inst["negative_prompt"] = negative_prompt
+    body = {"instances": [inst], "parameters": {"sample_count": 1}}
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                 headers={"Authorization": f"Bearer {token}",
+                                          "Content-Type": "application/json"})
+    try:
+        r = json.loads(urllib.request.urlopen(req, timeout=180).read())
+    except urllib.error.HTTPError as e:                       # noqa: F821
+        return None, f"Lyria HTTP {e.code}: {e.read().decode()[:160]}"
+    except Exception as e:
+        return None, f"Lyria error: {e}"
+    preds = r.get("predictions", [])
+    if not preds:
+        return None, "Lyria returned no audio"
+    p = preds[0]
+    b64 = (p.get("bytesBase64Encoded") or p.get("audioContent")
+           or next((v for v in p.values() if isinstance(v, str) and len(v) > 1000), None))
+    if not b64:
+        return None, f"no audio field (keys: {list(p.keys())})"
+    try:
+        return base64.b64decode(b64), ""
+    except Exception as e:
+        return None, str(e)
+
+
 def image(prompt: str, model: str = IMAGE_MODEL):
     """Text -> image (no input) via the image model. Returns (png_bytes|None, text, r)."""
     return edit_image([], prompt, model=model)

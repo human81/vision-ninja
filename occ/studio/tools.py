@@ -601,11 +601,23 @@ def narrate(text: str, voice: str = "Puck") -> dict:
 
 
 def generate_music(prompt: str) -> dict:
-    """Generate background music (Lyria). NOTE: Lyria is Vertex-only and not reachable
-    on a Gemini Developer API key, so it is unavailable here — use narrate() for voice
-    or import an audio file into the timeline."""
-    return {"status": "error",
-            "error": "Lyria music is Vertex-only and not available on this Gemini key."}
+    """Generate instrumental background MUSIC (Lyria on Vertex AI, ~30s) and add it to
+    the media library — use it on the NLE MUSIC track. Needs GCP creds
+    (gcloud auth application-default login) + GOOGLE_CLOUD_PROJECT."""
+    from . import genmedia
+    wav, err = genmedia.generate_music(prompt)
+    if not wav:
+        return {"status": "error", "error": err or "Lyria failed"}
+    os.makedirs("out/studio/exports", exist_ok=True)
+    out = f"out/studio/exports/music_{time.strftime('%H%M%S')}.wav"
+    open(out, "wb").write(wav)
+    ctx().ledger.record("agent_brain", model="lyria-002", input_tokens=200,
+                        output_tokens=2000, label="lyria music")
+    if ctx().library:
+        ctx().library.add("audio", out, caption=f"music: {prompt[:50]}",
+                          tags=["music", "lyria"])
+    return {"status": "success", "kind": "audio", "output": out,
+            "caption": prompt[:60], "ui": "library"}
 
 
 # ---------- media library + search ----------
