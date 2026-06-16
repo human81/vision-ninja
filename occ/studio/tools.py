@@ -467,6 +467,117 @@ def extend_video(prompt: str = "continue the scene naturally", which: str = "rec
     return _lib(res, tags=["veo", "extension"], source=which)
 
 
+# ---------- the OpenCV coder: arbitrary CV on a frame / image / video ----------
+from .overlays import _SAFE_BUILTINS as _CV_SAFE
+
+
+def _resolve_image(target: str):
+    if target in ("frame", "live", "scene", "", None):
+        return ctx().pipe.snapshot_clean()
+    cand = target
+    if not (target.startswith(("data:", "http")) or os.path.exists(target)):
+        cand = _media_path(os.path.basename(target)) or target
+    return _load_image(cand)
+
+
+def run_cv_code(code: str, target: str = "frame") -> dict:
+    """Run ARBITRARY OpenCV/numpy code to solve ANY computer-vision task on one image
+    and show the result on the canvas. This is your full-power CV coding tool — edges,
+    contours, optical flow (two frames), feature matching, thresholding, morphology,
+    FFT, Hough, homography, segmentation, color spaces — anything OpenCV does.
+    `target`: 'frame' (the live frame), a library image name, a path, a data: URI, or
+    an http URL. Your `code` gets `img` (BGR np.ndarray) + `cv2`,`np`; set `out` to a
+    result image (BGR or gray) OR `result` to a dict/number/string.
+    Example: `out = cv2.Canny(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 100, 200)`."""
+    img = _resolve_image(target)
+    if img is None:
+        return {"status": "error", "error": f"could not load target {target!r}"}
+    g = {"__builtins__": _CV_SAFE, "cv2": cv2, "np": np, "img": img,
+         "out": None, "result": None}
+    try:
+        exec(compile(code, "<cv_code>", "exec"), g)        # noqa: S102 (the ninja)
+    except Exception as e:
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+    out = g.get("out")
+    if isinstance(out, np.ndarray):
+        if out.ndim == 2:
+            out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
+        if out.dtype != np.uint8:
+            out = (np.clip(out, 0, 255) if out.max() > 1 else out * 255).astype(np.uint8)
+        path = _save_png(out, "cv")
+        _meter("overlay", units={"overlay_frames": 1}, label="run_cv_code")
+        return _lib({"status": "success", "kind": "image", "output": path,
+                     "caption": code.strip().splitlines()[-1][:60]}, tags=["cv-code"],
+                    source=target)
+    res = g.get("result")
+    return {"status": "success", "kind": "data", "result": res,
+            "text": str(res)[:400] if res is not None else "ran (no image output)"}
+
+
+def run_cv_video(code: str, which: str = "source", max_seconds: float = 10.0) -> dict:
+    """Apply ARBITRARY OpenCV code to EVERY frame of a clip -> a new video. `code` gets
+    `img` (BGR) per frame and must set `out` (BGR or gray). which: 'source'|'recording'.
+    e.g. `out = cv2.Canny(img, 80, 160)` edge-detects the whole clip."""
+    src = _resolve_target(which)
+    if not src:
+        return {"status": "error", "error": f"no {which} file"}
+    try:
+        fn = compile(code, "<cv_video>", "exec")
+    except Exception as e:
+        return {"status": "error", "error": f"compile: {e}"}
+    cap = cv2.VideoCapture(src)
+    if not cap.isOpened():
+        return {"status": "error", "error": "cannot open clip"}
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    os.makedirs("out/studio/exports", exist_ok=True)
+    out_path = f"out/studio/exports/cvvid_{time.strftime('%H%M%S')}.mp4"
+    writer, n, limit = None, 0, int(max_seconds * fps)
+    while n < limit:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        g = {"__builtins__": _CV_SAFE, "cv2": cv2, "np": np, "img": frame, "out": None}
+        try:
+            exec(fn, g)
+        except Exception as e:
+            cap.release()
+            return {"status": "error", "error": f"frame {n}: {type(e).__name__}: {e}"}
+        out = g.get("out")
+        if not isinstance(out, np.ndarray):
+            out = frame
+        if out.ndim == 2:
+            out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
+        if out.dtype != np.uint8:
+            out = (np.clip(out, 0, 255) if out.max() > 1 else out * 255).astype(np.uint8)
+        if writer is None:
+            h, w = out.shape[:2]
+            writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"),
+                                     max(1, round(fps)), (w, h))
+        writer.write(out)
+        n += 1
+    cap.release()
+    if writer is not None:
+        writer.release()
+    if n == 0:
+        return {"status": "error", "error": "no frames processed"}
+    _meter("overlay", units={"overlay_frames": n}, label="run_cv_video")
+    return _lib({"status": "success", "kind": "clip", "output": out_path,
+                 "seconds": round(n / fps, 1), "caption": "cv: " + code[:40]},
+                tags=["cv-code", "video"], source=which)
+
+
+def emit_proto() -> dict:
+    """Write the CURRENT frame's OccupancyCountingPredictionResult protobuf — the
+    ORIGINAL occupancy-analytics contract: identified boxes, full-frame/line/zone
+    counts, DWELL times, and track info. Saved as a replayable .pb (parse_occupancy.py)."""
+    res = ctx().pipe.emit_proto()
+    if res.get("status") == "success":
+        _meter("snapshot", units={"ops": 1}, label="emit_proto")
+        res["ui"] = "library"
+        res["kind"] = "proto"
+    return res
+
+
 # ---------- audio (TTS narration; Lyria music gated) ----------
 def narrate(text: str, voice: str = "Puck") -> dict:
     """Generate spoken NARRATION (Gemini TTS) as a WAV and add it to the library —
@@ -867,6 +978,7 @@ ALL_TOOLS = [
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
+    run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, extend_video, narrate, generate_music,
     search_library, list_library, show_media, save_to_library,
     load_youtube, save_source, list_sources, use_source, co_direct, direct_story,

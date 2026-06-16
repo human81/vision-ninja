@@ -99,6 +99,15 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     def scene():
         return JSONResponse(pipe.scene())
 
+    @app.get("/emit.pb")
+    def emit_pb():
+        res = pipe.emit_proto()
+        if res.get("status") != "success":
+            return JSONResponse(res, status_code=503)
+        p = res["output"]
+        return FileResponse(p, media_type="application/octet-stream",
+                            filename=Path(p).name)
+
     # ---------- config + annotations ----------
     @app.get("/options")
     def options():

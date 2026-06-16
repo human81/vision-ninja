@@ -191,6 +191,7 @@
         <div class=canvascap id=canvascap></div>
         <div class=ov-chips id=ovchips></div>
         <div class=cfg id=cfg></div>
+        <div class=cfg id=dwell style=margin-top:4px></div>
       </div>
       <div id=editwrap>
         <video id=preview playsinline></video>
@@ -396,7 +397,11 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>switchTab(b.d
 /* ---------------- polling ---------------- */
 async function pollStats(){try{let s=await(await fetch('/stats')).json();
   $('fps').textContent=s.fps??'–';$('tracks').textContent=s.tracks??'–';
-  $('src').textContent=(s.status==='running'?'● ':'○ ')+'live';}catch(e){}
+  $('src').textContent=(s.status||'').startsWith('error')?('⚠ '+s.status.slice(7,46)):
+    ((s.status==='running'?'● ':'○ ')+'live');
+  let dw=s.dwell||[];
+  $('dwell').innerHTML=dw.length?dw.slice(0,6).map(d=>`<span>dwell <b>#${d.track}</b> in ${d.zone}: <b>${d.seconds}s</b></span>`).join(''):'';
+}catch(e){}
   setTimeout(pollStats,600);}
 async function pollMode(){try{let m=await(await fetch('/agent/mode')).json();
   $('mode').className='pill '+(m.mode==='adk'?'adk':'sim');

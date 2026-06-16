@@ -103,8 +103,8 @@ def frames_for(name: str, res) -> list[dict]:
         out.append(_ui_action(res))
     elif name == "analyze_scene":
         out.append({"type": "scene", "data": res})
-    if res.get("kind") in ("gif", "clip", "sheet", "transcode", "speed",
-                           "concat", "snapshot", "image", "audio", "scene", "edit"):
+    if res.get("kind") in ("gif", "clip", "sheet", "transcode", "speed", "concat",
+                           "snapshot", "image", "audio", "scene", "edit", "proto"):
         out.append({"type": "export", "data": res})
     # production receipt: every scene of an assembled/generated edit, in the chat
     tl = res.get("timeline")

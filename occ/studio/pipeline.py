@@ -45,6 +45,7 @@ class StudioPipeline:
         self._frame_clean = None           # latest raw frame
         self._tracked = sv.Detections.empty()
         self._geo = None
+        self._t = 0.0                      # geo time of the latest frame (for proto)
         self._stats = {"full_frame": {}, "lines": {}, "zones": {}, "tracks": 0}
         self._fps = 0.0
         self._status = "idle"
@@ -242,6 +243,8 @@ class StudioPipeline:
                                     "negative": sum(d["negative"].values())}
                               for lid, d in geo.line_counts.items()},
                     "zones": {zid: sum(c.values()) for zid, c in geo.zone_counts.items()},
+                    "dwell": [{"track": tid, "zone": zid, "seconds": round(end - start, 1)}
+                              for (tid, zid, start, end) in geo.dwell],
                     "tracks": 0 if tracked.tracker_id is None else len(tracked)}
                 with self._lock:
                     if ok:
@@ -250,6 +253,7 @@ class StudioPipeline:
                     self._frame_clean = frame
                     self._tracked = tracked
                     self._geo = geo
+                    self._t = n / fps
                     self._stats = stats
                     self._fps = 0.9 * self._fps + 0.1 * inst
                 if n - meter_base >= _METER_EVERY:
@@ -313,7 +317,26 @@ class StudioPipeline:
         return {"resolution": list(res), "fps": stats.get("fps"),
                 "counts": stats.get("full_frame", {}), "tracks": stats.get("tracks", 0),
                 "zones": stats.get("zones", {}), "lines": stats.get("lines", {}),
-                "objects": tracks[:60]}
+                "dwell": stats.get("dwell", []), "objects": tracks[:60]}
+
+    def emit_proto(self, path: str | None = None) -> dict:
+        """Write the CURRENT frame's OccupancyCountingPredictionResult (the original
+        occupancy-analytics contract) as a length-delimited .pb — replayable."""
+        from ..emit import build_result, ResultWriter
+        with self._lock:
+            det, geo, ann, frame, t = (self._tracked, self._geo, self.annotations,
+                                       self._frame_clean, self._t)
+        if det is None or geo is None or frame is None:
+            return {"status": "error", "error": "no frame yet"}
+        h, w = frame.shape[:2]
+        res = build_result(det, geo, ann, w, h, t)
+        p = path or f"out/studio/exports/result_{time.strftime('%H%M%S')}.pb"
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        wr = ResultWriter(p); wr.write(res); wr.close()
+        return {"status": "success", "output": p, "boxes": len(res.identified_boxes),
+                "lines": len(res.stats.crossing_line_counts),
+                "zones": len(res.stats.active_zone_counts),
+                "dwell": len(res.dwell_time_info), "tracks": len(res.track_info)}
 
     def stats(self) -> dict:
         with self._lock:
