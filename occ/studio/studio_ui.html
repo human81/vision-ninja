@@ -18,9 +18,9 @@
   .pill b{color:var(--fg)}
   .pill.sim{background:rgba(255,180,0,.14);color:var(--amber)}
   .pill.adk{background:rgba(63,185,80,.16);color:var(--accent)}
-  .grid{display:grid;grid-template-columns:370px 1fr 360px;gap:12px;padding:12px;
+  .grid{display:grid;grid-template-columns:370px minmax(0,1fr) 360px;gap:12px;padding:12px;
         height:calc(100vh - 47px)}
-  .col{display:flex;flex-direction:column;gap:12px;min-height:0}
+  .col{display:flex;flex-direction:column;gap:12px;min-height:0;min-width:0}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
         padding:12px;min-height:0}
   .card.flex{display:flex;flex-direction:column;flex:1;min-height:0}
@@ -55,10 +55,11 @@
     border-radius:999px;padding:5px 10px;font-size:11px;cursor:pointer}
   .sugg button:hover{color:var(--fg);border-color:#3a4658}
   /* live */
-  #wrap{position:relative;line-height:0;border-radius:10px;overflow:hidden;background:#000}
-  #img,#media{width:100%;display:block}
-  #video{width:100%;display:block;background:#000;max-height:62vh}
-  #drawcv{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:4}
+  #livewrap{display:flex;flex-direction:column;flex:1;min-height:0}
+  #wrap{position:relative;flex:1;min-height:150px;line-height:0;border-radius:10px;
+        overflow:hidden;background:#000;display:flex;align-items:center;justify-content:center}
+  #img,#media,#video{max-width:100%;max-height:100%;width:auto;height:auto;display:block;background:#000}
+  #drawcv{position:absolute;left:0;top:0;pointer-events:none;z-index:4}
   .drawbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
   .drawbar button{background:#141c29;border:1px solid var(--line);color:var(--fg);
     border-radius:7px;padding:5px 10px;font-size:12px;cursor:pointer}
@@ -781,8 +782,20 @@ function applyTimeline(d){ // agent-driven (Co-Director)
   const img=$('img'),cv=$('drawcv'),ctx=cv.getContext('2d');
   let mode='idle',draft=[],shapes=[],cursor=null,drag=null,hover=-1,selected=-1,dash=0,enabled=false;
   const SNAP=12,ZC='#ffb400',LC='#3fb950',SC='#36d7e0',POS='#3fb950',NEG='#f85149',CUR='#e6edf3',SNAPC='#ff5cf0';
-  function resize(){cv.width=img.clientWidth||cv.clientWidth;cv.height=img.clientHeight||cv.clientHeight;}
-  img.addEventListener('load',resize);window.addEventListener('resize',resize);setTimeout(resize,500);
+  // keep the draw canvas exactly overlaying the *displayed* image (which is
+  // letterboxed/centered inside #wrap by object-fit), so zone/line coords map
+  // to real pixels no matter the source resolution or aspect ratio.
+  function vis(){const el=$('media').style.display!=='none'?$('media'):($('video').style.display!=='none'?$('video'):img);return el;}
+  function resize(){
+    const el=vis(),wrap=cv.parentElement;
+    const er=el.getBoundingClientRect(),wr=wrap.getBoundingClientRect();
+    if(!er.width||!er.height)return;
+    cv.style.left=(er.left-wr.left)+'px';cv.style.top=(er.top-wr.top)+'px';
+    cv.style.width=er.width+'px';cv.style.height=er.height+'px';
+    cv.width=Math.round(er.width);cv.height=Math.round(er.height);
+  }
+  img.addEventListener('load',resize);window.addEventListener('resize',resize);
+  setTimeout(resize,300);setInterval(resize,1000);  // MJPEG size can change on source switch
   const toPx=v=>[v[0]*cv.width,v[1]*cv.height],nrm=(x,y)=>[x/cv.width,y/cv.height],d2=(ax,ay,bx,by)=>(ax-bx)**2+(ay-by)**2;
   function unitN(a,b){let dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy)||1;return[dy/L,-dx/L];}
   function hitVertex(x,y){let best=null,bd=SNAP*SNAP;shapes.forEach((s,si)=>s.vertices.forEach((v,vi)=>{let[px,py]=toPx(v);let d=d2(px,py,x,y);if(d<bd){bd=d;best=[si,vi];}}));return best;}
