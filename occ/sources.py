@@ -48,11 +48,23 @@ class FileSource:
     def frames(self) -> Iterator[np.ndarray]:
         while True:
             ok, frame = self.cap.read()
-            if not ok:
-                if self.loop:
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    continue
+            if ok:
+                yield _maybe_downscale(frame, self.max_long_side)
+                continue
+            if not self.loop:
                 break
+            # EOF — rewind. Local files seek to 0; a non-seekable http VOD
+            # (e.g. a resolved YouTube progressive URL) needs a fresh open.
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, frame = self.cap.read()
+            if not ok:
+                self.cap.release()
+                self.cap = cv2.VideoCapture(self.uri)
+                if not self.cap.isOpened():
+                    break
+                ok, frame = self.cap.read()
+                if not ok:
+                    break
             yield _maybe_downscale(frame, self.max_long_side)
 
     def release(self):
@@ -160,12 +172,20 @@ def open_source(cfg):
     s = cfg.section("source")
     uri = str(s.get("uri"))
     max_long = int(s.get("max_long_side", 0) or 0)
-    is_stream = uri.startswith("rtsp") or uri.startswith("http") or uri.isdigit()
-    if is_stream:
+    low = uri.lower()
+    # Genuinely-live sources want newest-frame-wins + auto-reconnect: RTSP,
+    # webcams, and HLS (.m3u8) live manifests. A resolved YouTube *progressive*
+    # URL (googlevideo videoplayback, .mp4 link) is a FINITE VOD — playing it as
+    # a live stream makes the grabber skip frames and hard-reconnect on EOF,
+    # which shows up as a blinking, partial video. Play those as a looping file.
+    is_live = (low.startswith("rtsp") or uri.isdigit()
+               or ".m3u8" in low or bool(s.get("live", False)))
+    if is_live:
         return StreamSource(
             uri,
             rtsp_transport=s.get("rtsp_transport", "tcp"),
             reconnect=bool(s.get("reconnect", True)),
             max_long_side=max_long,
         )
+    # Local file OR a finite http VOD → sequential, looping playback.
     return FileSource(uri, loop=bool(s.get("loop", True)), max_long_side=max_long)

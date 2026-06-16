@@ -78,7 +78,8 @@
   .chip.on{border-color:var(--cyan);color:var(--cyan)}
   .chip .x{color:var(--mut)}
   .cfg{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:11px;color:var(--mut)}
-  .cfg span{background:#0e1521;border:1px solid var(--line);border-radius:6px;padding:3px 7px}
+  .cfg span{background:#0e1521;border:1px solid var(--line);border-radius:6px;padding:3px 7px;
+    max-width:100%;overflow-wrap:anywhere;word-break:break-word}
   .cfg b{color:var(--fg)}
   /* right tabs */
   .tabs{display:flex;gap:6px;margin-bottom:10px}
@@ -504,7 +505,9 @@ async function pollMode(){try{let m=await(await fetch('/agent/mode')).json();
 async function pollConfig(){try{let c=await(await fetch('/config')).json();
   let det=c['detector.backend']==='owlv2'?('owlv2: '+(c['detector.owlv2_prompt']||'')):
     (c['detector.backend']+' '+(c['detector.model']||''));
-  $('cfg').innerHTML=[['source',(c['source.uri']||'').split('/').pop()],['detector',det],
+  let srclbl=(c['source.uri']||'').split('/').pop().split('?')[0]||'live';
+  if(srclbl.length>40)srclbl=srclbl.slice(0,40)+'…';
+  $('cfg').innerHTML=[['source',srclbl],['detector',det],
     ['tracker',c['tracker.algorithm']],['imgsz',c['detector.imgsz']],
     ['every',c['runtime.detect_every']],['classes',(c['detector.classes']||['all']).join(',')]]
     .map(([k,v])=>`<span>${k} <b>${v}</b></span>`).join('');
