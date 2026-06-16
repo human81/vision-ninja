@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-Guidance for working in this repo. Local, real-time occupancy & traffic analytics on
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+Local, real-time occupancy & traffic analytics on
 Apple Silicon (M5 Pro / MPS): capture → detect → track → spatial math → emit the
 Vertex AI Vision `OccupancyCountingPredictionResult` protobuf + annotated overlays +
 traffic CSV. Runs $0-marginal locally. See `PLAN.md` for the phased build and `README.md`
@@ -35,6 +37,10 @@ for usage.
 # browser dashboard (live-reconfig, draw/save, snapshot, record, timeline chart)
 OCC_SOURCE=assets/videos/vehicles-2.mp4 .venv/bin/uvicorn occ.web:app --port 8001
 
+# AGENTIC studio: an ADK "Vision Ninja" drives the pipeline + UI via chat + tools
+.venv/bin/python run.py studio                 # → http://127.0.0.1:8011  ([studio] extra)
+OCC_SOURCE=assets/videos/market-square.mp4 .venv/bin/uvicorn occ.studio.server:app --port 8011
+
 # tests
 .venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–5 (the green gate; expect 27/27)
 .venv/bin/python test_proto_roundtrip.py test_phase2.py test_phase3.py test_phase4.py test_e2e_web.py
@@ -59,7 +65,8 @@ After any change, run `fishfood.py` and expect **ALL PASS — 27/27**. It also w
 | `editor.py` | Interactive OpenCV zone/line editor (mouse + keyboard + on-screen help). |
 | `grounding/` | Open-vocab VLM grounders: `owlv2` (Mac/MPS default), `locate_anything`/`molmo2` (GCP/Linux). `run.py ground`. |
 | `web.py` + `web_ui.html` | FastAPI dashboard: live-reconfig, MJPEG, canvas draw/save, stats, timeline chart, snapshot/record. Live-reconfigurable via a dirty-flag rebuild loop. |
-| `proto/` | Vendored, wire-identical `OccupancyCountingPredictionResult` (`visionai_annotations.proto` → `_pb2.py`). Regenerate: `python -m grpc_tools.protoc -Iproto --python_out=proto proto/visionai_annotations.proto`. |
+| `proto/` (repo root, not under `occ/`) | Vendored, wire-identical `OccupancyCountingPredictionResult` (`visionai_annotations.proto` → `_pb2.py`). Regenerate: `python -m grpc_tools.protoc -Iproto --python_out=proto proto/visionai_annotations.proto`. |
+| `studio/` | **Agentic layer** (Google ADK). Self-contained (never imports `occ.web`). A "Vision Ninja" agent drives the pipeline + browser via tools + an NDJSON stream, mirroring the Momentum architecture: `neurons.py`+`ledger.py` (compute-**points** meter / Brand-Brain-style neuron graph), `brain.py` (Vision Brain = persistent scene memory), `settings.py` (sim axis `live/simulated/zero` + per-node modes), `overlays.py` (**the ninja** — hot-loads agent-authored `def draw(ctx)` cv2 code into the render loop), `ffmpeg_ops.py`, `tools.py`, `agent.py` (ADK + deterministic **SimRunner** so it runs with NO API key), `server.py`+`studio_ui.html`. Runs `$0` in sim mode; uses Gemini when `GOOGLE_API_KEY`/`GEMINI_API_KEY` is set. **Stop the studio server before running `fishfood.py`** — two CV pipelines contend for MPS and flake the level-5 e2e. |
 
 Cost levers (💰 in `configs/default.yaml`): model tier, `detect_every`, `imgsz`, `half`, `max_long_side`.
 

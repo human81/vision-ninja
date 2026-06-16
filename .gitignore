@@ -13,6 +13,11 @@ assets/videos/
 # Run artifacts
 out/
 
+# Secrets / local env (API keys) — never commit
+.env
+.env.local
+.env.*.local
+
 # Local editor/tool state
 .claude/settings.local.json
 .DS_Store

@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1">
+<title>Vision Ninja Studio</title>
+<style>
+  :root{--bg:#0a0d13;--panel:#121822;--panel2:#0e131c;--line:#202938;--fg:#e6edf3;
+        --mut:#8b97a7;--accent:#3fb950;--amber:#ffb400;--blue:#4d8cf5;--cyan:#36d7e0;
+        --magenta:#e25cf0;--danger:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       background:var(--bg);color:var(--fg);font-size:14px}
+  header{display:flex;align-items:center;gap:12px;padding:9px 14px;
+         border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:15px;margin:0;font-weight:700;letter-spacing:.02em}
+  .pill{font-size:11px;padding:3px 9px;border-radius:999px;background:#1b2230;color:var(--mut)}
+  .pill b{color:var(--fg)}
+  .pill.sim{background:rgba(255,180,0,.14);color:var(--amber)}
+  .pill.adk{background:rgba(63,185,80,.16);color:var(--accent)}
+  .grid{display:grid;grid-template-columns:370px 1fr 360px;gap:12px;padding:12px;
+        height:calc(100vh - 47px)}
+  .col{display:flex;flex-direction:column;gap:12px;min-height:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        padding:12px;min-height:0}
+  .card.flex{display:flex;flex-direction:column;flex:1;min-height:0}
+  .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--mut);
+           margin:0 0 9px;display:flex;justify-content:space-between;align-items:center}
+  .flash{animation:flash 1.1s ease}
+  @keyframes flash{0%{box-shadow:0 0 0 0 rgba(54,215,224,.0)}
+    25%{box-shadow:0 0 0 3px rgba(54,215,224,.7)}100%{box-shadow:0 0 0 0 rgba(54,215,224,0)}}
+  /* chat */
+  #log{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding-right:4px}
+  .msg{padding:9px 11px;border-radius:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
+  .msg.user{background:#19283f;align-self:flex-end;max-width:88%}
+  .msg.bot{background:#0e1521;border:1px solid var(--line);max-width:96%}
+  .steps{margin:6px 0 0;padding:0;list-style:none;font-size:13px}
+  .steps li{padding:3px 0 3px 22px;position:relative;color:var(--mut)}
+  .steps li::before{content:'○';position:absolute;left:4px;color:var(--mut)}
+  .steps li.done{color:var(--fg)}.steps li.done::before{content:'●';color:var(--accent)}
+  .acts{display:flex;flex-direction:column;gap:3px;margin-top:6px}
+  .act{font-size:12px;color:var(--mut);font-family:ui-monospace,Menlo,monospace}
+  .act b{color:var(--cyan);font-weight:600}.act.err b{color:var(--danger)}
+  .tiles{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .tile{border:1px solid var(--line);border-radius:8px;overflow:hidden;width:130px;background:#0b1019}
+  .tile img{width:100%;display:block}
+  .tile a{display:block;font-size:11px;padding:5px 7px;color:var(--blue);text-decoration:none}
+  .composer{display:flex;gap:8px;margin-top:10px}
+  .composer input{flex:1;background:#0a0f17;color:var(--fg);border:1px solid var(--line);
+    border-radius:9px;padding:10px 11px;font-size:13px}
+  .composer button{background:var(--blue);border:0;color:#fff;border-radius:9px;
+    padding:0 16px;font-weight:600;cursor:pointer}
+  .sugg{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .sugg button{background:#141c29;border:1px solid var(--line);color:var(--mut);
+    border-radius:999px;padding:5px 10px;font-size:11px;cursor:pointer}
+  .sugg button:hover{color:var(--fg);border-color:#3a4658}
+  /* live */
+  #wrap{position:relative;line-height:0;border-radius:10px;overflow:hidden;background:#000}
+  #img,#media{width:100%;display:block}
+  #video{width:100%;display:block;background:#000;max-height:62vh}
+  #livebtn{position:absolute;right:8px;top:8px;cursor:pointer;z-index:3;
+    background:#0e1521cc;border:1px solid var(--line);color:var(--mut)}
+  #livebtn.on{border-color:var(--accent);color:var(--accent)}
+  .canvascap{font-size:12px;color:var(--cyan);margin-top:6px;min-height:15px}
+  #drape{position:absolute;inset:0;pointer-events:none}
+  .hud{position:absolute;left:10px;top:10px;display:flex;gap:6px}
+  .ov-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:#141c29;border:1px solid var(--line);
+    border-radius:999px;padding:4px 10px;font-size:12px;cursor:pointer}
+  .chip.on{border-color:var(--cyan);color:var(--cyan)}
+  .chip .x{color:var(--mut)}
+  .cfg{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:11px;color:var(--mut)}
+  .cfg span{background:#0e1521;border:1px solid var(--line);border-radius:6px;padding:3px 7px}
+  .cfg b{color:var(--fg)}
+  /* right tabs */
+  .tabs{display:flex;gap:6px;margin-bottom:10px}
+  .tabs button{flex:1;background:#0e1521;border:1px solid var(--line);color:var(--mut);
+    border-radius:8px;padding:7px;font-size:12px;cursor:pointer}
+  .tabs button.active{background:#17202e;color:var(--fg);border-color:#34465e}
+  .pane{display:none;flex:1;min-height:0;overflow-y:auto}.pane.active{display:block}
+  .stat{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--line)}
+  .stat b{color:var(--accent)}
+  .bar{height:7px;border-radius:4px;background:#0e1521;overflow:hidden;margin-top:3px}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--blue))}
+  .node-row{margin:7px 0}
+  .node-row .lab{display:flex;justify-content:space-between;font-size:12px}
+  .node-row .lab b{color:var(--cyan)}
+  .big{font-size:30px;font-weight:800}.muted{color:var(--mut)}
+  .kv{font-size:12px;color:var(--mut);margin:4px 0}.kv b{color:var(--fg)}
+  #graph{width:100%;height:260px;display:block}
+  .note{font-size:12px;background:#0e1521;border:1px solid var(--line);border-radius:7px;
+    padding:6px 8px;margin-top:6px}
+  #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#17202e;
+    border:1px solid var(--cyan);color:var(--fg);padding:9px 15px;border-radius:10px;
+    font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:50;max-width:70vw}
+  #toast.show{opacity:1}
+  .spotlit{outline:3px solid var(--cyan)!important;outline-offset:3px;border-radius:8px;
+    transition:outline .2s}
+  ::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:#22304a;border-radius:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🥷 Vision Ninja Studio</h1>
+  <span id=mode class="pill sim">mode <b>…</b></span>
+  <span class=pill>fps <b id=fps>–</b></span>
+  <span class=pill>tracks <b id=tracks>–</b></span>
+  <span style=flex:1></span>
+  <span class=pill>points <b id=pts>0</b> / <span id=ptsbud>100k</span></span>
+  <span class=pill>brain $<b id=usd>0</b></span>
+</header>
+
+<div class=grid>
+  <!-- LEFT: chat -->
+  <div class=col>
+    <div class="card flex" id=panel-chat>
+      <h2>Conversation <span class=muted id=think></span></h2>
+      <div id=log></div>
+      <div class=composer>
+        <input id=msg placeholder="Ask the ninja for any visual outcome…"
+               autocomplete=off>
+        <button id=send>Send</button>
+      </div>
+      <div class=sugg id=sugg></div>
+    </div>
+  </div>
+
+  <!-- CENTER: live view + overlays + config -->
+  <div class=col>
+    <div class="card flex" id=panel-live>
+      <h2>Live View / Canvas <span class=muted id=drivelabel></span></h2>
+      <div id=wrap>
+        <img id=img src=/stream.mjpg>
+        <img id=media style=display:none>
+        <video id=video controls loop muted playsinline style=display:none></video>
+        <div class=hud><span class=pill id=src>source</span>
+          <span class=pill id=canvasmode>live</span></div>
+        <button id=livebtn class="pill on" onclick="setCanvas('live')">● live</button>
+      </div>
+      <div class=canvascap id=canvascap></div>
+      <div class=ov-chips id=ovchips></div>
+      <div class=cfg id=cfg></div>
+    </div>
+  </div>
+
+  <!-- RIGHT: meter / brain / graph -->
+  <div class=col>
+    <div class="card flex" id=panel-right>
+      <div class=tabs>
+        <button data-tab=meter class=active>Cost Meter</button>
+        <button data-tab=brain>Vision Brain</button>
+        <button data-tab=graph>Neuron Graph</button>
+      </div>
+      <div class="pane active" id=pane-meter>
+        <div class=big><span id=mpts>0</span> <span class=muted style=font-size:13px>points today</span></div>
+        <div class=bar style=margin:8px0><i id=budbar style=width:0%></i></div>
+        <div class=kv>brain spend <b>$<span id=musd>0</span></b> · sim points <b id=msim>0</b> · events <b id=mev>0</b></div>
+        <h2 style=margin-top:14px>Spend by neuron</h2>
+        <div id=bynode></div>
+        <h2 style=margin-top:14px>Activity</h2>
+        <div id=recent></div>
+      </div>
+      <div class=pane id=pane-brain>
+        <div class=kv>SOURCE <b id=b-src>–</b></div>
+        <div class=kv>TASK <b id=b-task>–</b></div>
+        <div class=kv>RESOLUTION <b id=b-res>–</b> · PEAK TRACKS <b id=b-peak>0</b></div>
+        <h2 style=margin-top:12px>Observed classes</h2>
+        <div id=b-classes class=muted>–</div>
+        <h2 style=margin-top:12px>Active overlays</h2>
+        <div id=b-ov class=muted>–</div>
+        <h2 style=margin-top:12px>Brain notes</h2>
+        <div id=b-notes class=muted>–</div>
+      </div>
+      <div class=pane id=pane-graph>
+        <canvas id=graph></canvas>
+        <div class=muted style=font-size:11px>Senses → Perception → Analytics → Render → Export → Brain → Agent. Node glow = live compute. Edges = data flow.</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id=toast></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const PANELS={live:'panel-live',chat:'panel-chat',meter:'panel-right',brain:'panel-right',
+  overlays:'panel-live',right:'panel-right'};
+
+/* ---------------- chat stream ---------------- */
+let cur=null, curText='', curActs=null, curTiles=null;
+function addMsg(cls,html){let d=document.createElement('div');d.className='msg '+cls;
+  d.innerHTML=html;$('log').appendChild(d);$('log').scrollTop=1e9;return d;}
+function botStart(){cur=addMsg('bot','');curText='';curActs=null;curTiles=null;
+  cur._text=document.createElement('span');cur.appendChild(cur._text);}
+function ensureActs(){if(!curActs){curActs=document.createElement('div');curActs.className='acts';
+  cur.appendChild(curActs);}return curActs;}
+function ensureTiles(){if(!curTiles){curTiles=document.createElement('div');curTiles.className='tiles';
+  cur.appendChild(curTiles);}return curTiles;}
+
+function handleFrame(f){
+  const d=f.data||{};
+  if(f.type==='log'){$('think').textContent=d.text||'';}
+  else if(f.type==='plan'){
+    let ul=document.createElement('ul');ul.className='steps';cur._steps=ul;
+    (d.steps||[]).forEach(s=>{let li=document.createElement('li');li.textContent=s;ul.appendChild(li);});
+    cur.insertBefore(ul,cur._text);}
+  else if(f.type==='text_delta'){curText+=d.text||'';cur._text.textContent=curText;}
+  else if(f.type==='tool'){
+    let a=document.createElement('div');a.className='act'+(d.ok?'':' err');
+    a.innerHTML='▸ <b>'+d.name+'</b> '+(d.ok?'':('· '+(d.detail||'failed')));
+    ensureActs().appendChild(a);
+    // tick the matching plan step
+    if(cur._steps){for(const li of cur._steps.children){if(!li.classList.contains('done')){
+      li.classList.add('done');break;}}}
+    $('think').textContent='';}
+  else if(f.type==='scene'){pollUsage();}
+  else if(f.type==='export'){
+    let t=ensureTiles();let name=(d.output||'').split('/').pop();
+    let div=document.createElement('div');div.className='tile';
+    let isImg=/\.(gif|png|jpg)$/i.test(name);
+    div.innerHTML=(isImg?`<img src="/download/${name}">`:'')+
+      `<a href="/download/${name}" download>⬇ ${d.kind||'file'}</a>`;
+    t.appendChild(div);}
+  else if(f.type==='canvas'){setCanvas(d.mode,d.src,d.caption);}
+  else if(f.type==='ui_action'){driveUI(d);}
+  else if(f.type==='refresh'){refreshPanel(d.panel);}
+  else if(f.type==='final'){if(curText.trim()==='')cur._text.textContent=d.text||'';}
+  else if(f.type==='error'){ensureActs().innerHTML='<div class="act err">▸ <b>error</b> '+(d.text||'')+'</div>';}
+  $('log').scrollTop=1e9;
+}
+
+/* the smart canvas: live feed | image | video */
+function setCanvas(mode,src,caption){
+  const img=$('img'),media=$('media'),vid=$('video');
+  $('canvascap').textContent=caption||'';
+  $('canvasmode').textContent=mode||'live';
+  const hide=el=>{el.style.display='none';};
+  if(mode==='image'&&src){img.style.display='none';hide(vid);try{vid.pause();}catch(e){}
+    media.src=src+(src.includes('?')?'':'?t='+Date.now());media.style.display='block';
+    $('livebtn').classList.remove('on');}
+  else if(mode==='video'&&src){img.style.display='none';hide(media);
+    vid.src=src;vid.style.display='block';$('livebtn').classList.remove('on');
+    vid.play().catch(()=>{});}
+  else{hide(media);hide(vid);try{vid.pause();}catch(e){}img.style.display='block';
+    $('canvasmode').textContent='live';$('livebtn').classList.add('on');}
+}
+
+async function send(text){
+  text=(text||$('msg').value).trim(); if(!text)return; $('msg').value='';
+  let echo=text.length>180&&/data:image|^data:|;base64,/.test(text)
+    ? '🖼️ [shared an image] '+text.replace(/data:image[^\s]*/,'').slice(0,80)
+    : text;
+  addMsg('user',echo.replace(/</g,'&lt;')); botStart();
+  let res;
+  try{res=await fetch('/agent/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({message:text})});}catch(e){handleFrame({type:'error',data:{text:String(e)}});return;}
+  const rd=res.body.getReader(),dec=new TextDecoder();let buf='';
+  while(true){const {done,value}=await rd.read();if(done)break;
+    buf+=dec.decode(value,{stream:true});let lines=buf.split('\n');buf=lines.pop()||'';
+    for(const ln of lines){const t=ln.trim();if(!t)continue;
+      try{handleFrame(JSON.parse(t));}catch(e){}}}
+  $('think').textContent='';pollUsage();pollBrain();
+}
+$('send').onclick=()=>send();
+$('msg').addEventListener('keydown',e=>{if(e.key==='Enter')send();});
+
+/* ---------------- agent drives the UI ---------------- */
+function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2600);}
+function flash(id){let el=$(id);if(el){el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash');}}
+function driveUI(d){
+  const a=d.action;
+  if(a==='toast')toast(d.caption||d.title||'');
+  else if(a==='focus'){flash(PANELS[d.target]||'panel-live');$('drivelabel').textContent=d.caption||'';}
+  else if(a==='set_tab')switchTab(d.value);
+  else if(a==='spotlight'){try{let el=document.querySelector(d.target);if(el){
+    el.classList.add('spotlit');setTimeout(()=>el.classList.remove('spotlit'),2200);}}catch(e){}}
+  else if(a==='pulse_node'){pulseNode(d.target);}
+}
+function refreshPanel(p){
+  if(p==='overlays'){pollOverlays();flash('panel-live');}
+  else if(p==='config'||p==='annotations'){pollConfig();}
+  else if(p==='brain'){pollBrain();}
+  else if(p==='settings'){pollMode();}
+  pollUsage();
+}
+
+/* ---------------- right tabs ---------------- */
+function switchTab(name){if(!name)return;
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
+  document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('active',p.id==='pane-'+name));
+  if(name==='graph')drawGraph();}
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
+
+/* ---------------- polling ---------------- */
+async function pollStats(){try{let s=await(await fetch('/stats')).json();
+  $('fps').textContent=s.fps??'–';$('tracks').textContent=s.tracks??'–';
+  $('src').textContent=(s.status==='running'?'● ':'○ ')+'live';}catch(e){}
+  setTimeout(pollStats,600);}
+async function pollMode(){try{let m=await(await fetch('/agent/mode')).json();
+  $('mode').className='pill '+(m.mode==='adk'?'adk':'sim');
+  $('mode').innerHTML='mode <b>'+(m.mode==='adk'?'ADK · Gemini':'sim ($0)')+'</b>';}catch(e){}}
+async function pollConfig(){try{let c=await(await fetch('/config')).json();
+  let det=c['detector.backend']==='owlv2'?('owlv2: '+(c['detector.owlv2_prompt']||'')):
+    (c['detector.backend']+' '+(c['detector.model']||''));
+  $('cfg').innerHTML=[['source',(c['source.uri']||'').split('/').pop()],['detector',det],
+    ['tracker',c['tracker.algorithm']],['imgsz',c['detector.imgsz']],
+    ['every',c['runtime.detect_every']],['classes',(c['detector.classes']||['all']).join(',')]]
+    .map(([k,v])=>`<span>${k} <b>${v}</b></span>`).join('');
+  $('src').title=c['source.uri'];}catch(e){}}
+async function pollOverlays(){try{let o=await(await fetch('/overlays')).json();
+  let active=o.overlays.map(v=>`<span class="chip ${v.enabled?'on':''}" onclick="toggleOv('${v.name}',${!v.enabled})">${v.enabled?'◉':'○'} ${v.name} <span class=x onclick="event.stopPropagation();rmOv('${v.name}')">✕</span></span>`).join('');
+  let presets=o.presets.filter(p=>!o.overlays.find(v=>v.name===p))
+    .map(p=>`<span class=chip onclick="toggleOv('${p}',true)">+ ${p}</span>`).join('');
+  $('ovchips').innerHTML=active+presets||'<span class=muted>no overlays yet — ask the ninja</span>';}catch(e){}}
+window.toggleOv=async(n,on)=>{await fetch('/overlays/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,on})});pollOverlays();};
+window.rmOv=async(n)=>{await fetch('/overlays/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});pollOverlays();};
+
+const NODE_LABEL={};
+async function pollUsage(){try{let u=await(await fetch('/usage')).json();
+  $('pts').textContent=Math.round(u.wallet.points_spent);
+  $('ptsbud').textContent=(u.wallet.points_budget/1000)+'k';
+  $('usd').textContent=u.wallet.usd_spent.toFixed(4);
+  $('mpts').textContent=Math.round(u.today.points);
+  $('musd').textContent=u.wallet.usd_spent.toFixed(4);
+  $('msim').textContent=Math.round(u.wallet.sim_points_spent);
+  $('mev').textContent=u.today.events;
+  let pct=Math.min(100,100*u.wallet.points_spent/u.wallet.points_budget);
+  $('budbar').style.width=pct+'%';
+  let nodes=Object.entries(u.by_node).sort((a,b)=>b[1].points-a[1].points);
+  let max=Math.max(1,...nodes.map(n=>n[1].points));
+  $('bynode').innerHTML=nodes.map(([k,v])=>`<div class=node-row><div class=lab><span>${k}</span><b>${v.points.toFixed(1)} pts${v.usd?(' · $'+v.usd):''}</b></div><div class=bar><i style="width:${100*v.points/max}%"></i></div></div>`).join('')||'<span class=muted>no activity yet</span>';
+  $('recent').innerHTML=(u.recent||[]).slice(0,12).map(e=>`<div class=act>▸ <b>${e.node}</b> ${e.label} <span class=muted>${e.points?e.points+'pts':''}${e.usd_micros?(' $'+(e.usd_micros/1e6).toFixed(4)):''}${e.simulated?' (sim)':''}</span></div>`).join('');
+  window._activity=u.by_node;}catch(e){}}
+async function pollBrain(){try{let b=await(await fetch('/brain')).json();
+  $('b-src').textContent=(b.source||'–').split('/').pop();
+  $('b-task').textContent=b.task||'–';
+  $('b-res').textContent=(b.resolution||[0,0]).join('×');
+  $('b-peak').textContent=b.observations?.tracks_peak||0;
+  let cls=Object.entries(b.observations?.classes||{});
+  $('b-classes').innerHTML=cls.map(([k,v])=>`<span class=chip>${k} <b>peak ${v.peak}</b></span>`).join(' ')||'–';
+  $('b-ov').innerHTML=(b.overlays||[]).map(o=>`<span class=chip>${o.name}</span>`).join(' ')||'–';
+  $('b-notes').innerHTML=(b.notes||[]).slice(-6).map(n=>`<div class=note><b>${n.key}</b>: ${n.text}</div>`).join('')||'<span class=muted>none</span>';
+}catch(e){}}
+
+/* ---------------- neuron graph ---------------- */
+let GRAPH=null;
+async function loadGraph(){try{GRAPH=await(await fetch('/graph')).json();drawGraph();}catch(e){}}
+function pulseNode(id){if(!GRAPH)return;GRAPH._pulse=GRAPH._pulse||{};GRAPH._pulse[id]=performance.now();drawGraph();}
+function drawGraph(){
+  if(!GRAPH)return;const c=$('graph');if(!c.clientWidth)return;
+  const w=c.width=c.clientWidth,h=c.height=260;const x=c.getContext('2d');
+  x.clearRect(0,0,w,h);
+  const regions=GRAPH.regions;const colX={};regions.forEach((r,i)=>colX[r]=30+(w-60)*i/(regions.length-1));
+  const byReg={};GRAPH.nodes.forEach(n=>{(byReg[n.region]=byReg[n.region]||[]).push(n);});
+  const pos={};
+  for(const r of regions){const list=byReg[r]||[];list.forEach((n,i)=>{
+    pos[n.id]={x:colX[r],y:30+(h-50)*(list.length===1?0.5:i/(list.length-1))};});}
+  // edges
+  x.lineWidth=1;
+  GRAPH.edges.forEach(e=>{const a=pos[e.from],b=pos[e.to];if(!a||!b)return;
+    x.strokeStyle='rgba(77,140,245,0.18)';x.beginPath();x.moveTo(a.x,a.y);
+    x.bezierCurveTo((a.x+b.x)/2,a.y,(a.x+b.x)/2,b.y,b.x,b.y);x.stroke();});
+  const act=window._activity||{};const maxp=Math.max(1,...Object.values(act).map(v=>v.points||0));
+  GRAPH.nodes.forEach(n=>{const p=pos[n.id];const a=act[n.id];const pts=a?a.points:0;
+    const glow=Math.min(1,pts/maxp);
+    const pulse=GRAPH._pulse&&GRAPH._pulse[n.id]?Math.max(0,1-(performance.now()-GRAPH._pulse[n.id])/900):0;
+    const rr=11+glow*7+pulse*8;
+    x.beginPath();x.arc(p.x,p.y,rr,0,7);
+    x.fillStyle=pts>0?`rgba(54,215,224,${0.25+0.6*glow})`:'#16202e';x.fill();
+    x.strokeStyle=pulse>0?'#e25cf0':(pts>0?'#36d7e0':'#2a3850');x.lineWidth=pulse>0?3:1.5;x.stroke();
+    x.fillStyle='#cdd9e6';x.font='9px system-ui';x.textAlign='center';
+    x.fillText(n.id,p.x,p.y+rr+10);});
+  if(GRAPH._pulse&&Object.values(GRAPH._pulse).some(t=>performance.now()-t<900))requestAnimationFrame(drawGraph);
+}
+window.addEventListener('resize',drawGraph);
+
+/* ---------------- suggestions ---------------- */
+const SUGG=["find the cars and highlight the busiest lane with a heatmap",
+  "show motion trails for everyone","detect forklifts and ring them",
+  "draw a counting line across the road","count objects per class",
+  "make a gif of the last few seconds","what do you see right now?",
+  "show speed vectors","remember that this is the north gate camera"];
+$('sugg').innerHTML=SUGG.map(s=>`<button>${s}</button>`).join('');
+$('sugg').querySelectorAll('button').forEach(b=>b.onclick=()=>send(b.textContent));
+
+/* ---------------- boot ---------------- */
+addMsg('bot',"🥷 I'm the Vision Ninja. Tell me a visual outcome — I'll pick the detector, read the scene, and author the OpenCV overlays to make it happen. Everything I do is metered in compute points on the right.");
+pollStats();pollMode();pollConfig();pollOverlays();pollUsage();pollBrain();loadGraph();
+setInterval(pollUsage,1500);setInterval(pollBrain,2500);setInterval(pollConfig,3000);
+setInterval(()=>{if($('pane-graph').classList.contains('active'))drawGraph();},1500);
+</script>
+</body>
+</html>

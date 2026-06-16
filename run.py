@@ -135,8 +135,23 @@ def main(argv=None):
     g.add_argument("--set", action="append", metavar="k.path=value")
     g.set_defaults(func=cmd_ground)
 
+    st = sub.add_parser("studio", help="agentic Vision Ninja studio (ADK + browser)")
+    st.add_argument("--source", help="initial source.uri")
+    st.add_argument("--port", type=int, default=8011)
+    st.add_argument("--host", default="127.0.0.1")
+    st.set_defaults(func=cmd_studio)
+
     args = p.parse_args(argv)
     return args.func(args)
+
+
+def cmd_studio(args):
+    import os
+    import uvicorn
+    if args.source:
+        os.environ["OCC_SOURCE"] = args.source
+    print(f"🥷 Vision Ninja Studio → http://{args.host}:{args.port}")
+    uvicorn.run("occ.studio.server:app", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

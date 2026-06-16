@@ -43,6 +43,13 @@ web = [
     "uvicorn[standard]>=0.29",
     "playwright>=1.44",
 ]
+# Agentic Vision Ninja studio — Google ADK agent drives the CV pipeline + UI.
+# Needs [cv] + [web]. With a GOOGLE_API_KEY/GEMINI_API_KEY the brain runs on
+# Gemini via ADK; without one it falls back to the deterministic SimRunner ($0).
+studio = [
+    "google-adk>=2.2",
+    "python-dotenv>=1.0",     # loads a gitignored .env (GEMINI_API_KEY, …) on boot
+]
 # Build-time only (proto compilation).
 build = [
     "grpcio-tools>=1.66",
