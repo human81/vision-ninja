@@ -99,16 +99,18 @@ class Renderer:
             self._text(frame, name, (pts[0][0], pts[0][1] - int(6 * s)),
                        0.7 * s, (0, 220, 255), max(1, round(1.4 * s)))
         for ln in ann.lines():
-            (x0, y0), (x1, y1) = ln.vertices
-            a = (int(x0 * w), int(y0 * h)); b = (int(x1 * w), int(y1 * h))
-            cv2.line(frame, a, b, (0, 255, 0), t, cv2.LINE_AA)
-            mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
-            dx, dy = b[0] - a[0], b[1] - a[1]
-            L = max((dx * dx + dy * dy) ** 0.5, 1e-6)
-            nx, ny = dy / L, -dx / L
-            tip = (int(mx + nx * 36 * s), int(my + ny * 36 * s))
-            cv2.arrowedLine(frame, (int(mx), int(my)), tip, (0, 255, 0),
-                            t, cv2.LINE_AA, tipLength=0.4)
+            pts = [(int(x * w), int(y * h)) for x, y in ln.vertices]
+            cv2.polylines(frame, [np.array(pts, np.int32)], False, (0, 255, 0),
+                          t, cv2.LINE_AA)
+            for a, b in zip(pts[:-1], pts[1:]):       # +dir arrow per segment
+                mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+                dx, dy = b[0] - a[0], b[1] - a[1]
+                L = max((dx * dx + dy * dy) ** 0.5, 1e-6)
+                nx, ny = dy / L, -dx / L
+                tip = (int(mx + nx * 36 * s), int(my + ny * 36 * s))
+                cv2.arrowedLine(frame, (int(mx), int(my)), tip, (0, 255, 0),
+                                t, cv2.LINE_AA, tipLength=0.4)
+            a = pts[0]
             label = ln.display_name or ln.id
             if geo is not None and ln.id in geo.line_counts:
                 pos = sum(geo.line_counts[ln.id]["positive"].values())

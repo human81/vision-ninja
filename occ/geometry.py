@@ -52,6 +52,27 @@ def _side(a, b, p) -> float:
     return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
 
 
+def _seg_dist2(a, b, p) -> float:
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    L2 = dx * dx + dy * dy
+    if L2 < 1e-9:
+        return (p[0] - a[0]) ** 2 + (p[1] - a[1]) ** 2
+    t = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2))
+    return (p[0] - (a[0] + t * dx)) ** 2 + (p[1] - (a[1] + t * dy)) ** 2
+
+
+def _poly_side(verts, p) -> float:
+    """Signed side of a polyline: the cross-product sign of the *nearest* segment.
+    For a 2-point line this is exactly `_side(v0, v1, p)` — counting is unchanged."""
+    best_d, best_s = float("inf"), 0.0
+    for i in range(len(verts) - 1):
+        a, b = verts[i], verts[i + 1]
+        d = _seg_dist2(a, b, p)
+        if d < best_d:
+            best_d, best_s = d, _side(a, b, p)
+    return best_s
+
+
 class GeometryEngine:
     def __init__(self, annotations: AnnotationSet, min_dwell: float = 1.0):
         self.ann = annotations
@@ -91,10 +112,9 @@ class GeometryEngine:
             p = anchors[i]
             self._track_start.setdefault(tid, t)
 
-            # --- lines ---
+            # --- lines (2-pt or polyline) ---
             for ln in self.ann.lines():
-                a, b = lines_px[ln.id][0], lines_px[ln.id][1]
-                s = _side(a, b, p)
+                s = _poly_side(lines_px[ln.id], p)
                 key = (ln.id, tid)
                 prev = self._prev_side.get(key)
                 if prev is not None and prev != 0 and s != 0 and (prev > 0) != (s > 0):
