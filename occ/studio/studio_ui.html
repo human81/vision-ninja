@@ -66,6 +66,16 @@
   .drawbar button:hover{border-color:#3a4658}
   .drawbar button[data-tog].on,.drawbar button[data-frz].on{border-color:var(--cyan);color:var(--cyan)}
   .drawbar button[data-det].on{border-color:var(--danger);color:var(--danger)}
+  .voicebar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+  .voicebar button{background:#141c29;border:1px solid var(--line);color:var(--fg);
+    border-radius:7px;padding:5px 11px;font-size:12px;cursor:pointer}
+  .voicebar button:hover{border-color:#3a4658}
+  .voicebar button.on{border-color:var(--accent);color:var(--accent);background:rgba(63,185,80,.12)}
+  .voicebar #vstop{border-color:#3a2530;color:var(--danger)}
+  .vdot{width:9px;height:9px;border-radius:50%;background:#3a4658;display:inline-block;margin:0 2px}
+  .vdot.live{background:var(--danger);box-shadow:0 0 0 0 rgba(248,81,73,.6);animation:vpulse 1.4s infinite}
+  .vdot.speaking{background:var(--cyan);box-shadow:0 0 0 0 rgba(54,215,224,.6);animation:vpulse 1s infinite}
+  @keyframes vpulse{0%{box-shadow:0 0 0 0 rgba(248,81,73,.55)}70%{box-shadow:0 0 0 7px rgba(248,81,73,0)}100%{box-shadow:0 0 0 0 rgba(248,81,73,0)}}
   #livebtn{position:absolute;right:8px;top:8px;cursor:pointer;z-index:6;
     background:#0e1521cc;border:1px solid var(--line);color:var(--mut)}
   #livebtn.on{border-color:var(--accent);color:var(--accent)}
@@ -225,7 +235,7 @@
   <div class=col>
     <div class="card flex" id=panel-live>
       <h2>Live View / Canvas
-        <span id=modeswitch><button data-m=live class=on onclick="nleSetMode('live')">▶ Live</button><button data-m=edit onclick="nleSetMode('edit')">✂ Edit</button></span>
+        <span id=modeswitch><button data-m=live class=on onclick="nleSetMode('live')">▶ Live</button><button data-m=voice onclick="nleSetMode('voice')">🎙 Live Voice</button><button data-m=edit onclick="nleSetMode('edit')">✂ Edit</button></span>
         <span class=muted id=drivelabel></span></h2>
       <div id=livewrap>
         <div id=wrap>
@@ -248,6 +258,14 @@
           <button onclick="drawClear()">Clear</button>
           <button onclick="drawSave()">Save</button>
           <span class=muted style=font-size:10px>click to add points · click 1st point closes a zone · drag a vertex · ⏎ finish · Esc cancel</span>
+        </div>
+        <div class=voicebar id=voicebar style=display:none>
+          <button id=vmic onclick="vToggle('mic')" title="talk to the ninja">🎤 Mic</button>
+          <button id=vcam onclick="vToggle('cam')" title="run overlays on your camera">📷 Camera</button>
+          <button id=vscr onclick="vToggle('screen')" title="share + analyze your screen">🖥 Screen</button>
+          <span id=vdot class=vdot></span><span id=vstatus class=muted>tap Mic to talk</span>
+          <span style=flex:1></span>
+          <button id=vstop onclick="vStop()">⏹ End</button>
         </div>
         <div class=ov-chips id=ovchips></div>
         <div class=cfg id=cfg></div>
@@ -641,12 +659,150 @@ window.saveModels=async()=>{let models={};document.querySelectorAll('#models sel
 const TASK_MODEL={detect:'yolo11n.pt',segment:'yolo11n-seg.pt',pose:'yolo11n-pose.pt',obb:'yolo11n-obb.pt',classify:'yolo11n-cls.pt'};
 window.setTask=async(t)=>{await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({'detector.backend':'yolo','detector.model':TASK_MODEL[t]})});toast('vision task: '+t);pollConfig();};
 
+/* ---------------- BIDI Live Voice (Gemini Live + tools + overlays on YOU) ---------------- */
+const VOICE={live:null,cam:null,actx:null,pctx:null,worklet:null,micStream:null,
+  vidStream:null,vidTimer:null,playHead:0,srcs:new Set(),botMsg:null,
+  on:{mic:false,cam:false,screen:false}};
+function vStatus(t,dot){$('vstatus').textContent=t;$('vdot').className='vdot'+(dot?' '+dot:'');}
+function b64FromBuf(buf){const b=new Uint8Array(buf);let s='';const C=0x8000;
+  for(let i=0;i<b.length;i+=C)s+=String.fromCharCode.apply(null,b.subarray(i,i+C));return btoa(s);}
+function bufFromB64(b64){const bin=atob(b64);const u=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;}
+
+function vEnsureLive(){
+  if(VOICE.live&&VOICE.live.readyState<=1)return Promise.resolve(VOICE.live);
+  return new Promise((resolve,reject)=>{
+    const proto=location.protocol==='https:'?'wss:':'ws:';
+    const ws=new WebSocket(proto+'//'+location.host+'/ws/live');VOICE.live=ws;
+    ws.onopen=()=>resolve(ws);
+    ws.onmessage=(e)=>{try{vOnLive(JSON.parse(e.data));}catch(err){}};
+    ws.onclose=()=>{if(VOICE.on.mic)vStatus('disconnected');};
+    ws.onerror=()=>reject(new Error('live socket failed'));
+  });
+}
+function vOnLive(m){const t=m.type;
+  if(t==='ready')return;
+  if(t==='audio'){vPlay(m.data);vStatus('speaking…','speaking');return;}
+  if(t==='transcript'){vTranscript(m.role,m.text);return;}
+  if(t==='interrupted'){vStopPlayback();return;}
+  if(t==='turn_complete'){VOICE.botMsg=null;if(VOICE.on.mic)vStatus('listening…','live');return;}
+  if(t==='error'){toast('live: '+(m.message||'error'));vStatus('error');return;}
+  if(t==='log'){vStatus('▸ '+((m.data&&m.data.text)||'…'),'live');return;}
+  if(t==='tool'){const d=m.data||{};vStatus('▸ '+(d.name||'tool'),'live');
+    if(d.name==='create_overlay'&&d.ok){switchTab('code');pollOverlays();}return;}
+  if(['refresh','canvas','ui_action','library','sources','export','timeline','scene'].includes(t)){handleFrame(m);}
+}
+function vTranscript(role,text){if(!text)return;
+  if(role==='user'){addMsg('user','🎙 '+text.replace(/</g,'&lt;'));VOICE.botMsg=null;return;}
+  if(!VOICE.botMsg){VOICE.botMsg=addMsg('bot','');VOICE.botMsg._t='';}
+  VOICE.botMsg._t+=text;VOICE.botMsg.textContent=VOICE.botMsg._t;$('log').scrollTop=1e9;}
+
+/* model voice playback (pcm16 24k, scheduled on a shared timeline) */
+function vPlay(b64){
+  const ctx=VOICE.pctx||(VOICE.pctx=new (window.AudioContext||window.webkitAudioContext)());
+  if(ctx.state==='suspended')ctx.resume();
+  const u=bufFromB64(b64),i16=new Int16Array(u.buffer,u.byteOffset,Math.floor(u.byteLength/2));
+  const f32=new Float32Array(i16.length);for(let i=0;i<i16.length;i++)f32[i]=i16[i]/32768;
+  const buf=ctx.createBuffer(1,Math.max(1,f32.length),24000);buf.getChannelData(0).set(f32);
+  const node=ctx.createBufferSource();node.buffer=buf;node.connect(ctx.destination);
+  VOICE.playHead=Math.max(VOICE.playHead,ctx.currentTime);
+  node.start(VOICE.playHead);VOICE.playHead+=buf.duration;VOICE.srcs.add(node);
+  node.onended=()=>{VOICE.srcs.delete(node);if(VOICE.srcs.size===0&&VOICE.on.mic)vStatus('listening…','live');};
+}
+function vStopPlayback(){VOICE.srcs.forEach(n=>{try{n.stop();}catch(e){}});VOICE.srcs.clear();
+  if(VOICE.pctx)VOICE.playHead=VOICE.pctx.currentTime;}
+
+/* mic capture (pcm16 16k via AudioWorklet) */
+const VWORKLET="class R extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c){const p=new Int16Array(c.length);"
+ +"for(let k=0;k<c.length;k++){let s=Math.max(-1,Math.min(1,c[k]));p[k]=s<0?s*0x8000:s*0x7fff;}"
+ +"this.port.postMessage(p.buffer,[p.buffer]);}return true;}}registerProcessor('vrec',R);";
+async function vStartMic(){
+  const ws=await vEnsureLive();
+  const actx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});VOICE.actx=actx;
+  await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([VWORKLET],{type:'application/javascript'})));
+  const stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
+  VOICE.micStream=stream;
+  const src=actx.createMediaStreamSource(stream),node=new AudioWorkletNode(actx,'vrec');VOICE.worklet=node;
+  node.port.onmessage=(e)=>{if(ws.readyState===1)ws.send(JSON.stringify({type:'audio',data:b64FromBuf(e.data)}));};
+  src.connect(node);node.connect(actx.destination);
+  if(VOICE.pctx)VOICE.pctx.resume();
+  vStatus('listening…','live');
+}
+function vStopMic(){
+  try{VOICE.worklet&&VOICE.worklet.disconnect();}catch(e){}
+  try{VOICE.micStream&&VOICE.micStream.getTracks().forEach(t=>t.stop());}catch(e){}
+  try{VOICE.actx&&VOICE.actx.close();}catch(e){}
+  VOICE.worklet=VOICE.micStream=VOICE.actx=null;
+}
+
+/* camera / screen capture → /ws/cam (pipeline overlays) + 3fps → /ws/live (model sees you) */
+async function vStartVideo(which){
+  const stream=which==='screen'
+    ? await navigator.mediaDevices.getDisplayMedia({video:{frameRate:15}})
+    : await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
+  VOICE.vidStream=stream;
+  const v=document.createElement('video');v.srcObject=stream;v.muted=true;v.playsInline=true;await v.play();
+  const proto=location.protocol==='https:'?'wss:':'ws:';
+  const cam=new WebSocket(proto+'//'+location.host+'/ws/cam');cam.binaryType='arraybuffer';VOICE.cam=cam;
+  await new Promise(r=>{cam.onopen=r;cam.onerror=r;setTimeout(r,1500);});
+  const cv=document.createElement('canvas'),cx=cv.getContext('2d');let i=0;
+  VOICE.vidTimer=setInterval(()=>{
+    const vw=v.videoWidth||640,vh=v.videoHeight||360;if(!vw)return;
+    const sc=Math.min(1,640/Math.max(vw,vh));cv.width=Math.round(vw*sc);cv.height=Math.round(vh*sc);
+    cx.drawImage(v,0,0,cv.width,cv.height);
+    cv.toBlob(b=>{if(b&&cam.readyState===1)b.arrayBuffer().then(ab=>cam.send(ab));},'image/jpeg',0.72);
+    if(i%5===0&&VOICE.live&&VOICE.live.readyState===1){
+      const data=cv.toDataURL('image/jpeg',0.6).split(',')[1];
+      VOICE.live.send(JSON.stringify({type:'video',data}));}
+    i++;
+  },66);
+  stream.getVideoTracks()[0].onended=()=>{if(VOICE.on[which])vToggle(which);};
+}
+function vStopVideo(){
+  if(VOICE.vidTimer)clearInterval(VOICE.vidTimer);VOICE.vidTimer=null;
+  try{VOICE.cam&&VOICE.cam.close();}catch(e){}VOICE.cam=null;
+  try{VOICE.vidStream&&VOICE.vidStream.getTracks().forEach(t=>t.stop());}catch(e){}
+  VOICE.vidStream=null;
+}
+const VBTN={mic:'vmic',cam:'vcam',screen:'vscr'};
+async function vToggle(which){
+  try{
+    if(which==='mic'){
+      if(VOICE.on.mic){VOICE.on.mic=false;$('vmic').classList.remove('on');vStopMic();
+        if(!VOICE.on.cam&&!VOICE.on.screen){try{VOICE.live&&VOICE.live.close();}catch(e){}VOICE.live=null;vStatus('tap Mic to talk');}}
+      else{vStatus('connecting…');VOICE.on.mic=true;$('vmic').classList.add('on');await vStartMic();}
+      return;
+    }
+    const other=which==='cam'?'screen':'cam';
+    if(VOICE.on[which]){VOICE.on[which]=false;$(VBTN[which]).classList.remove('on');vStopVideo();
+      if(!VOICE.on.mic)vStatus('camera off');}
+    else{
+      if(VOICE.on[other]){VOICE.on[other]=false;$(VBTN[other]).classList.remove('on');vStopVideo();}
+      VOICE.on[which]=true;$(VBTN[which]).classList.add('on');
+      await vStartVideo(which);setCanvas('live');
+      vStatus(which==='screen'?'sharing screen — overlays live':'camera live — overlays on you',VOICE.on.mic?'live':'');
+    }
+  }catch(e){toast('voice: '+(e.message||e));vStatus('error');
+    VOICE.on[which]=false;if(VBTN[which])$(VBTN[which]).classList.remove('on');}
+}
+function vStop(){
+  ['mic','cam','screen'].forEach(k=>{VOICE.on[k]=false;$(VBTN[k]).classList.remove('on');});
+  vStopVideo();vStopMic();vStopPlayback();
+  try{VOICE.live&&VOICE.live.close();}catch(e){}VOICE.live=null;
+  try{VOICE.pctx&&VOICE.pctx.close();}catch(e){}VOICE.pctx=null;VOICE.playHead=0;VOICE.botMsg=null;
+  vStatus('tap Mic to talk');
+}
+
 /* ---------------- NLE editor (timeline + synced playback) ---------------- */
 const NLE={mode:'live',video:[],audio:[],ph:0,playing:false,pps:60,sel:null,_a:{},base:0,wall:0,_id:0,xfade:0};
-function nleSetMode(m){NLE.mode=m;
-  $('livewrap').style.display=m==='live'?'':'none';
+function nleSetMode(m){const prev=NLE.mode;NLE.mode=m;
+  $('livewrap').style.display=(m==='live'||m==='voice')?'':'none';
   $('editwrap').style.display=m==='edit'?'flex':'none';
+  $('drawbar').style.display=(m==='voice')?'none':'';
+  $('voicebar').style.display=(m==='voice')?'flex':'none';
   document.querySelectorAll('#modeswitch button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
+  if(prev==='voice'&&m!=='voice'){try{vStop();}catch(e){}}
+  if(m==='voice')setCanvas('live');          // canvas stays on the live stream (= annotated you when cam on)
   if(m!=='edit'){NLE.playing=false;Object.values(NLE._a).forEach(a=>a.pause());try{$('preview').pause();}catch(e){}}
   else{drawTimeline();updateInspector();}}
 const isVidName=n=>/\.(mp4|mov|webm)$/i.test(n), isAudName=n=>/\.(wav|mp3|m4a|aac|ogg)$/i.test(n);

@@ -111,6 +111,41 @@ class StudioPipeline:
                 r[k] = bool(v)
             return {k: r.get(k) for k in flags}
 
+    # ---- BIDI live: browser-pushed webcam/screen frames ----
+    def push_camera_frame(self, jpeg: bytes) -> bool:
+        """Feed one JPEG frame from the browser-capture websocket into the live
+        push source. The normal _loop then detects/tracks/overlays it and it
+        republishes to /stream.mjpg — so the agent's overlays land on *you*."""
+        import numpy as np
+        from ..sources import push_frame
+        arr = np.frombuffer(jpeg, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        push_frame(frame)
+        return True
+
+    def start_camera(self) -> str:
+        """Switch the live source to the browser push feed, remembering the prior
+        source so stop_camera() can restore it. Returns the prior source.uri."""
+        from ..sources import PUSH
+        prev = str(self.cfg.get("source.uri", ""))
+        with self._lock:
+            self._prev_source = getattr(self, "_prev_source", None) or prev
+        PUSH.clear()
+        if not prev.startswith("push:"):
+            self.reconfigure({"source.uri": "push://camera"})
+        return self._prev_source
+
+    def stop_camera(self):
+        """Restore the source that was active before BIDI camera capture started."""
+        prev = getattr(self, "_prev_source", None)
+        from ..sources import PUSH
+        PUSH.clear()
+        if prev and not str(prev).startswith("push:"):
+            self.reconfigure({"source.uri": prev})
+        self._prev_source = None
+
     def current_config(self) -> dict:
         g = self.cfg.get
         return {"source.uri": g("source.uri"), "detector.backend": g("detector.backend"),

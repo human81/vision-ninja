@@ -24,7 +24,7 @@ except Exception:
     pass
 
 import cv2
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Response,
                                StreamingResponse)
 
@@ -360,6 +360,52 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
                 yield json.dumps({"type": "done", "data": {}}) + "\n"
 
         return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+    # ---------- BIDI live: camera/screen frame ingest ----------
+    @app.websocket("/ws/cam")
+    async def ws_cam(ws: WebSocket):
+        """Browser pushes webcam/screen JPEG frames (binary) here; they become the
+        live source so the pipeline runs detection + the agent's overlays on them
+        and republishes to /stream.mjpg (overlays on *you*)."""
+        await ws.accept()
+        pipe.start_camera()
+        try:
+            while True:
+                data = await ws.receive_bytes()
+                if data:
+                    pipe.push_camera_frame(data)
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            pipe.stop_camera()
+
+    # ---------- BIDI live: Gemini Live voice + tool-calling ----------
+    @app.websocket("/ws/live")
+    async def ws_live(ws: WebSocket):
+        await ws.accept()
+        if not _HAS_KEY:
+            await ws.send_text(json.dumps({"type": "error",
+                "message": "live voice needs a Gemini API key (GEMINI_API_KEY)"}))
+            await ws.close()
+            return
+        from .live import LiveBridge
+        try:
+            await LiveBridge(settings).run(ws)
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            try:
+                await ws.send_text(json.dumps({"type": "error",
+                    "message": f"{type(e).__name__}: {e}"}))
+            except Exception:
+                pass
+        finally:
+            try:
+                await ws.close()
+            except Exception:
+                pass
 
     return app
 

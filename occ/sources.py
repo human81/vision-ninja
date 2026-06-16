@@ -317,12 +317,76 @@ class SubprocessStreamSource:
         self._thread.join(timeout=1.0)
 
 
+class _PushBuffer:
+    """Single newest-frame-wins slot for browser-pushed frames (the BIDI live
+    mode sends webcam/screen frames here over a websocket). Decoupled from the
+    pipeline so source rebuilds don't lose the feed."""
+
+    def __init__(self):
+        self._latest: np.ndarray | None = None
+        self._seq = 0
+        self._lock = threading.Lock()
+
+    def put(self, frame: np.ndarray):
+        with self._lock:
+            self._latest = frame
+            self._seq += 1
+
+    def get(self):
+        with self._lock:
+            return self._seq, self._latest
+
+    def clear(self):
+        with self._lock:
+            self._latest = None
+            self._seq += 1
+
+
+# one live push session at a time
+PUSH = _PushBuffer()
+
+
+def push_frame(frame: np.ndarray):
+    """Hand a BGR frame from the browser-capture websocket to the pipeline."""
+    PUSH.put(frame)
+
+
+class PushSource:
+    """Newest-frame-wins reader over frames pushed from the browser (webcam or
+    screen share) via the live websocket. The pipeline then detects/tracks/runs
+    the agent's overlays and republishes to /stream.mjpg — so overlays appear on
+    *you*. If no frame has arrived yet, it idles (pipeline shows its placeholder)
+    rather than blocking."""
+
+    def __init__(self, max_long_side: int = 0):
+        self.max_long_side = max_long_side
+        self.fps = 30.0
+        self.is_live = True
+        self._stop = threading.Event()
+
+    def frames(self) -> Iterator[np.ndarray]:
+        last_seq = -1
+        while not self._stop.is_set():
+            seq, frame = PUSH.get()
+            if frame is not None and seq != last_seq:
+                last_seq = seq
+                yield _maybe_downscale(frame, self.max_long_side)
+            else:
+                time.sleep(0.005)        # nothing new yet; yield CPU
+
+    def release(self):
+        self._stop.set()
+
+
 def open_source(cfg):
     """Pick the right source from the config URI."""
     s = cfg.section("source")
     uri = str(s.get("uri"))
     max_long = int(s.get("max_long_side", 0) or 0)
     low = uri.lower()
+    # Browser-pushed frames (BIDI live: webcam / screen share over the live WS).
+    if low.startswith("push:"):
+        return PushSource(max_long_side=max_long)
     # RTSP cameras & webcams deliver ONE real-time frame at a time, so
     # newest-frame-wins keeps latency low without dropping anything meaningful.
     rtsp_or_cam = low.startswith("rtsp") or uri.isdigit()
