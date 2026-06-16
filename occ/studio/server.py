@@ -54,7 +54,17 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     settings = StudioSettings.load()
     brain = VisionBrain()
     library = MediaLibrary()
-    sources = MediaLibrary(f"{STUDIO_DIR}/sources.json")     # live RTSP/YT-live
+    sources = MediaLibrary(f"{STUDIO_DIR}/sources.json")     # live RTSP/YT-live + examples
+    # Clean fake/unplayable test stubs, then seed REAL playable local examples.
+    for it in list(sources.items):
+        if any(h in str(it.get("path", "")) for h in
+               ("rtsp://demo/", "rtsp://x/", "demo:demo@ipvmdemo", "demo/cam", "://x/y")):
+            sources.remove(it["id"])
+    _have = {Path(i["path"]).name for i in sources.items}
+    for _v in sorted(Path("assets/videos").glob("*.mp4")):
+        if _v.name not in _have:
+            sources.add("file", str(_v), caption=_v.stem.replace("-", " "),
+                        tags=["example", "file"])
     pipe = StudioPipeline(cfg, overlays=overlays, ledger=ledger, brain=brain,
                           settings=settings)
     set_context(StudioContext(pipe=pipe, overlays=overlays, ledger=ledger,
@@ -190,6 +200,39 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     async def library_remove(req: Request):
         return {"ok": library.remove((await req.json()).get("id"))}
 
+    @app.post("/library/clean")
+    def library_clean():
+        return {"removed": library.prune()}
+
+    @app.get("/thumb")
+    def thumb(name: str):
+        name = Path(name).name
+        src = next((str(Path(b) / name) for b in
+                    ("out/studio/exports", "out/recordings", "out/studio/cache")
+                    if (Path(b) / name).exists()), None)
+        if not src:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        ext = Path(src).suffix.lower()
+        if ext in (".png", ".jpg", ".jpeg", ".gif"):
+            return FileResponse(src)
+        tdir = Path("out/studio/thumbs"); tdir.mkdir(parents=True, exist_ok=True)
+        out = tdir / (Path(name).stem + (".png" if ext in (".wav", ".mp3", ".m4a",
+                                                           ".aac", ".ogg") else ".jpg"))
+        if not out.exists():
+            import subprocess
+            if ext in (".mp4", ".mov", ".webm"):
+                args = ["ffmpeg", "-y", "-ss", "1", "-i", src, "-frames:v", "1",
+                        "-vf", "scale=260:-1", str(out)]
+            else:                                       # audio -> waveform image
+                args = ["ffmpeg", "-y", "-i", src, "-filter_complex",
+                        "showwavespic=s=260x70:colors=#36d7e0", str(out)]
+            try:
+                subprocess.run(args, capture_output=True, timeout=30)
+            except Exception:
+                pass
+        return FileResponse(str(out)) if out.exists() else \
+            JSONResponse({"error": "thumb failed"}, status_code=500)
+
     @app.get("/sources")
     def sources_list():
         return {"items": sources.list()}
@@ -225,6 +268,21 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         from .tools import narrate
         b = await req.json()
         return JSONResponse(narrate(b.get("text", ""), b.get("voice", "Puck")))
+
+    @app.post("/timeline/image")
+    async def timeline_image(req: Request):
+        from . import genmedia
+        prompt = (await req.json()).get("prompt", "")
+        if not genmedia.has_key():
+            return JSONResponse({"status": "error", "error": "needs a Gemini key"})
+        img, txt, _ = genmedia.image(prompt)
+        if not img:
+            return JSONResponse({"status": "error", "error": txt or "no image"})
+        os.makedirs("out/studio/exports", exist_ok=True)
+        outp = f"out/studio/exports/gen_{time.strftime('%H%M%S')}.png"
+        open(outp, "wb").write(img)
+        library.add("image", outp, caption=prompt[:50], tags=["generated", "keyframe"])
+        return JSONResponse({"status": "success", "output": outp})
 
     # ---------- recording + snapshot ----------
     @app.post("/record/start")

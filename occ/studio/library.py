@@ -33,6 +33,7 @@ class MediaLibrary:
         self._seq = 0
         self.items: list[dict] = []
         self._load()
+        self.prune()                       # drop dead media on startup
 
     def _load(self):
         if self.path.exists():
@@ -85,6 +86,18 @@ class MediaLibrary:
             self.items = [i for i in self.items if i["id"] != int(item_id)]
             self._save()
             return len(self.items) < n
+
+    def prune(self) -> int:
+        """Drop dead entries: media whose file is gone (URLs / live sources kept)."""
+        with self._lock:
+            keep = [it for it in self.items
+                    if str(it.get("path", "")).startswith(("rtsp", "http"))
+                    or os.path.exists(it.get("path", ""))]
+            removed = len(self.items) - len(keep)
+            if removed:
+                self.items = keep
+                self._save()
+            return removed
 
     def list(self, limit: int = 60) -> list[dict]:
         with self._lock:

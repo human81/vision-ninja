@@ -42,8 +42,25 @@ def _scaled(idx: int, c: dict) -> str:
             f"fps={FPS},format=yuv420p")
 
 
+def _input_for(c: dict) -> str | None:
+    """Resolve a clip to a video input path — a still IMAGE becomes a Ken-Burns clip;
+    gifs/videos pass through (ffmpeg reads them directly)."""
+    from .ffmpeg_ops import still_to_clip
+    src = _resolve(c.get("src", ""))
+    if not src:
+        return None
+    if Path(src).suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+        r = still_to_clip(src, float(c.get("duration", 3)) or 3.0)
+        return r.get("output") if r.get("status") == "success" else None
+    return src
+
+
 def render(timeline: dict) -> dict:
-    vclips = [c for c in (timeline.get("video") or []) if _resolve(c.get("src", ""))]
+    vclips = []
+    for c in (timeline.get("video") or []):
+        inp = _input_for(c)
+        if inp:
+            c = dict(c); c["_in"] = inp; vclips.append(c)
     aclips = [c for c in (timeline.get("audio") or []) if _resolve(c.get("src", ""))]
     xfade = float(timeline.get("transitions", 0) or 0)        # crossfade seconds
     if not vclips and not aclips:
@@ -58,7 +75,7 @@ def render(timeline: dict) -> dict:
                   key=lambda c: c.get("t0", 0))
     base_lbls = []
     for c in base:
-        args += ["-i", _resolve(c["src"])]
+        args += ["-i", c["_in"]]
         fc.append(_scaled(idx, c) + f"[v{idx}]")
         base_lbls.append((f"[v{idx}]", float(c.get("duration", 0)) or 4.0))
         idx += 1
@@ -84,7 +101,7 @@ def render(timeline: dict) -> dict:
     for c in [c for c in vclips if int(c.get("track", 0)) >= 1]:
         if cur is None:
             break
-        args += ["-i", _resolve(c["src"])]
+        args += ["-i", c["_in"]]
         t0, dur = float(c.get("t0", 0)), float(c.get("duration", 0)) or 4.0
         off = float(c.get("offset", 0))
         fc.append(f"[{idx}:v]trim=start={off}:duration={dur},"
