@@ -97,6 +97,25 @@ def set_detector(backend: str = "yolo", model: str = "", classes: str = "",
     return {"status": "success", "config": up, "ui": "config"}
 
 
+_TASK_MODELS = {"detect": "yolo11n.pt", "segment": "yolo11n-seg.pt",
+                "pose": "yolo11n-pose.pt", "obb": "yolo11n-obb.pt",
+                "classify": "yolo11n-cls.pt"}
+
+
+def set_task(task: str) -> dict:
+    """Switch the YOLO vision TASK on the live video:
+    detect (boxes) | segment (instance masks) | pose (human keypoints/skeleton) |
+    obb (oriented bounding boxes, aerial/DOTA classes) | classify (whole-image label).
+    'semantic' maps to segment. Loads the matching yolo11n model (downloads on 1st use)."""
+    task = task.lower().strip()
+    if task in ("semantic", "semantic_segmentation", "semantic segmentation"):
+        task = "segment"
+    if task not in _TASK_MODELS:
+        return {"status": "error", "error": f"task must be one of {list(_TASK_MODELS)}"}
+    ctx().pipe.reconfigure({"detector.backend": "yolo", "detector.model": _TASK_MODELS[task]})
+    return {"status": "success", "task": task, "model": _TASK_MODELS[task], "ui": "config"}
+
+
 def set_tracker(algorithm: str) -> dict:
     """Set the tracker: bytetrack|botsort|ocsort|sort."""
     ctx().pipe.reconfigure({"tracker.algorithm": algorithm})
@@ -1017,7 +1036,7 @@ def direct_story(brief: str, scenes: int = 3, mode: str = "fast",
 
 
 ALL_TOOLS = [
-    plan, drive_ui, set_source, set_detector, set_tracker, set_detect_every, set_render,
+    plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays,
     analyze_scene, analyze_image, describe_image, display_media, test_image,

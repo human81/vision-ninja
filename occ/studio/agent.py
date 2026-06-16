@@ -61,7 +61,7 @@ def _ui_action(res: dict) -> dict:
     return {"type": "ui_action", "data": data}
 
 
-_LIVE_TOOLS = {"set_source", "set_detector", "set_tracker", "set_detect_every", "set_render",
+_LIVE_TOOLS = {"set_source", "set_detector", "set_task", "set_tracker", "set_detect_every", "set_render",
                "draw_zone", "draw_line", "clear_annotations", "toggle_overlay",
                "create_overlay", "remove_overlay", "clear_overlays", "use_source",
                "load_youtube"}
@@ -305,6 +305,19 @@ class SimRunner:
                 if look:
                     kw["look"] = look
                 add("edit_video", kw, f"Applied {look or op} with ffmpeg.", f"{look or op} clip")
+
+        # YOLO task switch: segment / pose / obb / classify
+        mt = None
+        if any(w in m for w in ("segment", "segmentation", "instance mask", " masks")):
+            mt = "segment"
+        elif any(w in m for w in ("pose", "skeleton", "keypoint", "key point")):
+            mt = "pose"
+        elif any(w in m for w in ("oriented box", "obb", "rotated box")):
+            mt = "obb"
+        elif any(w in m for w in ("classify", "classification", "classify the")):
+            mt = "classify"
+        if mt:
+            add("set_task", {"task": mt}, f"Switched the YOLO task to {mt}.", f"task: {mt}")
 
         # test card / sample image
         if any(p in m for p in ("test image", "test card", "test pattern",

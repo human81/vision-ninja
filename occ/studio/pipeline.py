@@ -219,6 +219,8 @@ class StudioPipeline:
             geo_engine = GeometryEngine(self.annotations)
             seen_ann = self._ann_version
             last_tracked = sv.Detections.empty()
+            last_raw = sv.Detections.empty()
+            task = getattr(det, "task", "detect")          # detect|segment|pose|obb|classify
             t_prev, n, meter_base = None, 0, 0
             for frame in src.frames():
                 if self._stop.is_set() or self._dirty.is_set():
@@ -233,10 +235,15 @@ class StudioPipeline:
                     geo_engine = GeometryEngine(ann)
                     seen_ann = version
                 if n % every == 0:
-                    last_tracked = trk.update(det.detect(frame), frame)
-                tracked = last_tracked
+                    last_raw = det.detect(frame)
+                    if task != "classify":
+                        last_tracked = trk.update(last_raw, frame)
+                tracked = last_tracked if task != "classify" else sv.Detections.empty()
                 geo = geo_engine.update(tracked, frame.shape[1], frame.shape[0], n / fps)
                 vis = renderer.draw(frame, tracked)
+                if task != "detect":          # masks / keypoints / obb / classify label
+                    vis = renderer.draw_task(vis, last_raw, task,
+                                             getattr(det, "cls_label", None))
                 vis = renderer.draw_annotations(vis, ann, geo)
                 if self.overlays:                       # the agent's dynamic overlays
                     self.overlays.run(vis, tracked, geo, n)

@@ -13,6 +13,13 @@ import supervision as sv
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
+# COCO-17 pose skeleton (keypoint index pairs).
+_SKELETON = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12),
+             (11, 13), (13, 15), (12, 14), (14, 16), (0, 1), (0, 2), (1, 3),
+             (2, 4), (0, 5), (0, 6)]
+_PALETTE = [(54, 215, 224), (60, 255, 170), (60, 180, 255), (230, 90, 230),
+            (40, 150, 255), (90, 230, 90), (170, 120, 255), (60, 220, 250)]
+
 
 class Renderer:
     def __init__(self, cfg):
@@ -79,6 +86,48 @@ class Renderer:
         if self.cfg.get("draw_labels", True):
             out = a["label"].annotate(out, det, labels=self._labels(det, speeds))
         return out
+
+    def _palette(self, i):
+        return _PALETTE[int(i) % len(_PALETTE)]
+
+    def draw_task(self, frame, det, task, cls_label=None):
+        """Render the non-detect YOLO task outputs: segment masks, pose skeletons,
+        oriented (obb) boxes, or the classify label."""
+        h, w = frame.shape[:2]
+        s = self._scale(h)
+        t = max(1, round(2 * s))
+        if task == "segment" and det is not None and det.mask is not None and len(det):
+            ov = frame.copy()
+            for i in range(len(det)):
+                ov[det.mask[i]] = self._palette(i)
+            cv2.addWeighted(ov, 0.45, frame, 0.55, 0, frame)
+            for i in range(len(det)):
+                cnts, _ = cv2.findContours(det.mask[i].astype(np.uint8),
+                                           cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(frame, cnts, -1, self._palette(i), t, cv2.LINE_AA)
+        elif task == "pose" and det is not None and det.data and "kpts" in det.data:
+            for kp in det.data["kpts"]:
+                for a, b in _SKELETON:
+                    if kp[a][2] > 0.3 and kp[b][2] > 0.3:
+                        cv2.line(frame, (int(kp[a][0]), int(kp[a][1])),
+                                 (int(kp[b][0]), int(kp[b][1])), (90, 255, 90), t, cv2.LINE_AA)
+                for x, y, cf in kp:
+                    if cf > 0.3:
+                        cv2.circle(frame, (int(x), int(y)), max(2, round(3 * s)),
+                                   (60, 220, 250), -1, cv2.LINE_AA)
+        elif task == "obb" and det is not None and det.data and "xyxyxyxy" in det.data:
+            names = det.data.get("class_name")
+            for i, corners in enumerate(det.data["xyxyxyxy"]):
+                pts = np.asarray(corners, np.int32)
+                cv2.polylines(frame, [pts], True, self._palette(i), t, cv2.LINE_AA)
+                if names is not None:
+                    self._text(frame, str(names[i]), tuple(pts[0]), 0.5 * s,
+                               self._palette(i), max(1, round(1.3 * s)))
+        elif task == "classify" and cls_label:
+            self._text(frame, f"{cls_label[0]}  {cls_label[1]:.2f}",
+                       (int(12 * s), int(46 * s)), 0.9 * s, (60, 220, 250),
+                       max(2, round(2 * s)))
+        return frame
 
     # ---- zones / lines / counts ----
     def draw_annotations(self, frame, ann, geo=None):
