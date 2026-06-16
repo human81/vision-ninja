@@ -63,7 +63,7 @@ def _ui_action(res: dict) -> dict:
 
 _LIVE_TOOLS = {"set_source", "set_detector", "set_tracker", "set_detect_every",
                "draw_zone", "draw_line", "clear_annotations", "toggle_overlay",
-               "create_overlay", "remove_overlay"}
+               "create_overlay", "remove_overlay", "use_source", "load_youtube"}
 
 
 def _file_url(path: str) -> str:
