@@ -11,6 +11,7 @@ for 4K feeds.
 
 from __future__ import annotations
 
+import collections
 import os
 import threading
 import time
@@ -33,17 +34,26 @@ def _maybe_downscale(frame: np.ndarray, max_long_side: int) -> np.ndarray:
 
 
 class FileSource:
-    """Sequential video-file reader, optionally looping."""
+    """Sequential video reader, optionally looping. Reads EVERY frame in order —
+    used for local files, finite http VODs, AND live HLS (whose frames arrive in
+    per-segment bursts that newest-frame-wins would discard down to ~1 fps)."""
 
     def __init__(self, uri: str, loop: bool = True, max_long_side: int = 0):
         self.uri = uri
         self.loop = loop
         self.max_long_side = max_long_side
-        self.cap = cv2.VideoCapture(uri)
+        self.cap = self._open()
         if not self.cap.isOpened():
             raise RuntimeError(f"cannot open video: {uri}")
         self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
         self.is_live = False
+
+    def _open(self) -> cv2.VideoCapture:
+        # remote URLs (http HLS/VOD) need the FFMPEG backend; local paths/webcams
+        # use the platform default.
+        if str(self.uri).startswith(("http", "rtsp")):
+            return cv2.VideoCapture(str(self.uri), cv2.CAP_FFMPEG)
+        return cv2.VideoCapture(self.uri)
 
     def frames(self) -> Iterator[np.ndarray]:
         while True:
@@ -58,8 +68,9 @@ class FileSource:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ok, frame = self.cap.read()
             if not ok:
+                # non-seekable (http VOD) or a live-stream hiccup → reopen.
                 self.cap.release()
-                self.cap = cv2.VideoCapture(self.uri)
+                self.cap = self._open()
                 if not self.cap.isOpened():
                     break
                 ok, frame = self.cap.read()
@@ -167,25 +178,125 @@ class StreamSource:
         self.cap.release()
 
 
+class BufferedStreamSource:
+    """Jitter-buffered reader for HLS live (YouTube live, .m3u8).
+
+    Unlike RTSP (one real-time frame at a time), HLS delivers a whole *segment*
+    of frames in a sub-second burst, then the decoder BLOCKS for the segment
+    duration (~2-6s) waiting for the next segment to publish. A naive reader —
+    or newest-frame-wins — therefore freezes for seconds between bursts.
+
+    Here a grabber thread drains every frame into a bounded FIFO, and `frames()`
+    releases them PACED at the stream fps after a short prebuffer. The burst
+    fills the buffer; the pacing drains it across the gap → smooth playback at
+    the cost of a few seconds of latency. Old frames drop (bounded deque) if the
+    consumer can't keep up, so latency never grows without bound.
+    """
+
+    def __init__(self, uri: str, max_long_side: int = 0,
+                 buffer_seconds: float = 14.0, prebuffer_seconds: float = 3.0,
+                 reconnect: bool = True):
+        self.uri = uri
+        self.max_long_side = max_long_side
+        self.reconnect = reconnect
+        self.cap = self._open()
+        if not self.cap.isOpened():
+            raise RuntimeError(f"cannot open stream: {uri}")
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
+        if not (1.0 < self.fps < 121.0):
+            self.fps = 30.0
+        self.is_live = True
+        self._buf = collections.deque(maxlen=max(30, int(self.fps * buffer_seconds)))
+        self._prebuffer = max(1, int(self.fps * prebuffer_seconds))
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._grab_loop, daemon=True)
+        self._thread.start()
+
+    def _open(self) -> cv2.VideoCapture:
+        # FFMPEG backend handles the HLS playlist/segment fetching.
+        return cv2.VideoCapture(str(self.uri), cv2.CAP_FFMPEG)
+
+    def _grab_loop(self):
+        backoff = 0.5
+        while not self._stop.is_set():
+            ok, frame = self.cap.read()
+            if not ok:
+                if not self.reconnect:
+                    break
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 5.0)
+                try:
+                    self.cap.release()
+                    self.cap = self._open()
+                    backoff = 0.5
+                except Exception:
+                    continue
+                continue
+            backoff = 0.5
+            frame = _maybe_downscale(frame, self.max_long_side)
+            with self._lock:
+                self._buf.append(frame)
+
+    def frames(self) -> Iterator[np.ndarray]:
+        # build an initial cushion so the first segment-gap doesn't underrun.
+        t0 = time.time()
+        while not self._stop.is_set():
+            with self._lock:
+                have = len(self._buf)
+            if have >= self._prebuffer or time.time() - t0 > 12.0:
+                break
+            time.sleep(0.03)
+        dt = 1.0 / self.fps
+        next_t = time.perf_counter()
+        while not self._stop.is_set():
+            with self._lock:
+                frame = self._buf.popleft() if self._buf else None
+            if frame is None:                 # underrun — wait for the next burst
+                time.sleep(0.01)
+                next_t = time.perf_counter()
+                continue
+            yield frame
+            # pace to real time so the buffer drains across the segment gap
+            # instead of racing to the live edge and re-freezing.
+            next_t += dt
+            slack = next_t - time.perf_counter()
+            if slack > 0:
+                time.sleep(min(slack, 0.5))
+            else:
+                next_t = time.perf_counter()
+
+    def release(self):
+        self._stop.set()
+        self._thread.join(timeout=1.0)
+        self.cap.release()
+
+
 def open_source(cfg):
     """Pick the right source from the config URI."""
     s = cfg.section("source")
     uri = str(s.get("uri"))
     max_long = int(s.get("max_long_side", 0) or 0)
     low = uri.lower()
-    # Genuinely-live sources want newest-frame-wins + auto-reconnect: RTSP,
-    # webcams, and HLS (.m3u8) live manifests. A resolved YouTube *progressive*
-    # URL (googlevideo videoplayback, .mp4 link) is a FINITE VOD — playing it as
-    # a live stream makes the grabber skip frames and hard-reconnect on EOF,
-    # which shows up as a blinking, partial video. Play those as a looping file.
-    is_live = (low.startswith("rtsp") or uri.isdigit()
-               or ".m3u8" in low or bool(s.get("live", False)))
-    if is_live:
+    # RTSP cameras & webcams deliver ONE real-time frame at a time, so
+    # newest-frame-wins keeps latency low without dropping anything meaningful.
+    rtsp_or_cam = low.startswith("rtsp") or uri.isdigit()
+    if rtsp_or_cam or bool(s.get("rtsp", False)):
         return StreamSource(
             uri,
             rtsp_transport=s.get("rtsp_transport", "tcp"),
             reconnect=bool(s.get("reconnect", True)),
             max_long_side=max_long,
         )
-    # Local file OR a finite http VOD → sequential, looping playback.
+    # Live HLS (YouTube live, .m3u8) delivers frames in per-segment BURSTS with
+    # multi-second blocking gaps between segments. A plain reader freezes for
+    # seconds each gap; newest-frame-wins is even worse (keeps one frame/segment).
+    # Jitter-buffer it: prebuffer + paced release hides the segment cadence.
+    is_hls = (".m3u8" in low or "hls_playlist" in low
+              or "/manifest/" in low or "manifest.googlevideo" in low)
+    if is_hls:
+        return BufferedStreamSource(uri, max_long_side=max_long,
+                                    reconnect=bool(s.get("reconnect", True)))
+    # Local files / finite http VODs (resolved YouTube *progressive* URLs) read
+    # sequentially, looping. FileSource reopens the capture on read-failure.
     return FileSource(uri, loop=bool(s.get("loop", True)), max_long_side=max_long)
