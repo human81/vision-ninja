@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import collections
 import os
+import struct
+import subprocess
+import sys
 import threading
 import time
 from typing import Iterator
@@ -182,19 +185,22 @@ class StreamSource:
         self.cap.release()
 
 
-class BufferedStreamSource:
-    """Jitter-buffered reader for HLS live (YouTube live, .m3u8).
+class SubprocessStreamSource:
+    """Jitter-buffered, PROCESS-ISOLATED reader for HLS live (YouTube live, .m3u8).
 
-    Unlike RTSP (one real-time frame at a time), HLS delivers a whole *segment*
-    of frames in a sub-second burst, then the decoder BLOCKS for the segment
-    duration (~2-6s) waiting for the next segment to publish. A naive reader —
-    or newest-frame-wins — therefore freezes for seconds between bursts.
+    Two problems with reading live HLS via OpenCV:
+      1. HLS delivers a whole *segment* of frames in a sub-second burst, then the
+         decoder BLOCKS for the segment duration (~2-6s). Naive/newest-frame-wins
+         readers freeze for seconds between bursts.
+      2. The FFMPEG decoder can SEGFAULT natively (av_log on CDN host-rotation),
+         which would take down the whole studio — Python can't catch a SIGSEGV.
 
-    Here a grabber thread drains every frame into a bounded FIFO, and `frames()`
-    releases them PACED at the stream fps after a short prebuffer. The burst
-    fills the buffer; the pacing drains it across the gap → smooth playback at
-    the cost of a few seconds of latency. Old frames drop (bounded deque) if the
-    consumer can't keep up, so latency never grows without bound.
+    So the capture runs in a child process (`occ.capture_worker`) that streams
+    JPEG frames back over a pipe. A reader thread here decodes them into a bounded
+    FIFO; `frames()` releases them PACED at the stream fps after a short prebuffer
+    (the burst fills the buffer, pacing drains it across the gap → smooth). If the
+    worker dies (crash or EOF), the reader RESPAWNS it with backoff — the studio
+    never goes down. Old frames drop (bounded deque) so latency stays bounded.
     """
 
     def __init__(self, uri: str, max_long_side: int = 0,
@@ -203,64 +209,86 @@ class BufferedStreamSource:
         self.uri = uri
         self.max_long_side = max_long_side
         self.reconnect = reconnect
-        self.cap = self._open()
-        if not self.cap.isOpened():
-            raise RuntimeError(f"cannot open stream: {uri}")
-        self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
-        if not (1.0 < self.fps < 121.0):
-            self.fps = 30.0
+        self.fps = 30.0
         self.is_live = True
-        self._buf = collections.deque(maxlen=max(30, int(self.fps * buffer_seconds)))
-        self._prebuffer = max(1, int(self.fps * prebuffer_seconds))
+        self._buf = collections.deque(maxlen=max(30, int(30.0 * buffer_seconds)))
+        self._prebuffer_secs = prebuffer_seconds
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._grab_loop, daemon=True)
+        self._proc: subprocess.Popen | None = None
+        self._thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._thread.start()
 
-    def _open(self) -> cv2.VideoCapture:
-        # FFMPEG backend handles the HLS playlist/segment fetching. YouTube live
-        # rotates CDN hosts between segments; with persistent HTTP, FFMPEG logs
-        # "cannot reuse connection for different host" and has SEGFAULTED inside
-        # av_log on the reconnect (a native crash takes down the whole server).
-        # So: disable HTTP keep-alive (no cross-host reuse), let FFMPEG do its own
-        # reconnect instead of us tearing the capture down mid-read, and silence
-        # the logger (the fault was in av_log itself).
-        os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "8"          # AV_LOG_FATAL
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-            "http_persistent;0|reconnect;1|reconnect_streamed;1|reconnect_delay_max;5")
-        return cv2.VideoCapture(str(self.uri), cv2.CAP_FFMPEG)
+    def _spawn(self) -> subprocess.Popen:
+        return subprocess.Popen(
+            [sys.executable, "-m", "occ.capture_worker",
+             str(self.uri), str(self.max_long_side)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
 
-    def _grab_loop(self):
+    @staticmethod
+    def _readn(pipe, n: int) -> bytes:
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = pipe.read(n - len(buf))
+            if not chunk:
+                break
+            buf += chunk
+        return bytes(buf)
+
+    def _reader_loop(self):
         backoff = 0.5
         while not self._stop.is_set():
-            ok, frame = self.cap.read()
-            if not ok:
-                if not self.reconnect:
-                    break
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 5.0)
-                try:
-                    self.cap.release()
-                    self.cap = self._open()
-                    backoff = 0.5
-                except Exception:
-                    continue
+            try:
+                self._proc = self._spawn()
+            except Exception:
+                time.sleep(backoff); backoff = min(backoff * 2, 5.0); continue
+            try:
+                self._consume(self._proc.stdout)
+            except Exception:
+                pass
+            # worker exited — crash or EOF. Tear it down and (maybe) respawn.
+            try:
+                self._proc.kill()
+            except Exception:
+                pass
+            if self._stop.is_set() or not self.reconnect:
+                break
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 5.0)
+
+    def _consume(self, pipe):
+        hdr = self._readn(pipe, 4)
+        if len(hdr) == 4:
+            fps = struct.unpack("<f", hdr)[0]
+            if 1.0 < fps < 121.0:
+                self.fps = fps
+        while not self._stop.is_set():
+            lb = self._readn(pipe, 4)
+            if len(lb) < 4:
+                break                                   # EOF / worker died
+            (n,) = struct.unpack("<I", lb)
+            if n <= 0 or n > 64_000_000:
+                break
+            data = self._readn(pipe, n)
+            if len(data) < n:
+                break
+            frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+            if frame is None:
                 continue
-            backoff = 0.5
-            frame = _maybe_downscale(frame, self.max_long_side)
             with self._lock:
                 self._buf.append(frame)
 
     def frames(self) -> Iterator[np.ndarray]:
         # build an initial cushion so the first segment-gap doesn't underrun.
+        prebuffer = max(1, int(self.fps * self._prebuffer_secs))
         t0 = time.time()
         while not self._stop.is_set():
             with self._lock:
                 have = len(self._buf)
-            if have >= self._prebuffer or time.time() - t0 > 12.0:
+            if have >= prebuffer or time.time() - t0 > 15.0:
                 break
             time.sleep(0.03)
-        dt = 1.0 / self.fps
+        dt = 1.0 / (self.fps or 30.0)
         next_t = time.perf_counter()
         while not self._stop.is_set():
             with self._lock:
@@ -281,8 +309,12 @@ class BufferedStreamSource:
 
     def release(self):
         self._stop.set()
+        if self._proc is not None:
+            try:
+                self._proc.kill()
+            except Exception:
+                pass
         self._thread.join(timeout=1.0)
-        self.cap.release()
 
 
 def open_source(cfg):
@@ -302,14 +334,15 @@ def open_source(cfg):
             max_long_side=max_long,
         )
     # Live HLS (YouTube live, .m3u8) delivers frames in per-segment BURSTS with
-    # multi-second blocking gaps between segments. A plain reader freezes for
-    # seconds each gap; newest-frame-wins is even worse (keeps one frame/segment).
-    # Jitter-buffer it: prebuffer + paced release hides the segment cadence.
+    # multi-second blocking gaps, AND its FFMPEG decoder can segfault natively on
+    # CDN host-rotation. Run it in an ISOLATED subprocess (so a decoder crash only
+    # restarts the feed, not the studio) with a jitter buffer (prebuffer + paced
+    # release hides the segment cadence).
     is_hls = (".m3u8" in low or "hls_playlist" in low
               or "/manifest/" in low or "manifest.googlevideo" in low)
     if is_hls:
-        return BufferedStreamSource(uri, max_long_side=max_long,
-                                    reconnect=bool(s.get("reconnect", True)))
+        return SubprocessStreamSource(uri, max_long_side=max_long,
+                                      reconnect=bool(s.get("reconnect", True)))
     # Local files / finite http VODs (resolved YouTube *progressive* URLs) read
     # sequentially, looping. FileSource reopens the capture on read-failure.
     return FileSource(uri, loop=bool(s.get("loop", True)), max_long_side=max_long)
