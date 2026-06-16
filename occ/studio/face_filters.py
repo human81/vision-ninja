@@ -199,6 +199,81 @@ def _eyes_quad(face, wscale=2.25, hscale=1.0, down=0.08):
             c + half_w + half_h, c - half_w + half_h]
 
 
+def _eyewear_quad(face, rgba, wscale=2.15, down=0.26):
+    """Place a REAL product cutout on the eyes, preserving the cutout's own aspect
+    ratio so frames aren't distorted. Seats them on the eye line, following pose."""
+    h, w = rgba.shape[:2]
+    ex, ey = _frame_axes(face)
+    c = face.eyes_center + ey * (face.eye_dist * down)
+    W = face.eye_dist * wscale
+    H = W * (h / max(1, w))
+    hw = ex * (W / 2.0); hh = ey * (H / 2.0)
+    return [c - hw - hh, c + hw - hh, c + hw + hh, c - hw + hh]
+
+
+# ---- live eyewear try-on: warp the actual selected product onto the face ----
+import threading as _threading  # noqa: E402
+_EYEWEAR = {"rgba": None, "label": ""}
+_EYEWEAR_LOCK = _threading.Lock()
+
+
+def _knockout_bg(bgr, existing_alpha=None):
+    """Remove the studio background by flood-filling near-white from the borders —
+    so only the OUTER background is cut (interior white, e.g. white frames or lens
+    glare, is preserved). Combined with any real alpha already present."""
+    h, w = bgr.shape[:2]
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    white = ((hsv[:, :, 1] < 45) & (hsv[:, :, 2] > 185)).astype(np.uint8)
+    ff = white.copy()
+    mask = np.zeros((h + 2, w + 2), np.uint8)
+    for sx, sy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1),
+                   (w // 2, 0), (w // 2, h - 1)):
+        if ff[sy, sx]:
+            cv2.floodFill(ff, mask, (sx, sy), 2)
+    alpha = np.where(ff == 2, 0, 255).astype(np.uint8)
+    if existing_alpha is not None:
+        alpha = np.minimum(alpha, existing_alpha)
+    alpha = cv2.GaussianBlur(alpha, (0, 0), 1.2)        # feather for clean compositing
+    return alpha
+
+
+def load_eyewear_rgba(raw: bytes):
+    """Decode a product image to a tight RGBA cutout with a clean transparent
+    background (handles both real-alpha PNGs and opaque white-bg product shots)."""
+    img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    if img.ndim == 3 and img.shape[2] == 4:
+        bgr, a0 = img[:, :, :3], img[:, :, 3]
+        # if the alpha is effectively opaque, the "transparency" is fake → knock bg
+        alpha = a0 if int(a0.min()) < 200 else _knockout_bg(bgr, a0)
+    else:
+        bgr = img[:, :, :3] if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        alpha = _knockout_bg(bgr)
+    rgba = np.dstack([bgr, alpha])
+    ys, xs = np.where(alpha > 12)                       # tight-crop to the frame
+    if len(xs):
+        rgba = rgba[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return rgba
+
+
+def set_current_eyewear(rgba, label=""):
+    with _EYEWEAR_LOCK:
+        _EYEWEAR["rgba"] = rgba
+        _EYEWEAR["label"] = label
+
+
+def filter_eyewear(ctx):
+    """Real-time try-on of the SELECTED eyewear product (set_current_eyewear) —
+    warped onto each face's eyes with the dense landmarks, following head pose."""
+    with _EYEWEAR_LOCK:
+        rgba = _EYEWEAR["rgba"]
+    if rgba is None:
+        return
+    for f in ctx.faces:
+        ctx.warp(rgba, _eyewear_quad(f, rgba))
+
+
 # ================================ the filters =================================
 def filter_sunglasses(ctx):
     for f in ctx.faces:
@@ -371,6 +446,8 @@ def _src(fn):
 
 
 FACE_FILTERS = {
+    "eyewear": ("Live try-on of the selected eyewear product, warped to your eyes.",
+                filter_eyewear, _src(filter_eyewear)),
     "ninja_mask": ("🥷 Black ninja hood with eye slit + red headband (Vision Ninja).",
                    filter_ninja_mask, _src(filter_ninja_mask)),
     "sunglasses": ("Realistic sunglasses tracked to your eyes (follows head pose).",

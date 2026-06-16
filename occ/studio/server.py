@@ -133,6 +133,23 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         except Exception:
             return JSONResponse({"sponsor": {}, "garments": []})
 
+    @app.get("/eyewear")
+    def eyewear():
+        """Sponsored eyewear catalog (Ralba Optical) for live AR try-on."""
+        p = Path(__file__).with_name("eyewear.json")
+        try:
+            return JSONResponse(json.loads(p.read_text()))
+        except Exception:
+            return JSONResponse({"sponsor": {}, "eyewear": []})
+
+    @app.post("/eyewear/try")
+    async def eyewear_try(req: Request):
+        """Real-time AR try-on: warp a product frame onto the live face."""
+        from .tools import try_eyewear
+        b = await req.json()
+        return JSONResponse(try_eyewear(image=b.get("image") or b.get("url") or "",
+                                        label=b.get("label", "")))
+
     @app.post("/tryon")
     async def tryon_route(req: Request):
         """Garment virtual try-on on the live frame (you). garment = URL / data URI."""

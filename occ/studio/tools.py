@@ -302,6 +302,46 @@ def apply_face_filter(name: str) -> dict:
     return {"status": "success", "name": key, "filter": key, "ui": "overlays"}
 
 
+def _fetch_bytes(s: str) -> bytes | None:
+    """Raw bytes from a data: URI / local path / http(s) URL (keeps PNG alpha)."""
+    try:
+        if s.startswith("data:"):
+            b64 = s.split(",", 1)[1] if "," in s else s
+            return base64.b64decode(b64 + "=" * (-len(b64) % 4), validate=False)
+        if s.startswith("http"):
+            req = urllib.request.Request(s, headers={"User-Agent": "Mozilla/5.0"})
+            return urllib.request.urlopen(req, timeout=15).read()         # noqa: S310
+        if os.path.exists(s):
+            return open(s, "rb").read()
+    except Exception:
+        return None
+    return None
+
+
+def try_eyewear(image: str = "", label: str = "") -> dict:
+    """LIVE EYEWEAR TRY-ON (Ralba Optical): warp an actual glasses/sunglasses
+    PRODUCT image onto the person's eyes in the live video, tracked to dense
+    facial landmarks — real-time, follows head pose. `image` = product image URL /
+    path / data URI (a transparent PNG cutout fits best). For a photoreal still
+    instead, use virtual_try_on(garment=<image>, which='frame')."""
+    raw = _fetch_bytes(image)
+    if not raw:
+        return {"status": "error", "error": "could not load eyewear image", "ui": "overlays"}
+    from .face_filters import load_eyewear_rgba, set_current_eyewear
+    rgba = load_eyewear_rgba(raw)
+    if rgba is None:
+        return {"status": "error", "error": "could not decode eyewear image", "ui": "overlays"}
+    set_current_eyewear(rgba, label or "eyewear")
+    try:
+        ctx().overlays.clear()
+        ctx().overlays.add_builtin("eyewear")
+        ctx().pipe.set_render_flags(draw_boxes=False, draw_labels=False, draw_counts=False)
+    except Exception as e:
+        return {"status": "error", "error": f"{type(e).__name__}: {e}", "ui": "overlays"}
+    _meter("overlay", units={"overlay_frames": 1}, label="try_eyewear")
+    return {"status": "success", "name": "eyewear", "label": label, "ui": "overlays"}
+
+
 # ---------- perception / the agent's eyes ----------
 def analyze_scene() -> dict:
     """Look at the live frame RIGHT NOW: per-class counts, track count, zone/line
@@ -1126,7 +1166,7 @@ ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays,
-    apply_face_filter,
+    apply_face_filter, try_eyewear,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, extend_video, narrate, generate_music,

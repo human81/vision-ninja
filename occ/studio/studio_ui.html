@@ -100,6 +100,10 @@
   .gcard img{width:78px;height:96px;object-fit:cover;display:block;background:#0a1018}
   .gcard .gt{font-size:8.5px;color:var(--fg);padding:4px 5px 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .gcard .gp{font-size:8.5px;color:#e7b24a;padding:0 5px 4px}
+  .filterbar .storebtn.on{border-color:var(--accent);color:var(--accent);background:rgba(63,185,80,.12);font-weight:600}
+  #eyemode{display:inline-flex;gap:6px;align-items:center}
+  .filterbar .emode{padding:4px 9px;font-size:11px}
+  .filterbar .emode.on{border-color:var(--cyan);color:var(--cyan);background:rgba(54,215,224,.10)}
   #livebtn{position:absolute;right:8px;top:8px;cursor:pointer;z-index:6;
     background:#0e1521cc;border:1px solid var(--line);color:var(--mut)}
   #livebtn.on{border-color:var(--accent);color:var(--accent)}
@@ -308,22 +312,22 @@
         </div>
         <div class=tryonwrap id=tryonbar style=display:none>
           <div class=filterbar>
-            <span class=fbl>GARMENT VTO</span>
-            <input id=garmenturl placeholder="paste a garment image URL…">
+            <span class=fbl>TRY-ON</span>
+            <button id=store-apparel class="storebtn on" onclick="vStore('apparel')">👕 Apparel</button>
+            <button id=store-eyewear class=storebtn onclick="vStore('eyewear')">👓 Eyewear</button>
+            <span id=eyemode style=display:none>
+              <button id=eyemode-ar class="emode on" onclick="vEyeMode('ar')">✨ Live AR</button>
+              <button id=eyemode-photo class=emode onclick="vEyeMode('photo')">📸 Photoreal</button>
+            </span>
+            <input id=garmenturl placeholder="paste an image URL…">
             <button onclick="vUpload()">📎 Upload</button>
-            <button onclick="vTryOn()" class=accentbtn>👕 Try on me</button>
+            <button onclick="vTryOn()" class=accentbtn id=tryonbtn>👕 Try on me</button>
             <input type=file id=garmentfile accept="image/*" style=display:none>
             <span id=tryonstatus class=muted style=font-size:10px></span>
             <span style=flex:1></span>
             <a id=sponsor class=sponsor target=_blank></a>
           </div>
-          <div class=gcat id=gcat>
-            <button data-c=haiti onclick="gSetCat('haiti')">🇭🇹 Haiti WC</button>
-            <button data-c=top class=on onclick="gSetCat('top')">Tops</button>
-            <button data-c=bottom onclick="gSetCat('bottom')">Bottoms</button>
-            <button data-c=all onclick="gSetCat('all')">All</button>
-            <span class=muted style="font-size:9px;align-self:center;margin-left:4px">tap a garment to try it on you · camera on</span>
-          </div>
+          <div class=gcat id=gcat></div>
           <div class=garments id=garments></div>
         </div>
         <div class=ov-chips id=ovchips></div>
@@ -865,28 +869,57 @@ async function vFilter(name){
   pollOverlays();
 }
 
-/* ---- garment virtual try-on (Mode Marco catalog) ---- */
-let GARMENTS=null,GCAT='top';
-async function loadGarments(){
-  if(GARMENTS)return;
-  try{
-    const d=await(await fetch('/garments')).json();
-    GARMENTS=d.garments||[];
-    if(d.sponsor&&d.sponsor.url){const s=$('sponsor');s.href=d.sponsor.url;
-      s.innerHTML='✦ Sponsored by <b>'+(d.sponsor.name||'')+'</b>';}
-    renderGarments();
-  }catch(e){}
+/* ---- sponsored try-on stores: Apparel (Mode Marco) + Eyewear (Ralba Optical) ---- */
+const STORES={
+  apparel:{ep:'/garments',key:'garments',defcat:'top',
+    cats:[['top','Tops'],['bottom','Bottoms'],['all','All'],['haiti','🇭🇹 Haiti WC']]},
+  eyewear:{ep:'/eyewear',key:'eyewear',defcat:'ar',
+    cats:[['ar','✨ Live AR'],['men','Men'],['women','Women'],['all','All']]},
+};
+let STORE='apparel',CATALOG={},GCAT='top',EYEMODE='ar';
+async function loadGarments(){ if(!CATALOG.apparel)await loadStore('apparel'); }
+async function loadStore(name){
+  STORE=name;const s=STORES[name];
+  if(!CATALOG[name]){
+    try{const d=await(await fetch(s.ep)).json();
+      CATALOG[name]={items:d[s.key]||[],sponsor:d.sponsor||{}};}catch(e){CATALOG[name]={items:[],sponsor:{}};}
+  }
+  GCAT=s.defcat;
+  const sp=CATALOG[name].sponsor,el=$('sponsor');
+  if(sp&&sp.url){el.href=sp.url;el.innerHTML='✦ Sponsored by <b>'+(sp.name||'')+'</b>';}else el.innerHTML='';
+  renderCats();renderItems();
 }
-function gSetCat(c){GCAT=c;document.querySelectorAll('#gcat button').forEach(b=>b.classList.toggle('on',b.dataset.c===c));renderGarments();}
-function renderGarments(){
-  const wrap=$('garments');if(!wrap||!GARMENTS)return;
-  const items=GARMENTS.map((g,i)=>[g,i]).filter(([g])=>GCAT==='all'||g.cat===GCAT).slice(0,150);
+function renderCats(){
+  const s=STORES[STORE];
+  $('gcat').innerHTML=s.cats.map(([c,lab])=>`<button data-c="${c}" class="${c===GCAT?'on':''}" onclick="gSetCat('${c}')">${lab}</button>`).join('')
+    +`<span class=muted style="font-size:9px;align-self:center;margin-left:4px">tap to try it on you · camera on</span>`;
+}
+function gSetCat(c){GCAT=c;renderCats();renderItems();}
+function renderItems(){
+  const wrap=$('garments'),cat=CATALOG[STORE];if(!wrap||!cat)return;
+  const items=cat.items.map((g,i)=>[g,i]).filter(([g])=>GCAT==='all'||g.cat===GCAT||(GCAT==='ar'&&g.ar)).slice(0,150);
   wrap.innerHTML=items.map(([g,i])=>
-    `<div class=gcard onclick="vTryGarment(${i})" title="${(g.title||'').replace(/"/g,'&quot;')} · $${g.price}">
-       <img loading=lazy src="${g.img}${g.img.includes('?')?'&':'?'}width=170" onerror="this.style.opacity=.2">
-       <div class=gt>${(g.title||'').slice(0,18)}</div><div class=gp>$${g.price}</div></div>`).join('');
+    `<div class=gcard onclick="vTryItem(${i})" title="${(g.title||'').replace(/"/g,'&quot;')}${g.price?' · $'+g.price:''}">
+       <img loading=lazy src="${g.img}${g.img.includes('?')?'&':'?'}width=180" onerror="this.style.opacity=.2">
+       <div class=gt>${(g.title||'').slice(0,18)}</div><div class=gp>${g.price?'$'+g.price:'try on'}</div></div>`).join('');
 }
-function vTryGarment(i){const g=GARMENTS&&GARMENTS[i];if(!g)return;$('garmenturl').value=g.img;vTryOnWith(g.img,g.title);}
+function vStore(name){document.querySelectorAll('.storebtn').forEach(b=>b.classList.toggle('on',b.id==='store-'+name));
+  $('eyemode').style.display=name==='eyewear'?'inline-flex':'none';
+  $('tryonbtn').style.display=name==='eyewear'&&EYEMODE==='ar'?'none':'inline-block';
+  loadStore(name);}
+function vEyeMode(m){EYEMODE=m;$('eyemode-ar').classList.toggle('on',m==='ar');$('eyemode-photo').classList.toggle('on',m==='photo');
+  $('tryonbtn').style.display=(STORE==='eyewear'&&m==='ar')?'none':'inline-block';}
+async function vTryItem(i){
+  const g=CATALOG[STORE]&&CATALOG[STORE].items[i];if(!g)return;$('garmenturl').value=g.img;
+  if(STORE==='eyewear'&&EYEMODE==='ar'){
+    $('tryonstatus').textContent='fitting…';
+    try{const r=await fetch('/eyewear/try',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({image:g.img,label:g.title})}).then(r=>r.json());
+      if(r.status==='success'){toast('👓 '+(g.title||'eyewear'));setCanvas('live');$('tryonstatus').textContent='live ✓';switchTab('code');pollOverlays();}
+      else{toast('eyewear: '+(r.error||'failed'));$('tryonstatus').textContent='';}
+    }catch(e){toast('eyewear failed');$('tryonstatus').textContent='';}
+  }else{ vTryOnWith(g.img,g.title); }   // generative VTO (garments, or eyewear photoreal)
+}
 function vUpload(){$('garmentfile').click();}
 $('garmentfile').addEventListener('change',async(e)=>{
   const f=e.target.files[0];if(!f)return;
