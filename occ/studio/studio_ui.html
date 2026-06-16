@@ -131,9 +131,20 @@
   .renderbar button{background:#141c29;border:1px solid var(--line);color:var(--fg);
     border-radius:7px;padding:5px 10px;font-size:12px;cursor:pointer}
   .renderbar .renderbtn{background:linear-gradient(90deg,#7c5cff,#4d8cf5);border:0;color:#fff;font-weight:700}
-  .editmain{position:relative}
+  .editmain{display:flex;gap:8px}
+  .previewbox{position:relative;flex:1;min-width:0}
   #preview,#previewimg{width:100%;max-height:40vh;background:#000;border-radius:8px;display:block;object-fit:contain}
   #previewimg{position:absolute;inset:0;height:100%}
+  .inspector{width:212px;flex-shrink:0;background:#0e1521;border:1px solid var(--line);
+    border-radius:8px;padding:9px;font-size:12px;overflow-y:auto;max-height:40vh}
+  .inspector img{width:100%;height:68px;object-fit:cover;border-radius:6px;background:#0a1018;margin-bottom:4px}
+  .insp-lab{font-size:9px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;
+    margin:9px 0 3px;font-weight:700}
+  .inspector input,.inspector textarea{width:100%;background:#0a0f17;color:var(--fg);
+    border:1px solid var(--line);border-radius:6px;padding:5px 7px;font-size:12px;box-sizing:border-box}
+  .inspector textarea{height:56px;resize:vertical;font-family:inherit}
+  .inspector .ibtn{margin-top:6px;background:#141c29;border:1px solid var(--line);color:var(--cyan);
+    border-radius:6px;padding:5px 9px;font-size:11px;cursor:pointer;width:100%}
   .transport{display:flex;align-items:center;gap:9px;font-size:12px;flex-wrap:wrap}
   .transport button{background:#141c29;border:1px solid var(--line);color:var(--fg);
     border-radius:7px;padding:6px 11px;cursor:pointer}
@@ -240,8 +251,11 @@
           <button onclick=nleExport() class=renderbtn>✨ Render</button>
         </div>
         <div class=editmain>
-          <video id=preview playsinline></video>
-          <img id=previewimg style=display:none>
+          <div class=previewbox>
+            <video id=preview playsinline></video>
+            <img id=previewimg style=display:none>
+          </div>
+          <div id=inspector class=inspector><div class=muted style=font-size:11px>select a clip to inspect its duration, narration & prompt</div></div>
         </div>
         <div class=transport>
           <button onclick=nlePlay() id=playbtn>▶ Play</button>
@@ -587,7 +601,7 @@ function nleSetMode(m){NLE.mode=m;
   $('editwrap').style.display=m==='edit'?'flex':'none';
   document.querySelectorAll('#modeswitch button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
   if(m!=='edit'){NLE.playing=false;Object.values(NLE._a).forEach(a=>a.pause());try{$('preview').pause();}catch(e){}}
-  else drawTimeline();}
+  else{drawTimeline();updateInspector();}}
 const isVidName=n=>/\.(mp4|mov|webm)$/i.test(n), isAudName=n=>/\.(wav|mp3|m4a|aac|ogg)$/i.test(n);
 function mediaLen(name,kind){return new Promise(res=>{
   let el=document.createElement(kind==='audio'?'audio':'video');el.preload='metadata';el.src='/download/'+name;
@@ -617,7 +631,7 @@ function updateMeta(){let nv=NLE.video.length,na=NLE.audio.length;
 window.nleXfade=()=>{NLE.xfade=NLE.xfade?0:0.5;$('xfadebtn').textContent='⤫ '+(NLE.xfade?'0.5s':'off');
   $('xfadebtn').style.borderColor=NLE.xfade?'#36d7e0':'';updateMeta();};
 window.nleDelete=()=>{if(NLE.sel==null)return;NLE.video=NLE.video.filter(c=>c.id!==NLE.sel);
-  NLE.audio=NLE.audio.filter(c=>c.id!==NLE.sel);let a=NLE._a[NLE.sel];if(a)a.pause();NLE.sel=null;drawTimeline();};
+  NLE.audio=NLE.audio.filter(c=>c.id!==NLE.sel);let a=NLE._a[NLE.sel];if(a)a.pause();NLE.sel=null;drawTimeline();updateInspector();};
 window.nleSplit=()=>{if(NLE.sel==null)return;let c=NLE.video.concat(NLE.audio).find(x=>x.id===NLE.sel);
   if(!c||NLE.ph<=c.t0+0.1||NLE.ph>=c.t0+c.dur-0.1)return;let left=NLE.ph-c.t0;
   let arr=c.kind==='audio'?NLE.audio:NLE.video;
@@ -628,12 +642,32 @@ async function nleAddStill(name){let t0=NLE.video.reduce((m,c)=>Math.max(m,c.t0+
 window.nleGenImage=async()=>{let t=$('csprompt').value.trim();if(!t){toast('type an image prompt');return;}
   toast('generating image…');let r=await(await fetch('/timeline/image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:t})})).json();
   if(r.status==='success'){await nleAddStill(r.output.split('/').pop());pollLibrary('');}else toast('image failed: '+(r.error||'').slice(0,60));};
+/* scene inspector (imitates the Co-Director right panel) */
+function curClip(){return NLE.video.concat(NLE.audio).find(x=>x.id===NLE.sel);}
+function updateInspector(){let el=$('inspector');if(!el)return;let c=curClip();
+  if(!c){el.innerHTML='<div class=muted style=font-size:11px>select a clip to inspect its duration, narration & prompt</div>';return;}
+  let isAud=c.kind==='audio',esc=s=>(s||'').replace(/</g,'&lt;');
+  el.innerHTML=`<img src="/thumb?name=${encodeURIComponent(c.name)}" onerror="this.style.display='none'">
+    <div class=insp-lab title="${esc(c.name)}">${esc(c.name.slice(0,24))}</div>
+    <div class=insp-lab>Duration (s)</div>
+    <input type=number step=0.1 min=0.2 value="${(+c.dur).toFixed(2)}" oninput="inspDur(this.value)">
+    ${isAud?`<div class=insp-lab>Volume</div><input type=range min=0 max=2 step=0.1 value="${c.gain==null?1:c.gain}" oninput="inspGain(this.value)">`:''}
+    ${c.narration!==undefined?`<div class=insp-lab>Narration</div><textarea oninput="inspMeta('narration',this.value)">${esc(c.narration)}</textarea><button class=ibtn onclick=inspRenarrate()>🎙 re-narrate this scene</button>`:''}
+    ${c.prompt!==undefined?`<div class=insp-lab>Image / video prompt</div><textarea oninput="inspMeta('prompt',this.value)">${esc(c.prompt)}</textarea>`:''}`;}
+window.inspDur=v=>{let c=curClip();if(c){c.dur=Math.max(0.2,parseFloat(v)||c.dur);
+  if(!c.still&&!isNaN(c.len)&&c.dur>c.len)c.dur=c.len;drawTimeline();}};
+window.inspGain=v=>{let c=curClip();if(c)c.gain=parseFloat(v);};
+window.inspMeta=(k,v)=>{let c=curClip();if(c)c[k]=v;};
+window.inspRenarrate=async()=>{let c=curClip();if(!c||c.narration===undefined||!(c.narration||'').trim()){toast('no narration text');return;}
+  toast('re-narrating…');let r=await(await fetch('/timeline/narrate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:c.narration})})).json();
+  if(r.status==='success'){let name=r.output.split('/').pop(),len=await mediaLen(name,'audio');
+    NLE.audio.push({id:++NLE._id,name,kind:'audio',t0:c.t0,off:0,dur:len||3,len:len||3,track:0,gain:1});drawTimeline();pollLibrary('');toast('narration added to NARR');}else toast('TTS failed');};
 function drawPlayhead(){$('playhead').style.left=(54+NLE.ph*NLE.pps)+'px';}
 window.addEventListener('keydown',e=>{if(NLE.mode!=='edit')return;let tg=(e.target.tagName||'').toUpperCase();
   if(tg==='INPUT'||tg==='TEXTAREA'||tg==='SELECT')return;
   if(e.key==='Delete'||e.key==='Backspace'){nleDelete();e.preventDefault();}
   else if(e.key===' '){nlePlay();e.preventDefault();}else if(e.key==='s')nleSplit();});
-function clipDrag(e,c){e.preventDefault();e.stopPropagation();NLE.sel=c.id;
+function clipDrag(e,c){e.preventDefault();e.stopPropagation();NLE.sel=c.id;updateInspector();
   let edge=e.target.classList.contains('h')?(e.target.classList.contains('l')?'l':'r'):null;
   let sx=e.clientX,t0=c.t0,off=c.off,dur=c.dur;
   function mv(ev){let dt=(ev.clientX-sx)/NLE.pps;
@@ -652,7 +686,7 @@ window.nleSeek=e=>{if(e.target.closest('.tclip'))return;let r=$('timeline').getB
 window.nlePlay=()=>{NLE.playing=!NLE.playing;$('playbtn').textContent=NLE.playing?'⏸ Pause':'▶ Play';
   if(NLE.playing){if(NLE.ph>=tlEnd())NLE.ph=0;NLE.base=NLE.ph;NLE.wall=performance.now();}};
 window.nleClear=()=>{NLE.video=[];NLE.audio=[];NLE.sel=null;NLE.ph=0;NLE.playing=false;
-  Object.values(NLE._a).forEach(a=>a.pause());NLE._a={};$('playbtn').textContent='▶ Play';drawTimeline();};
+  Object.values(NLE._a).forEach(a=>a.pause());NLE._a={};$('playbtn').textContent='▶ Play';drawTimeline();updateInspector();};
 function syncMedia(seek){const pv=$('preview'),pi=$('previewimg');
   let v=NLE.video.find(c=>c.t0<=NLE.ph&&NLE.ph<c.t0+c.dur);
   let still=v&&(v.still||/\.(png|jpe?g|webp|gif)$/i.test(v.name));
@@ -688,7 +722,7 @@ window.nleNarrate=async()=>{let t=$('csprompt').value.trim();if(!t){toast('type 
 window.nleCoDirect=()=>{let b=$('csprompt').value.trim()||'a short highlight reel of the footage';send('co-direct: '+b);};
 function applyTimeline(d){ // agent-driven (Co-Director)
   if(d.op==='clear'||d.op==='set'){NLE.video=[];NLE.audio=[];NLE._id=0;}
-  (d.video||[]).forEach(c=>NLE.video.push({id:++NLE._id,name:c.src,kind:'video',t0:c.t0||0,off:c.offset||0,dur:c.duration||3,len:c.duration||3,track:c.track||0}));
+  (d.video||[]).forEach(c=>NLE.video.push({id:++NLE._id,name:c.src,kind:'video',t0:c.t0||0,off:c.offset||0,dur:c.duration||3,len:c.duration||3,track:c.track||0,prompt:c.prompt,narration:c.narration}));
   (d.audio||[]).forEach(c=>NLE.audio.push({id:++NLE._id,name:c.src,kind:'audio',t0:c.t0||0,off:c.offset||0,dur:c.duration||3,len:c.duration||3}));
   nleSetMode('edit');drawTimeline();}
 

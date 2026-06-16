@@ -958,7 +958,8 @@ def direct_story(brief: str, scenes: int = 3, mode: str = "fast",
                             input_tokens=300, output_tokens=1300, label="story scene")
         ctx().library.add("video", clip, caption=sc["prompt"][:60], tags=["story", "scene"])
         video.append({"src": os.path.basename(clip), "t0": round(t0, 2), "offset": 0,
-                      "duration": round(dur, 2)})
+                      "duration": round(dur, 2), "prompt": sc.get("prompt", ""),
+                      "narration": sc.get("narration", "")})
         if narrate_scenes and sc.get("narration"):
             nar = narrate(sc["narration"])
             if nar.get("status") == "success":
