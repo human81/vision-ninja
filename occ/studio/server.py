@@ -197,6 +197,22 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     async def sources_remove(req: Request):
         return {"ok": sources.remove((await req.json()).get("id"))}
 
+    # ---------- NLE timeline render + creative-studio narrate ----------
+    @app.post("/timeline/render")
+    async def timeline_render(req: Request):
+        from . import nle
+        res = nle.render(await req.json())
+        if res.get("status") == "success" and res.get("output"):
+            library.add("video", res["output"], caption="timeline edit",
+                        tags=["edit", "nle"])
+        return JSONResponse(res)
+
+    @app.post("/timeline/narrate")
+    async def timeline_narrate(req: Request):
+        from .tools import narrate
+        b = await req.json()
+        return JSONResponse(narrate(b.get("text", ""), b.get("voice", "Puck")))
+
     # ---------- recording + snapshot ----------
     @app.post("/record/start")
     def rec_start():

@@ -104,12 +104,20 @@ def frames_for(name: str, res) -> list[dict]:
     elif name == "analyze_scene":
         out.append({"type": "scene", "data": res})
     if res.get("kind") in ("gif", "clip", "sheet", "transcode", "speed",
-                           "concat", "snapshot", "image"):
+                           "concat", "snapshot", "image", "audio", "scene", "edit"):
         out.append({"type": "export", "data": res})
+    # production receipt: every scene of an assembled/generated edit, in the chat
+    tl = res.get("timeline")
+    if isinstance(tl, dict):
+        for c in (tl.get("video") or [])[:8]:
+            if c.get("src"):
+                out.append({"type": "export", "data": {"output": c["src"], "kind": "scene"}})
     if ok:
         cf = _canvas_frame(name, res)
         if cf:
             out.append(cf)
+    if isinstance(res.get("timeline"), dict):
+        out.append({"type": "timeline", "data": {"op": "set", **res["timeline"]}})
     if name in ("search_library", "list_library"):
         out.append({"type": "library", "data": {"items": res.get("items", []),
                                                 "query": res.get("query", "")}})
@@ -205,6 +213,23 @@ class SimRunner:
             m = m.replace(img.lower(), " ")
             add("analyze_image", {"image": img, "caption": "shared image"}, None,
                 "ingest + analyze the image")
+
+        # Co-Director generative storytelling (generate footage)
+        ms = re.search(r"(?:direct a story|generate (?:a )?(?:video|story|reel|footage)|"
+                       r"make (?:a )?(?:story|reel)|create (?:a )?reel|story about|video story)"
+                       r"\s*:?\s*(.*)", m)
+        if ms:
+            add("direct_story", {"brief": (ms.group(1).strip() or original), "mode": "fast"},
+                "Planned, generated and assembled the story into the Editor.",
+                "direct a generated story")
+        # Co-Director / auto-edit (stitch existing footage)
+        mc = re.search(r"co-?direct(?:or)?\s*:?\s*(.*)", original, re.I)
+        if not ms and (mc or any(p in m for p in ("make an edit", "build the edit",
+                "highlight reel", "auto edit", "auto-edit", "cut a reel", "assemble a"))):
+            brief = (mc.group(1).strip() if mc and mc.group(1).strip() else original)
+            add("co_direct", {"brief": brief or "a short reel"},
+                "Assembled an edit and loaded it into the Editor — refine and Export.",
+                "co-direct the edit")
 
         # YouTube ingest (URL anywhere in the message)
         myt = re.search(r"(https?://(?:www\.)?(?:youtube\.com|youtu\.be)/\S+)", original)

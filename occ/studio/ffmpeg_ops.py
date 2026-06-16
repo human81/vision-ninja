@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 EXPORT_DIR = Path("out/studio/exports")
+W, H, FPS = 1280, 720, 30          # canonical render size for generated/story clips
 
 
 def have_ffmpeg() -> bool:
@@ -38,11 +39,17 @@ def _run(args: list[str], timeout: int = 120) -> tuple[bool, str]:
 def probe(path: str) -> dict:
     if not Path(path).exists():
         return {"status": "error", "error": f"not found: {path}"}
-    ok, out = _run(["ffprobe", "-v", "quiet", "-print_format", "json",
-                    "-show_format", "-show_streams", path], timeout=30)
-    if not ok:
-        return {"status": "error", "error": out}
-    d = json.loads(out)
+    # NB: use the FULL, untruncated stdout — not _run() (which trims to 800 chars
+    # and prefers stderr, both of which corrupt ffprobe's JSON).
+    try:
+        p = subprocess.run(["ffprobe", "-v", "quiet", "-print_format", "json",
+                            "-show_format", "-show_streams", path],
+                           capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    if p.returncode != 0 or not p.stdout.strip():
+        return {"status": "error", "error": (p.stderr or "ffprobe failed")[-300:]}
+    d = json.loads(p.stdout)
     v = next((s for s in d.get("streams", []) if s.get("codec_type") == "video"), {})
     fps = 0.0
     if v.get("r_frame_rate", "0/1") != "0/0":
@@ -226,6 +233,22 @@ def frame_at(src: str, t: float = 0.0) -> dict:
     if not ok:
         return {"status": "error", "error": err}
     return {"status": "success", "output": str(out), "kind": "image"}
+
+
+def still_to_clip(png: str, seconds: float = 3.0, zoom: float = 1.15) -> dict:
+    """Ken-Burns: animate a still image into a moving video clip (for story scenes)."""
+    if not Path(png).exists():
+        return {"status": "error", "error": f"not found: {png}"}
+    out = _out("scene", "mp4")
+    frames = int(seconds * FPS)
+    vf = (f"scale={W}:-2,zoompan=z='min(zoom+0.0012,{zoom})':d={frames}:"
+          f"s={W}x{H}:fps={FPS},format=yuv420p")
+    ok, err = _run(["ffmpeg", "-y", "-loop", "1", "-i", png, "-t", str(seconds),
+                    "-vf", vf, "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
+                    str(out)])
+    if not ok:
+        return {"status": "error", "error": err}
+    return {"status": "success", "output": str(out), "seconds": seconds, "kind": "scene"}
 
 
 def concat(paths: list[str]) -> dict:

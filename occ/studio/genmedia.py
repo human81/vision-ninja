@@ -71,6 +71,64 @@ def edit_image(jpgs: list[bytes], prompt: str, model: str = IMAGE_MODEL):
     return out, text.strip(), r
 
 
+def image(prompt: str, model: str = IMAGE_MODEL):
+    """Text -> image (no input) via the image model. Returns (png_bytes|None, text, r)."""
+    return edit_image([], prompt, model=model)
+
+
+def plan_story(brief: str, n: int = 3, model: str = VISION_MODEL):
+    """Co-Director scene planning: return ([{prompt, narration}], response). Gemini
+    writes a short cinematic storyline as strict JSON."""
+    import json
+    from google.genai import types
+    instr = (f"You are a creative director (in the spirit of Google's Co-Director). "
+             f"For this brief: '{brief}', write EXACTLY {n} short video scenes for a "
+             f"cinematic reel. Return ONLY a JSON array of objects with keys 'prompt' "
+             f"(a vivid image/video-generation prompt) and 'narration' (one short spoken "
+             f"sentence). No prose, no markdown.")
+    try:
+        r = _client().models.generate_content(
+            model=model, contents=instr,
+            config=types.GenerateContentConfig(response_mime_type="application/json"))
+        data = json.loads(r.text)
+        scenes = [{"prompt": str(s.get("prompt", "")),
+                   "narration": str(s.get("narration", ""))}
+                  for s in data if isinstance(s, dict)][:n]
+        return scenes, r
+    except Exception:
+        return [], None
+
+
+def tts(text: str, voice: str = "Puck", model: str = "gemini-2.5-flash-preview-tts"):
+    """Text-to-speech. Returns (wav_bytes | None, error). Gemini TTS emits raw
+    16-bit PCM @ 24kHz mono — we wrap it in a WAV container."""
+    import io
+    import wave
+    from google.genai import types
+    try:
+        r = _client().models.generate_content(
+            model=model, contents=text,
+            config=types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)))))
+        pcm = None
+        for cand in (r.candidates or []):
+            for p in (getattr(cand.content, "parts", None) or []):
+                inline = getattr(p, "inline_data", None)
+                if inline and getattr(inline, "data", None):
+                    pcm = inline.data
+        if not pcm:
+            return None, "no audio returned"
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000)
+            w.writeframes(pcm)
+        return buf.getvalue(), ""
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
 def generate_video(prompt: str, image_jpg: bytes | None = None,
                    model: str = VEO_MODEL, poll_s: int = 8, max_wait: int = 240):
     """Veo: text(+image)->video. Blocks (Veo takes minutes). Returns

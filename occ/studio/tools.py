@@ -467,6 +467,36 @@ def extend_video(prompt: str = "continue the scene naturally", which: str = "rec
     return _lib(res, tags=["veo", "extension"], source=which)
 
 
+# ---------- audio (TTS narration; Lyria music gated) ----------
+def narrate(text: str, voice: str = "Puck") -> dict:
+    """Generate spoken NARRATION (Gemini TTS) as a WAV and add it to the library —
+    use it as an audio clip in the NLE timeline. voice: Puck|Charon|Kore|Fenrir|…"""
+    if not _has_key():
+        return {"status": "error", "error": "TTS needs a Gemini key"}
+    from . import genmedia
+    wav, err = genmedia.tts(text, voice)
+    if not wav:
+        return {"status": "error", "error": err}
+    os.makedirs("out/studio/exports", exist_ok=True)
+    out = f"out/studio/exports/narration_{time.strftime('%H%M%S')}.wav"
+    open(out, "wb").write(wav)
+    ctx().ledger.record("agent_brain", model="gemini-2.5-flash-preview-tts",
+                        input_tokens=len(text) // 4 + 20, output_tokens=200, label="tts")
+    if ctx().library:
+        ctx().library.add("audio", out, caption=f"narration: {text[:50]}",
+                          tags=["narration", "audio"])
+    return {"status": "success", "kind": "audio", "output": out,
+            "caption": text[:60], "ui": "library"}
+
+
+def generate_music(prompt: str) -> dict:
+    """Generate background music (Lyria). NOTE: Lyria is Vertex-only and not reachable
+    on a Gemini Developer API key, so it is unavailable here — use narrate() for voice
+    or import an audio file into the timeline."""
+    return {"status": "error",
+            "error": "Lyria music is Vertex-only and not available on this Gemini key."}
+
+
 # ---------- media library + search ----------
 def search_library(query: str = "") -> dict:
     """Search the media library in natural language (over captions/tags/source).
@@ -722,14 +752,118 @@ def use_source(item_id: int = 0, query: str = "") -> dict:
     return {"status": "success", "source": url, "name": item["caption"], "ui": "config"}
 
 
+def _media_path(name: str) -> str:
+    for d in ("out/studio/exports", "out/recordings", "out/studio/cache"):
+        p = os.path.join(d, name)
+        if os.path.exists(p):
+            return p
+    return ""
+
+
+def co_direct(brief: str, max_scenes: int = 4, narration: str = "") -> dict:
+    """CO-DIRECTOR (Izumi): assemble a rough edit for `brief`. Gathers the best video
+    clips from the media library (recordings, exports, Veo, nano/edit clips), orders
+    them into scenes, optionally lays a TTS narration track, and LOADS it into the NLE
+    Editor for you to refine + Export. The OpenCV-annotated clips are the material —
+    record/snapshot/export first, or it falls back to cutting the current source."""
+    lib = ctx().library
+    seen, chosen = set(), []
+    for it in lib.list(200):
+        if it["name"].lower().endswith((".mp4", ".mov", ".webm")) and it["name"] not in seen:
+            seen.add(it["name"]); chosen.append(it["name"])
+            if len(chosen) >= max_scenes:
+                break
+    if not chosen:                                   # fall back: cut the live source
+        src = _resolve_target("source")
+        if src:
+            for s in (0, 3):
+                c = ff.clip(src, s, 3)
+                if c.get("status") == "success":
+                    chosen.append(os.path.basename(c["output"]))
+    if not chosen:
+        return {"status": "error", "error": "no clips to assemble — record or export first"}
+    video, t0 = [], 0.0
+    for name in chosen:
+        path = _media_path(name)
+        dur = min(6.0, (ff.probe(path).get("duration", 4) or 4)) if path else 4.0
+        video.append({"src": name, "t0": round(t0, 2), "offset": 0, "duration": round(dur, 2)})
+        t0 += dur
+    audio = []
+    if narration and _has_key():
+        nar = narrate(narration)
+        if nar.get("status") == "success":
+            audio.append({"src": os.path.basename(nar["output"]), "t0": 0, "offset": 0,
+                          "duration": round(t0, 2), "gain": 1.0})
+    if ctx().brain:
+        ctx().brain.remember("last_edit_brief", brief[:120])
+    return {"status": "success", "timeline": {"video": video, "audio": audio},
+            "scenes": len(video), "brief": brief, "ui": "edit"}
+
+
+def direct_story(brief: str, scenes: int = 3, mode: str = "fast",
+                 narrate_scenes: bool = True) -> dict:
+    """CO-DIRECTOR generative storytelling (Co-Director / Izumi style): PLAN scenes for
+    `brief` with Gemini, GENERATE each scene, add TTS narration, and load the result
+    into the NLE Editor. mode='fast' = nano-banana keyframe + Ken-Burns motion (cheap,
+    seconds); mode='veo' = Veo text->video (slow, minutes, costs real money). Use when
+    the user wants to GENERATE footage for a story/reel (not stitch existing clips)."""
+    if not _has_key():
+        return {"status": "error", "error": "generative storytelling needs a Gemini key"}
+    from . import genmedia
+    plan, _ = genmedia.plan_story(brief, scenes, model=ctx().settings.model_for("vision"))
+    if not plan:
+        return {"status": "error", "error": "could not plan scenes"}
+    video, audio, t0, made = [], [], 0.0, 0
+    for i, sc in enumerate(plan):
+        clip, dur = None, 3.5
+        if mode == "veo":
+            data, _err = genmedia.generate_video(sc["prompt"],
+                                                 model=ctx().settings.model_for("video"))
+            if data:
+                out = f"out/studio/exports/story_{int(time.time())}_{i}.mp4"
+                open(out, "wb").write(data)
+                clip = out; dur = min(8.0, ff.probe(out).get("duration", 6) or 6)
+        else:
+            img, _txt, _r = genmedia.image(sc["prompt"],
+                                           model=ctx().settings.model_for("image_edit"))
+            if img:
+                png = f"out/studio/exports/key_{int(time.time())}_{i}.png"
+                open(png, "wb").write(img)
+                ctx().library.add("image", png, caption=sc["prompt"][:60],
+                                  tags=["story", "keyframe"])
+                cl = ff.still_to_clip(png, 3.5)
+                if cl.get("status") == "success":
+                    clip = cl["output"]
+        if not clip:
+            continue
+        ctx().ledger.record("agent_brain",
+                            model=ctx().settings.model_for("image_edit" if mode == "fast" else "video"),
+                            input_tokens=300, output_tokens=1300, label="story scene")
+        ctx().library.add("video", clip, caption=sc["prompt"][:60], tags=["story", "scene"])
+        video.append({"src": os.path.basename(clip), "t0": round(t0, 2), "offset": 0,
+                      "duration": round(dur, 2)})
+        if narrate_scenes and sc.get("narration"):
+            nar = narrate(sc["narration"])
+            if nar.get("status") == "success":
+                audio.append({"src": os.path.basename(nar["output"]), "t0": round(t0, 2),
+                              "offset": 0, "duration": round(dur, 2), "gain": 1.0})
+        t0 += dur; made += 1
+    if not made:
+        return {"status": "error", "error": "scene generation failed"}
+    if ctx().brain:
+        ctx().brain.remember("last_story", brief[:120])
+    return {"status": "success", "timeline": {"video": video, "audio": audio},
+            "scenes": made, "brief": brief, "mode": mode, "ui": "edit"}
+
+
 ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_tracker, set_detect_every,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
-    nano_banana, virtual_try_on, generate_video, extend_video,
+    nano_banana, virtual_try_on, generate_video, extend_video, narrate, generate_music,
     search_library, list_library, show_media, save_to_library,
-    load_youtube, save_source, list_sources, use_source,
+    load_youtube, save_source, list_sources, use_source, co_direct, direct_story,
     export_gif, export_clip, export_contact_sheet, speed_ramp, probe_media,
     edit_video, record_start, record_stop, snapshot,
     remember, recall, set_simulation,
