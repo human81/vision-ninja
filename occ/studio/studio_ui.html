@@ -95,6 +95,14 @@
   .big{font-size:30px;font-weight:800}.muted{color:var(--mut)}
   .kv{font-size:12px;color:var(--mut);margin:4px 0}.kv b{color:var(--fg)}
   #graph{width:100%;height:260px;display:block}
+  .codecard{background:#0b1019;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;overflow:hidden}
+  .codecard.live{border-color:var(--cyan)}.codecard.err{border-color:var(--danger)}
+  .codecard .ch{display:flex;justify-content:space-between;gap:6px;padding:6px 9px;
+    background:#11192688;font-size:11px;align-items:center}
+  .codecard .ch b{color:var(--cyan)}.codecard .ch .st{color:var(--mut);font-size:10px;white-space:nowrap}
+  .codecard pre{margin:0;padding:8px 10px;font-family:ui-monospace,Menlo,monospace;
+    font-size:11px;line-height:1.45;color:#cdd9e6;white-space:pre;overflow-x:auto;max-height:230px}
+  .codecard .er{color:var(--danger);font-size:10px;padding:3px 10px 6px}
   .note{font-size:12px;background:#0e1521;border:1px solid var(--line);border-radius:7px;
     padding:6px 8px;margin-top:6px}
   .tabs{flex-wrap:wrap}
@@ -292,6 +300,7 @@
         <button data-tab=library>Library</button>
         <button data-tab=sources>Sources</button>
         <button data-tab=models>Models</button>
+        <button data-tab=code>Code</button>
       </div>
       <div class="pane active" id=pane-meter>
         <div class=big><span id=mpts>0</span> <span class=muted style=font-size:13px>points today</span></div>
@@ -344,6 +353,10 @@
         <div id=models></div>
         <button class=savebtn onclick=saveModels()>Save model configuration</button>
       </div>
+      <div class=pane id=pane-code>
+        <div class=muted style="font-size:11px;margin-bottom:8px">The OpenCV code the ninja authored for each live overlay — updates as it draws.</div>
+        <div id=codepane></div>
+      </div>
     </div>
   </div>
 </div>
@@ -377,6 +390,7 @@ function handleFrame(f){
     let a=document.createElement('div');a.className='act'+(d.ok?'':' err');
     a.innerHTML='▸ <b>'+d.name+'</b> '+(d.ok?'':('· '+(d.detail||'failed')));
     ensureActs().appendChild(a);
+    if(d.name==='create_overlay'&&d.ok){switchTab('code');pollOverlays();}  // show the code as it's authored
     // tick the matching plan step
     if(cur._steps){for(const li of cur._steps.children){if(!li.classList.contains('done')){
       li.classList.add('done');break;}}}
@@ -470,7 +484,8 @@ function switchTab(name){if(!name)return;
   if(name==='graph')drawGraph();
   if(name==='library')pollLibrary($('libq').value);
   if(name==='sources')pollSources();
-  if(name==='models')pollModels();}
+  if(name==='models')pollModels();
+  if(name==='code')pollOverlays();}
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
 
 /* ---------------- polling ---------------- */
@@ -500,7 +515,12 @@ async function pollOverlays(){try{let o=await(await fetch('/overlays')).json();
   let presets=o.presets.filter(p=>!o.overlays.find(v=>v.name===p))
     .map(p=>`<span class=chip onclick="toggleOv('${p}',true)">+ ${p}</span>`).join('');
   let clearall=o.overlays.length?`<span class=chip style="border-color:var(--danger);color:var(--danger)" onclick="clearAllOv()">✕ clear all</span>`:'';
-  $('ovchips').innerHTML=clearall+active+presets||'<span class=muted>no overlays yet — ask the ninja</span>';}catch(e){}}
+  $('ovchips').innerHTML=clearall+active+presets||'<span class=muted>no overlays yet — ask the ninja</span>';
+  renderCode(o.overlays);}catch(e){}}
+function renderCode(overlays){let a=overlays||[];
+  $('codepane').innerHTML=a.length?a.map(o=>
+    `<div class="codecard ${o.error?'err':o.enabled?'live':''}"><div class=ch><span>${o.builtin?'⚙ ':'🥷 '}<b>${o.name}</b> · ${(o.intent||'').replace(/</g,'&lt;')}</span><span class=st>${o.enabled?'● live':'○ off'}</span></div><pre>${(o.code||'(no code)').replace(/</g,'&lt;')}</pre>${o.error?`<div class=er>${o.error.replace(/</g,'&lt;')}</div>`:''}</div>`
+  ).join(''):'<div class=muted style=font-size:11px>No overlays yet — ask the ninja for a visual and its OpenCV code appears here as it draws.</div>';}
 window.clearAllOv=async()=>{await fetch('/overlays/clear',{method:'POST'});pollOverlays();toast('overlays cleared');};
 window.toggleOv=async(n,on)=>{await fetch('/overlays/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,on})});pollOverlays();};
 window.rmOv=async(n)=>{await fetch('/overlays/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});pollOverlays();};

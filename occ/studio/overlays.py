@@ -230,7 +230,8 @@ class OverlayEngine:
     def list(self) -> list[dict]:
         with self._lock:
             return [{"name": o.name, "intent": o.intent, "enabled": o.enabled,
-                     "builtin": o.builtin, "error": o.error} for o in self.overlays.values()]
+                     "builtin": o.builtin, "error": o.error, "code": o.code}
+                    for o in self.overlays.values()]
 
     def active_count(self) -> int:
         with self._lock:
