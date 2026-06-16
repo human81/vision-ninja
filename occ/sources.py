@@ -17,6 +17,10 @@ import threading
 import time
 from typing import Iterator
 
+# Quiet FFMPEG's logger before cv2 loads it — a verbose av_log path has
+# segfaulted while reading YouTube live HLS on CDN host-rotation. (AV_LOG_FATAL)
+os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "8")
+
 import cv2
 import numpy as np
 
@@ -214,7 +218,16 @@ class BufferedStreamSource:
         self._thread.start()
 
     def _open(self) -> cv2.VideoCapture:
-        # FFMPEG backend handles the HLS playlist/segment fetching.
+        # FFMPEG backend handles the HLS playlist/segment fetching. YouTube live
+        # rotates CDN hosts between segments; with persistent HTTP, FFMPEG logs
+        # "cannot reuse connection for different host" and has SEGFAULTED inside
+        # av_log on the reconnect (a native crash takes down the whole server).
+        # So: disable HTTP keep-alive (no cross-host reuse), let FFMPEG do its own
+        # reconnect instead of us tearing the capture down mid-read, and silence
+        # the logger (the fault was in av_log itself).
+        os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "8"          # AV_LOG_FATAL
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+            "http_persistent;0|reconnect;1|reconnect_streamed;1|reconnect_delay_max;5")
         return cv2.VideoCapture(str(self.uri), cv2.CAP_FFMPEG)
 
     def _grab_loop(self):
