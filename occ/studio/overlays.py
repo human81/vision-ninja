@@ -35,7 +35,7 @@ _PALETTE = [COLORS[k] for k in ("cyan", "lime", "amber", "magenta", "orange",
 class OverlayCtx:
     """Per-frame drawing context handed to each overlay's draw(ctx)."""
 
-    def __init__(self, frame, det, geo, t, state, params, raw=None):
+    def __init__(self, frame, det, geo, t, state, params, raw=None, faces_fn=None):
         self.frame = frame
         self.det = det
         self.geo = geo
@@ -47,6 +47,7 @@ class OverlayCtx:
         self.cv2 = cv2
         self.np = np
         self.COLORS = COLORS
+        self._faces_fn = faces_fn       # memoized facemesh provider (one detect/frame)
 
     # ---- vectorized accessors over the tracked detections ----
     @property
@@ -157,6 +158,101 @@ class OverlayCtx:
         blended = (self.frame * (1 - alpha) + hm * alpha).astype(np.uint8)
         np.copyto(self.frame, np.where(m, blended, self.frame))
 
+    # ---- AR / face try-on: dense landmarks + realistic asset compositing ----
+    @property
+    def faces(self):
+        """List of detected faces (478 px landmarks + blendshapes + head pose).
+        Lazily detected ONCE per frame (shared across overlays). Empty if no face
+        or mediapipe unavailable. See occ.studio.facemesh.Face for the anchor API."""
+        return self._faces_fn() if self._faces_fn else []
+
+    def asset(self, name: str):
+        """Fetch a cached RGBA (HxWx4) try-on asset (procedural or bundled PNG)."""
+        from .face_filters import get_asset
+        return get_asset(name)
+
+    def warp(self, rgba, dst_quad):
+        """Perspective-warp an RGBA asset so its [TL,TR,BR,BL] corners land on the
+        4 frame points `dst_quad`, then alpha-composite. This is what makes try-on
+        realistic: the quad comes from face landmarks, so the asset follows real
+        head yaw / pitch / roll and scale — not a flat pasted sticker."""
+        if rgba is None or len(rgba) == 0:
+            return
+        h, w = rgba.shape[:2]
+        src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+        dst = np.float32(dst_quad)
+        try:
+            M = cv2.getPerspectiveTransform(src, dst)
+        except cv2.error:
+            return
+        warped = cv2.warpPerspective(rgba, M, (self.w, self.h),
+                                     flags=cv2.INTER_LINEAR,
+                                     borderMode=cv2.BORDER_CONSTANT)
+        self._alpha_over(warped)
+
+    def sticker(self, rgba, center, width, angle=0.0):
+        """Place an RGBA asset centered at `center`, scaled to pixel `width`,
+        rotated by `angle` degrees (pass face.roll to follow head tilt)."""
+        if rgba is None or len(rgba) == 0:
+            return
+        h, w = rgba.shape[:2]
+        hh = width * h / w
+        a = np.radians(angle); ca, sa = np.cos(a), np.sin(a)
+        ex = np.array([ca, sa]); ey = np.array([-sa, ca])
+        c = np.array([float(center[0]), float(center[1])])
+        hw, ht = width / 2.0, hh / 2.0
+        quad = [c - ex * hw - ey * ht, c + ex * hw - ey * ht,
+                c + ex * hw + ey * ht, c - ex * hw + ey * ht]
+        self.warp(rgba, quad)
+
+    def paste(self, rgba, top_left):
+        """Alpha-paste an RGBA asset at its native size, top-left at `top_left`."""
+        if rgba is None or len(rgba) == 0:
+            return
+        x, y = int(top_left[0]), int(top_left[1])
+        h, w = rgba.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(self.w, x + w), min(self.h, y + h)
+        if x1 <= x0 or y1 <= y0:
+            return
+        sub = rgba[y0 - y:y1 - y, x0 - x:x1 - x]
+        a = sub[:, :, 3:4].astype(np.float32) / 255.0
+        roi = self.frame[y0:y1, x0:x1].astype(np.float32)
+        self.frame[y0:y1, x0:x1] = (sub[:, :, :3] * a + roi * (1 - a)).astype(np.uint8)
+
+    def _alpha_over(self, rgba_full):
+        """Alpha-composite a frame-sized RGBA image over the frame (in place)."""
+        a = rgba_full[:, :, 3:4].astype(np.float32) / 255.0
+        if a.max() <= 0:
+            return
+        self.frame[:] = (rgba_full[:, :, :3].astype(np.float32) * a +
+                         self.frame.astype(np.float32) * (1 - a)).astype(np.uint8)
+
+    def fill_poly(self, pts, color="black", alpha=1.0):
+        """Filled (optionally translucent) polygon; `color` name or BGR tuple."""
+        c = COLORS.get(color, color) if isinstance(color, str) else color
+        arr = np.array(pts, np.int32).reshape(-1, 1, 2)
+        if alpha >= 1.0:
+            cv2.fillPoly(self.frame, [arr], c, cv2.LINE_AA)
+        else:
+            ov = self.frame.copy(); cv2.fillPoly(ov, [arr], c, cv2.LINE_AA)
+            cv2.addWeighted(ov, alpha, self.frame, 1 - alpha, 0, self.frame)
+
+    def pixelate(self, pts, blocks=14):
+        """Pixelate (anonymize) the convex region around `pts`."""
+        arr = np.array(pts, np.int32)
+        x, y, w, h = cv2.boundingRect(arr)
+        x, y = max(0, x), max(0, y); w = min(self.w - x, w); h = min(self.h - y, h)
+        if w < 4 or h < 4:
+            return
+        roi = self.frame[y:y + h, x:x + w]
+        small = cv2.resize(roi, (max(1, blocks), max(1, blocks)),
+                           interpolation=cv2.INTER_LINEAR)
+        pix = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+        mask = np.zeros((h, w), np.uint8)
+        cv2.fillConvexPoly(mask, cv2.convexHull(arr - [x, y]), 255)
+        roi[mask > 0] = pix[mask > 0]
+
 
 @dataclass
 class Overlay:
@@ -213,10 +309,27 @@ class OverlayEngine:
         return ov
 
     def add_builtin(self, key: str) -> Overlay:
+        if key in FACE_FILTERS:
+            return self.add_native(key)
         if key not in BUILTINS:
-            raise KeyError(f"unknown preset {key!r}; have {list(BUILTINS)}")
+            raise KeyError(f"unknown preset {key!r}; have {self.preset_names()}")
         intent, code = BUILTINS[key]
         return self.add(key, intent, code, builtin=True)
+
+    def add_native(self, key: str) -> Overlay:
+        """Register a built-in NATIVE filter (a real Python draw(ctx), e.g. the AR
+        face filters) — not sandbox-compiled. Its source shows in the Code panel."""
+        if key not in FACE_FILTERS:
+            raise KeyError(f"unknown filter {key!r}; have {list(FACE_FILTERS)}")
+        intent, fn, src = FACE_FILTERS[key]
+        ov = Overlay(name=key, intent=intent, code=src, fn=fn, builtin=True)
+        with self._lock:
+            self.overlays[key] = ov
+        return ov
+
+    @staticmethod
+    def preset_names() -> list[str]:
+        return list(BUILTINS) + list(FACE_FILTERS)
 
     def remove(self, name: str) -> bool:
         with self._lock:
@@ -247,17 +360,31 @@ class OverlayEngine:
         with self._lock:
             return sum(1 for o in self.overlays.values() if o.enabled and not o.error)
 
-    def run(self, frame, det, geo, t: int, raw=None) -> int:
+    def run(self, frame, det, geo, t: int, raw=None, clean=None) -> int:
         """Execute all enabled overlays on `frame` in place. Returns # executed.
-        `raw` is the pre-tracker detection (carries pose keypoints / masks)."""
+        `raw` is the pre-tracker detection (carries pose keypoints / masks).
+        `clean` is the un-annotated frame used for face-landmark detection (so a
+        filter doesn't try to find landmarks in already-drawn-on pixels)."""
         with self._lock:
             items = list(self.overlays.values())
+        # one facemesh pass per FRAME, shared across every overlay that asks.
+        face_src = clean if clean is not None else frame
+        cache = {}
+        def faces_fn():
+            if "f" not in cache:
+                try:
+                    from .facemesh import detect_faces
+                    cache["f"] = detect_faces(face_src)
+                except Exception:
+                    cache["f"] = []
+            return cache["f"]
         ran = 0
         for ov in items:
             if not ov.enabled or ov.fn is None:
                 continue
             try:
-                ctx = OverlayCtx(frame, det, geo, t, ov.state, ov.params, raw=raw)
+                ctx = OverlayCtx(frame, det, geo, t, ov.state, ov.params, raw=raw,
+                                 faces_fn=faces_fn)
                 ov.fn(ctx)
                 ov.error = ""
                 ran += 1
@@ -346,3 +473,9 @@ BUILTINS: dict[str, tuple[str, str]] = {
         "            ctx.arrow((cx, cy), (cx + (cx-px)*4, cy + (cy-py)*4), 'lime', 2)\n"
         "    ctx.state['p'] = cur\n"),
 }
+
+
+# Native AR face filters (glasses / ninja_mask / dog / … ) — real Python draw(ctx)
+# functions registered alongside the string BUILTINS. Imported last to avoid a
+# cycle (face_filters depends on nothing here; it duck-types ctx).
+from .face_filters import FACE_FILTERS  # noqa: E402

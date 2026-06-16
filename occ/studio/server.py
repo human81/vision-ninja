@@ -111,6 +111,42 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         return pipe.set_render_flags(**{"draw_" + k: v for k, v in b.items()
                                         if k in ("boxes", "labels", "trails", "counts")})
 
+    @app.post("/filter")
+    async def filter_route(req: Request):
+        """Apply an AR face filter directly (UI chip; the agent can also do this)."""
+        from .tools import apply_face_filter, FACE_FILTERS_LIST
+        b = await req.json()
+        name = (b.get("name") or "").strip()
+        if name in ("clear", "none", ""):
+            ctx_overlays = app.state.overlays
+            return JSONResponse({"status": "success", "cleared": ctx_overlays.clear()})
+        res = apply_face_filter(name)
+        res["available"] = FACE_FILTERS_LIST
+        return JSONResponse(res)
+
+    @app.get("/garments")
+    def garments():
+        """Default VTO catalog (sponsored). Falls back to an empty set."""
+        p = Path(__file__).with_name("garments.json")
+        try:
+            return JSONResponse(json.loads(p.read_text()))
+        except Exception:
+            return JSONResponse({"sponsor": {}, "garments": []})
+
+    @app.post("/tryon")
+    async def tryon_route(req: Request):
+        """Garment virtual try-on on the live frame (you). garment = URL / data URI."""
+        from .tools import virtual_try_on
+        b = await req.json()
+        garment = b.get("garment") or b.get("url") or b.get("image") or ""
+        if not garment:
+            return JSONResponse({"status": "error", "error": "no garment"}, status_code=400)
+        res = virtual_try_on(garment, which="frame")
+        out = res.get("output", "")
+        if out:
+            res["url"] = "/download/" + Path(out).name
+        return JSONResponse(res)
+
     @app.get("/scene")
     def scene():
         return JSONResponse(pipe.scene())

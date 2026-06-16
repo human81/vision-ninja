@@ -259,6 +259,49 @@ def remove_overlay(name: str) -> dict:
     return {"status": "success" if ok else "error", "name": name, "ui": "overlays"}
 
 
+FACE_FILTERS_LIST = ["ninja_mask", "sunglasses", "glasses", "dog", "cat",
+                     "mustache", "crown", "clown_nose", "heart_eyes",
+                     "face_mesh", "anonymize"]
+_FILTER_ALIASES = {
+    "ninja": "ninja_mask", "mask": "ninja_mask", "ninja_hood": "ninja_mask",
+    "shades": "sunglasses", "sun_glasses": "sunglasses",
+    "eyeglasses": "glasses", "spectacles": "glasses", "specs": "glasses",
+    "dog_filter": "dog", "puppy": "dog", "doggy": "dog",
+    "kitty": "cat", "cat_ears": "cat", "cat_filter": "cat", "kitten": "cat",
+    "king": "crown", "queen": "crown", "royal": "crown",
+    "hearts": "heart_eyes", "heart": "heart_eyes", "love": "heart_eyes",
+    "mesh": "face_mesh", "wireframe": "face_mesh", "landmarks": "face_mesh",
+    "blur": "anonymize", "pixelate": "anonymize", "privacy": "anonymize",
+    "clown": "clown_nose", "red_nose": "clown_nose", "moustache": "mustache",
+}
+
+
+def apply_face_filter(name: str) -> dict:
+    """Apply an AR FACE FILTER / face try-on to faces in the live video — ideal in
+    Live Voice mode with the camera on ("put a ninja mask on me", "give me
+    sunglasses"). Options: ninja_mask, sunglasses, glasses, dog, cat, mustache,
+    crown, clown_nose, heart_eyes (smile-reactive), face_mesh, anonymize. Uses
+    dense 478-point facial landmarks so the asset tracks your head pose. The studio
+    auto-clears the prior look, so this replaces it. For trying on CLOTHES/garments
+    use virtual_try_on instead."""
+    key = (name or "").strip().lower().replace(" ", "_").replace("-", "_")
+    key = _FILTER_ALIASES.get(key, key)
+    if key not in FACE_FILTERS_LIST:
+        return {"status": "error", "error": f"unknown filter {name!r}",
+                "available": FACE_FILTERS_LIST, "ui": "overlays"}
+    try:
+        ctx().overlays.clear()                 # a filter is a LOOK — replace, don't stack
+        ctx().overlays.add_builtin(key)
+        # clean selfie-filter look: hide detection boxes / labels / count badge
+        ctx().pipe.set_render_flags(draw_boxes=False, draw_labels=False, draw_counts=False)
+    except Exception as e:
+        return {"status": "error", "error": f"{type(e).__name__}: {e}", "ui": "overlays"}
+    _meter("overlay", units={"overlay_frames": 1}, label=f"face_filter:{key}")
+    if ctx().brain:
+        ctx().brain.register_overlay(key, f"face filter: {key}")
+    return {"status": "success", "name": key, "filter": key, "ui": "overlays"}
+
+
 # ---------- perception / the agent's eyes ----------
 def analyze_scene() -> dict:
     """Look at the live frame RIGHT NOW: per-class counts, track count, zone/line
@@ -452,8 +495,14 @@ def virtual_try_on(garment: str, which: str = "frame", image: str = "") -> dict:
         return {"status": "error", "error": "need a person frame + a garment image"}
     ok, gbuf = cv2.imencode(".jpg", g)
     from . import genmedia
-    prompt = ("Dress the person in the first image with the garment shown in the second "
-              "image. Keep the person's identity, pose, lighting and background.")
+    prompt = (
+        "Virtual try-on. Put the EXACT garment shown in the second image onto the "
+        "person in the first image — match its colour, pattern, logos and texture "
+        "faithfully. Render a natural, photoreal head-and-shoulders / upper-body "
+        "portrait so the garment is clearly visible worn on their chest and "
+        "shoulders; if the first photo is cropped tight on the face, zoom out "
+        "slightly to reveal the upper body wearing it. Preserve the person's face, "
+        "identity, skin tone, hair, lighting and background. Output only the image.")
     try:
         out_bytes, text, r = genmedia.edit_image(
             [jpg, gbuf.tobytes()], prompt, model=ctx().settings.model_for("image_edit"))
@@ -1077,6 +1126,7 @@ ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays,
+    apply_face_filter,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, extend_video, narrate, generate_music,

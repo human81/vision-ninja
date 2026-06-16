@@ -51,6 +51,12 @@ studio = [
     "python-dotenv>=1.0",     # loads a gitignored .env (GEMINI_API_KEY, …) on boot
     "yt-dlp>=2025.1",         # YouTube / live-stream ingestion as a source
 ]
+# AR face filters / virtual try-on (dense 478-pt FaceLandmarker). Pulls
+# opencv-contrib-python (a superset of opencv-python) — both coexist at the same
+# version; mediapipe runs on CPU in real time.
+face = [
+    "mediapipe>=0.10.18",
+]
 # Build-time only (proto compilation).
 build = [
     "grpcio-tools>=1.66",

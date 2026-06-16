@@ -76,6 +76,30 @@
   .vdot.live{background:var(--danger);box-shadow:0 0 0 0 rgba(248,81,73,.6);animation:vpulse 1.4s infinite}
   .vdot.speaking{background:var(--cyan);box-shadow:0 0 0 0 rgba(54,215,224,.6);animation:vpulse 1s infinite}
   @keyframes vpulse{0%{box-shadow:0 0 0 0 rgba(248,81,73,.55)}70%{box-shadow:0 0 0 7px rgba(248,81,73,0)}100%{box-shadow:0 0 0 0 rgba(248,81,73,0)}}
+  /* face filters + garment VTO */
+  .filterbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+  .filterbar .fbl{font-size:9px;letter-spacing:.09em;color:var(--mut);text-transform:uppercase;margin-right:3px}
+  .filterbar button{background:#141c29;border:1px solid var(--line);color:var(--fg);
+    border-radius:999px;padding:4px 11px;font-size:12px;cursor:pointer;transition:.12s}
+  .filterbar button:hover{border-color:var(--accent);color:var(--fg)}
+  .filterbar button.accentbtn{background:var(--accent);border-color:var(--accent);color:#05130b;font-weight:600}
+  .filterbar input{background:#0a0f17;border:1px solid var(--line);color:var(--fg);
+    border-radius:8px;padding:5px 10px;font-size:12px;min-width:150px;flex:1}
+  .tryonwrap{margin-top:8px}
+  .sponsor{font-size:10.5px;color:var(--mut);text-decoration:none;white-space:nowrap}
+  .sponsor b{color:#e7b24a;font-weight:600;letter-spacing:.02em}
+  .gcat{display:flex;gap:6px;margin:8px 0 2px}
+  .gcat button{font-size:10px;padding:3px 11px;border-radius:999px;background:transparent;
+    border:1px solid var(--line);color:var(--mut);cursor:pointer}
+  .gcat button.on{color:#05130b;background:var(--accent);border-color:var(--accent);font-weight:600}
+  .garments{display:flex;gap:9px;overflow-x:auto;padding:9px 2px 5px;scrollbar-width:thin}
+  .garments::-webkit-scrollbar{height:7px}.garments::-webkit-scrollbar-thumb{background:#26303f;border-radius:9px}
+  .gcard{flex:0 0 auto;width:78px;cursor:pointer;border-radius:10px;overflow:hidden;
+    border:1px solid var(--line);background:#0b1019;transition:.16s}
+  .gcard:hover{border-color:var(--accent);transform:translateY(-3px);box-shadow:0 6px 16px #0008}
+  .gcard img{width:78px;height:96px;object-fit:cover;display:block;background:#0a1018}
+  .gcard .gt{font-size:8.5px;color:var(--fg);padding:4px 5px 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gcard .gp{font-size:8.5px;color:#e7b24a;padding:0 5px 4px}
   #livebtn{position:absolute;right:8px;top:8px;cursor:pointer;z-index:6;
     background:#0e1521cc;border:1px solid var(--line);color:var(--mut)}
   #livebtn.on{border-color:var(--accent);color:var(--accent)}
@@ -266,6 +290,41 @@
           <span id=vdot class=vdot></span><span id=vstatus class=muted>tap Mic to talk</span>
           <span style=flex:1></span>
           <button id=vstop onclick="vStop()">⏹ End</button>
+        </div>
+        <div class=filterbar id=filterbar style=display:none>
+          <span class=fbl>FACE TRY-ON</span>
+          <button onclick="vFilter('ninja_mask')">🥷 Ninja</button>
+          <button onclick="vFilter('sunglasses')">🕶 Shades</button>
+          <button onclick="vFilter('glasses')">👓 Glasses</button>
+          <button onclick="vFilter('dog')">🐶 Dog</button>
+          <button onclick="vFilter('cat')">🐱 Cat</button>
+          <button onclick="vFilter('mustache')">〰 Stache</button>
+          <button onclick="vFilter('crown')">👑 Crown</button>
+          <button onclick="vFilter('clown_nose')">🤡 Nose</button>
+          <button onclick="vFilter('heart_eyes')">❤️ Hearts</button>
+          <button onclick="vFilter('face_mesh')">🕸 Mesh</button>
+          <button onclick="vFilter('anonymize')">🔒 Blur</button>
+          <button onclick="vFilter('clear')">✖ Clear</button>
+        </div>
+        <div class=tryonwrap id=tryonbar style=display:none>
+          <div class=filterbar>
+            <span class=fbl>GARMENT VTO</span>
+            <input id=garmenturl placeholder="paste a garment image URL…">
+            <button onclick="vUpload()">📎 Upload</button>
+            <button onclick="vTryOn()" class=accentbtn>👕 Try on me</button>
+            <input type=file id=garmentfile accept="image/*" style=display:none>
+            <span id=tryonstatus class=muted style=font-size:10px></span>
+            <span style=flex:1></span>
+            <a id=sponsor class=sponsor target=_blank></a>
+          </div>
+          <div class=gcat id=gcat>
+            <button data-c=haiti onclick="gSetCat('haiti')">🇭🇹 Haiti WC</button>
+            <button data-c=top class=on onclick="gSetCat('top')">Tops</button>
+            <button data-c=bottom onclick="gSetCat('bottom')">Bottoms</button>
+            <button data-c=all onclick="gSetCat('all')">All</button>
+            <span class=muted style="font-size:9px;align-self:center;margin-left:4px">tap a garment to try it on you · camera on</span>
+          </div>
+          <div class=garments id=garments></div>
         </div>
         <div class=ov-chips id=ovchips></div>
         <div class=cfg id=cfg></div>
@@ -793,6 +852,60 @@ function vStop(){
   vStatus('tap Mic to talk');
 }
 
+/* ---- AR face filters (one-tap) ---- */
+async function vFilter(name){
+  try{
+    const r=await fetch('/filter',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name})}).then(r=>r.json());
+    if(name==='clear'){toast('filters cleared');}
+    else if(r.status==='success'){toast('try-on: '+name.replace('_',' '));switchTab('code');}
+    else{toast('filter: '+(r.error||'failed'));}
+  }catch(e){toast('filter failed');}
+  if(NLE.mode==='voice')setCanvas('live');
+  pollOverlays();
+}
+
+/* ---- garment virtual try-on (Mode Marco catalog) ---- */
+let GARMENTS=null,GCAT='top';
+async function loadGarments(){
+  if(GARMENTS)return;
+  try{
+    const d=await(await fetch('/garments')).json();
+    GARMENTS=d.garments||[];
+    if(d.sponsor&&d.sponsor.url){const s=$('sponsor');s.href=d.sponsor.url;
+      s.innerHTML='✦ Sponsored by <b>'+(d.sponsor.name||'')+'</b>';}
+    renderGarments();
+  }catch(e){}
+}
+function gSetCat(c){GCAT=c;document.querySelectorAll('#gcat button').forEach(b=>b.classList.toggle('on',b.dataset.c===c));renderGarments();}
+function renderGarments(){
+  const wrap=$('garments');if(!wrap||!GARMENTS)return;
+  const items=GARMENTS.map((g,i)=>[g,i]).filter(([g])=>GCAT==='all'||g.cat===GCAT).slice(0,150);
+  wrap.innerHTML=items.map(([g,i])=>
+    `<div class=gcard onclick="vTryGarment(${i})" title="${(g.title||'').replace(/"/g,'&quot;')} · $${g.price}">
+       <img loading=lazy src="${g.img}${g.img.includes('?')?'&':'?'}width=170" onerror="this.style.opacity=.2">
+       <div class=gt>${(g.title||'').slice(0,18)}</div><div class=gp>$${g.price}</div></div>`).join('');
+}
+function vTryGarment(i){const g=GARMENTS&&GARMENTS[i];if(!g)return;$('garmenturl').value=g.img;vTryOnWith(g.img,g.title);}
+function vUpload(){$('garmentfile').click();}
+$('garmentfile').addEventListener('change',async(e)=>{
+  const f=e.target.files[0];if(!f)return;
+  const data=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.readAsDataURL(f);});
+  vTryOnWith(data,f.name);e.target.value='';
+});
+async function vTryOn(){const u=$('garmenturl').value.trim();
+  if(!u){toast('paste a garment URL, pick one below, or upload');return;}vTryOnWith(u,u);}
+async function vTryOnWith(garment,label){
+  $('tryonstatus').textContent='generating try-on…';toast('👕 trying it on you…');
+  try{
+    const r=await fetch('/tryon',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({garment})}).then(r=>r.json());
+    if(r.status==='success'&&r.url){setCanvas('image',r.url,'virtual try-on — '+(label||'').slice(0,40));
+      $('tryonstatus').textContent='done ✓';pollUsage();}
+    else{$('tryonstatus').textContent='';toast('try-on: '+(r.error||'failed'));}
+  }catch(e){$('tryonstatus').textContent='';toast('try-on failed');}
+}
+
 /* ---------------- NLE editor (timeline + synced playback) ---------------- */
 const NLE={mode:'live',video:[],audio:[],ph:0,playing:false,pps:60,sel:null,_a:{},base:0,wall:0,_id:0,xfade:0};
 function nleSetMode(m){const prev=NLE.mode;NLE.mode=m;
@@ -800,9 +913,11 @@ function nleSetMode(m){const prev=NLE.mode;NLE.mode=m;
   $('editwrap').style.display=m==='edit'?'flex':'none';
   $('drawbar').style.display=(m==='voice')?'none':'';
   $('voicebar').style.display=(m==='voice')?'flex':'none';
+  $('filterbar').style.display=(m==='voice')?'flex':'none';
+  $('tryonbar').style.display=(m==='voice')?'block':'none';
   document.querySelectorAll('#modeswitch button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
   if(prev==='voice'&&m!=='voice'){try{vStop();}catch(e){}}
-  if(m==='voice')setCanvas('live');          // canvas stays on the live stream (= annotated you when cam on)
+  if(m==='voice'){setCanvas('live');loadGarments();}   // canvas stays on the live stream (= annotated you when cam on)
   if(m!=='edit'){NLE.playing=false;Object.values(NLE._a).forEach(a=>a.pause());try{$('preview').pause();}catch(e){}}
   else{drawTimeline();updateInspector();}}
 const isVidName=n=>/\.(mp4|mov|webm)$/i.test(n), isAudName=n=>/\.(wav|mp3|m4a|aac|ogg)$/i.test(n);

@@ -34,6 +34,13 @@ Operating principles:
 - Overlays don't compound: the studio auto-clears the previous overlays at the start
   of each new visual request, so just author the new look. To combine several effects,
   put them in ONE overlay. Use `clear_overlays` to wipe them all.
+- FACE FILTERS / TRY-ON (great in Live Voice with the camera on): when the user
+  asks to put something on their FACE — "ninja mask", "sunglasses", "glasses",
+  "dog/cat filter", "mustache", "crown", "clown nose", "heart eyes", "face mesh",
+  "blur/anonymize my face" — call `apply_face_filter(name)`. It uses dense 478-pt
+  landmarks and follows head pose. For CLOTHES/GARMENTS ("try this jacket/shirt on
+  me") call `virtual_try_on(garment=<image path/URL/data URI>, which='frame')` — it
+  dresses the person in the live frame and shows the result on the canvas.
 - Save durable facts to the brain with `remember`. Use ffmpeg tools to export.
 - THE CANVAS: the center area shows EITHER the live feed OR an artifact. When the
   user shares or asks about an image, call `analyze_image` (it ingests a data: URI /
@@ -133,7 +140,7 @@ def frames_for(name: str, res) -> list[dict]:
     if res.get("ui"):
         out.append({"type": "refresh", "data": {"panel": res["ui"]}})
     if name in ("create_overlay", "toggle_overlay", "remove_overlay", "clear_overlays",
-                "clear_annotations"):
+                "clear_annotations", "apply_face_filter"):
         out.append({"type": "refresh", "data": {"panel": "overlays"}})
     if name in ("nano_banana", "virtual_try_on", "describe_image", "analyze_image",
                 "save_to_library", "generate_video", "extend_video"):
@@ -227,6 +234,30 @@ class SimRunner:
                 add("clear_overlays", {}, "Removed all overlays.", "clear overlays")
             else:
                 add("clear_annotations", {}, "Cleared all zones, lines and overlays.", "clear all")
+
+        # ---- AR face filters (ninja mask, sunglasses, dog…) + garment try-on ----
+        _FILT = [("ninja", "ninja_mask"), ("sunglass", "sunglasses"), ("shades", "sunglasses"),
+                 ("eyeglass", "glasses"), ("spectacle", "glasses"), ("glasses", "glasses"),
+                 ("puppy", "dog"), ("dog", "dog"), ("kitt", "cat"), ("cat", "cat"),
+                 ("mustache", "mustache"), ("moustache", "mustache"), ("crown", "crown"),
+                 ("king", "crown"), ("queen", "crown"), ("clown", "clown_nose"),
+                 ("heart eye", "heart_eyes"), ("face mesh", "face_mesh"),
+                 ("wireframe", "face_mesh"), ("anonymi", "anonymize"), ("pixelate", "anonymize")]
+        fname = next((v for k, v in _FILT if k in m), None)
+        garment = any(w in m for w in ("jacket", "shirt", "t-shirt", "tshirt", "dress",
+                      "outfit", "hoodie", "coat", "sweater", "garment", "clothes", "wear "))
+        trigger = any(w in m for w in ("filter", "mask", "on me", "on my", "put ", "give me",
+                                       "apply", "try on", "tryon", "try it"))
+        if garment and (img or "http" in original):
+            g = img or (re.search(r"https?://\S+", original) or [None])
+            g = g if isinstance(g, str) else (g.group(0) if g else "")
+            add("virtual_try_on", {"garment": g, "which": "frame"},
+                "Trying that garment on you…", "virtual try-on")
+            return steps, acts
+        if fname and (trigger or "filter" in m):
+            add("apply_face_filter", {"name": fname},
+                f"Applying the {fname.replace('_', ' ')} look.", f"face filter: {fname}")
+            return steps, acts
 
         # hide / show the detection boxes + tracking
         if any(p in m for p in ("detection box", "detection boxes", "hide the box",
