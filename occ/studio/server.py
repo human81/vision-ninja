@@ -105,6 +105,12 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     def stats():
         return JSONResponse(pipe.stats())
 
+    @app.post("/render")
+    async def set_render_route(req: Request):
+        b = await req.json()
+        return pipe.set_render_flags(**{"draw_" + k: v for k, v in b.items()
+                                        if k in ("boxes", "labels", "trails", "counts")})
+
     @app.get("/scene")
     def scene():
         return JSONResponse(pipe.scene())

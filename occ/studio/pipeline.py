@@ -102,6 +102,15 @@ class StudioPipeline:
             self._status = "loading"
         self._dirty.set()
 
+    def set_render_flags(self, **flags) -> dict:
+        """Toggle renderer draw flags LIVE (no rebuild/flash) — the Renderer reads the
+        same render dict each frame."""
+        with self._lock:
+            r = self.cfg.data.setdefault("render", {})
+            for k, v in flags.items():
+                r[k] = bool(v)
+            return {k: r.get(k) for k in flags}
+
     def current_config(self) -> dict:
         g = self.cfg.get
         return {"source.uri": g("source.uri"), "detector.backend": g("detector.backend"),

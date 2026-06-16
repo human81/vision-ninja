@@ -61,7 +61,7 @@ def _ui_action(res: dict) -> dict:
     return {"type": "ui_action", "data": data}
 
 
-_LIVE_TOOLS = {"set_source", "set_detector", "set_tracker", "set_detect_every",
+_LIVE_TOOLS = {"set_source", "set_detector", "set_tracker", "set_detect_every", "set_render",
                "draw_zone", "draw_line", "clear_annotations", "toggle_overlay",
                "create_overlay", "remove_overlay", "clear_overlays", "use_source",
                "load_youtube"}
@@ -224,6 +224,22 @@ class SimRunner:
                 add("clear_overlays", {}, "Removed all overlays.", "clear overlays")
             else:
                 add("clear_annotations", {}, "Cleared all zones, lines and overlays.", "clear all")
+
+        # hide / show the detection boxes + tracking
+        if any(p in m for p in ("detection box", "detection boxes", "hide the box",
+                                "hide box", "clear the box", "clear box", "remove the box",
+                                "hide detection", "clear detection", "hide tracking",
+                                "no boxes", "without boxes", "turn off detection",
+                                "hide the label")):
+            add("set_render", {"boxes": False, "labels": False, "trails": False,
+                               "counts": True}, "Hid the detection boxes, labels and trails.",
+                "hide detections")
+        elif any(p in m for p in ("show detection", "show the box", "show boxes",
+                                  "turn on detection", "bring back the box", "show tracking",
+                                  "boxes back")):
+            add("set_render", {"boxes": True, "labels": True, "trails": True,
+                               "counts": True}, "Detection boxes are back on.",
+                "show detections")
 
         # Co-Director generative storytelling (generate footage)
         ms = re.search(r"(?:direct a story|generate (?:a )?(?:video|story|reel|footage)|"

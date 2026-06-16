@@ -110,6 +110,20 @@ def set_detect_every(n: int) -> dict:
     return {"status": "success", "detect_every": max(1, int(n)), "ui": "config"}
 
 
+def set_render(boxes: bool = True, labels: bool = True, trails: bool = True,
+               counts: bool = True) -> dict:
+    """Control what is DRAWN on the live frame. Pass false to HIDE: `boxes` =
+    detection boxes, `labels` = per-track id/class/conf text, `trails` = motion
+    trails, `counts` = the FULL-FRAME count HUD. To clear the detection boxes /
+    tracking the user sees, call set_render(boxes=false, labels=false, trails=false).
+    The detector + tracker keep running underneath (counts/zones still update)."""
+    ctx().pipe.set_render_flags(draw_boxes=boxes, draw_labels=labels,
+                                draw_trails=trails, draw_counts=counts)
+    return {"status": "success",
+            "render": {"boxes": bool(boxes), "labels": bool(labels),
+                       "trails": bool(trails), "counts": bool(counts)}, "ui": "config"}
+
+
 # ---------- annotations (zones / lines) ----------
 def _xy_pairs(points) -> list:
     out = []
@@ -1003,7 +1017,7 @@ def direct_story(brief: str, scenes: int = 3, mode: str = "fast",
 
 
 ALL_TOOLS = [
-    plan, drive_ui, set_source, set_detector, set_tracker, set_detect_every,
+    plan, drive_ui, set_source, set_detector, set_tracker, set_detect_every, set_render,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays,
     analyze_scene, analyze_image, describe_image, display_media, test_image,

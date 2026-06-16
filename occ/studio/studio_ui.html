@@ -64,6 +64,7 @@
     border-radius:7px;padding:5px 10px;font-size:12px;cursor:pointer}
   .drawbar button:hover{border-color:#3a4658}
   .drawbar button[data-tog].on,.drawbar button[data-frz].on{border-color:var(--cyan);color:var(--cyan)}
+  .drawbar button[data-det].on{border-color:var(--danger);color:var(--danger)}
   #livebtn{position:absolute;right:8px;top:8px;cursor:pointer;z-index:6;
     background:#0e1521cc;border:1px solid var(--line);color:var(--mut)}
   #livebtn.on{border-color:var(--accent);color:var(--accent)}
@@ -230,6 +231,7 @@
         <div class=drawbar id=drawbar>
           <button data-tog onclick="toggleDraw()">✏ Draw</button>
           <button data-frz onclick="toggleFreeze()">❄ Freeze</button>
+          <button data-det onclick="toggleDetections()">👁 Boxes</button>
           <button onclick="drawTool('zone')">+ Zone</button>
           <button onclick="drawTool('line')">+ Line</button>
           <button onclick="drawFinish()">Finish</button>
@@ -563,6 +565,11 @@ function renderLib(items){
 }
 window.cleanLib=async()=>{let r=await(await fetch('/library/clean',{method:'POST'})).json();toast('removed '+(r.removed||0)+' dead item(s)');pollLibrary($('libq').value);};
 window.nleAddIfEdit=(name,kind)=>{if(NLE.mode!=='edit')nleSetMode('edit');nleAdd(name,kind);};
+let _det=true;
+window.toggleDetections=async()=>{_det=!_det;
+  await fetch('/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes:_det,labels:_det,trails:_det})});
+  let b=document.querySelector('.drawbar button[data-det]');if(b){b.classList.toggle('on',!_det);b.textContent=_det?'👁 Boxes':'🚫 Boxes';}
+  toast(_det?'detection boxes ON':'detection boxes hidden');};
 window.showLib=(name,isVid)=>{
   if(NLE.mode==='edit'){
     if(isVid||/\.(mp4|mov|webm|gif)$/i.test(name))nleAdd(name,'video');
