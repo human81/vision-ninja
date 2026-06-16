@@ -331,7 +331,16 @@
         <div id=srcgrid style=margin-top:10px></div>
       </div>
       <div class=pane id=pane-models>
-        <div class=muted style=font-size:11px;margin-bottom:6px>AI model per capability — the agent + media tools use these.</div>
+        <div class=muted style=font-size:11px;margin-bottom:6px>YOLO vision task on the live video (Ultralytics).</div>
+        <div class=mrow><label>Vision Task</label>
+          <select id=tasksel onchange="setTask(this.value)">
+            <option value=detect>detect — boxes</option>
+            <option value=segment>segment — instance masks</option>
+            <option value=pose>pose — keypoints / skeleton</option>
+            <option value=obb>obb — oriented boxes (aerial)</option>
+            <option value=classify>classify — whole-image label</option>
+          </select></div>
+        <div class=muted style="font-size:11px;margin:10px 0 6px">AI model per capability — the agent + media tools use these.</div>
         <div id=models></div>
         <button class=savebtn onclick=saveModels()>Save model configuration</button>
       </div>
@@ -483,6 +492,8 @@ async function pollConfig(){try{let c=await(await fetch('/config')).json();
     ['tracker',c['tracker.algorithm']],['imgsz',c['detector.imgsz']],
     ['every',c['runtime.detect_every']],['classes',(c['detector.classes']||['all']).join(',')]]
     .map(([k,v])=>`<span>${k} <b>${v}</b></span>`).join('');
+  let mdl=c['detector.model']||'',ts=$('tasksel');
+  if(ts)ts.value=mdl.includes('-seg')?'segment':mdl.includes('-pose')?'pose':mdl.includes('-obb')?'obb':mdl.includes('-cls')?'classify':'detect';
   $('src').title=c['source.uri'];}catch(e){}}
 async function pollOverlays(){try{let o=await(await fetch('/overlays')).json();
   let active=o.overlays.map(v=>`<span class="chip ${v.enabled?'on':''}" onclick="toggleOv('${v.name}',${!v.enabled})">${v.enabled?'◉':'○'} ${v.name} <span class=x onclick="event.stopPropagation();rmOv('${v.name}')">✕</span></span>`).join('');
@@ -603,6 +614,8 @@ async function pollModels(){try{let s=await(await fetch('/settings')).json();
   }).join('');}catch(e){}}
 window.saveModels=async()=>{let models={};document.querySelectorAll('#models select').forEach(s=>models[s.dataset.task]=s.value);
   await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({models})});toast('model configuration saved');};
+const TASK_MODEL={detect:'yolo11n.pt',segment:'yolo11n-seg.pt',pose:'yolo11n-pose.pt',obb:'yolo11n-obb.pt',classify:'yolo11n-cls.pt'};
+window.setTask=async(t)=>{await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({'detector.backend':'yolo','detector.model':TASK_MODEL[t]})});toast('vision task: '+t);pollConfig();};
 
 /* ---------------- NLE editor (timeline + synced playback) ---------------- */
 const NLE={mode:'live',video:[],audio:[],ph:0,playing:false,pps:60,sel:null,_a:{},base:0,wall:0,_id:0,xfade:0};

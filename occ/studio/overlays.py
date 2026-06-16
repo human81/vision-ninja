@@ -35,10 +35,11 @@ _PALETTE = [COLORS[k] for k in ("cyan", "lime", "amber", "magenta", "orange",
 class OverlayCtx:
     """Per-frame drawing context handed to each overlay's draw(ctx)."""
 
-    def __init__(self, frame, det, geo, t, state, params):
+    def __init__(self, frame, det, geo, t, state, params, raw=None):
         self.frame = frame
         self.det = det
         self.geo = geo
+        self.raw = raw if raw is not None else det     # raw detection (carries kpts/mask)
         self.h, self.w = frame.shape[:2]
         self.t = t                      # frame index
         self.state = state              # persistent dict for THIS overlay
@@ -91,6 +92,13 @@ class OverlayCtx:
         names = self.names
         want = {c.lower() for c in classes}
         return np.array([n.lower() in want for n in names], bool)
+
+    @property
+    def kpts(self):
+        """Pose keypoints (N, 17, 3) = [x, y, conf] in COCO order — only present in
+        pose mode (set_task('pose')). 0 nose, 5/6 shoulders, 9/10 wrists, 15/16 ankles."""
+        d = self.raw.data if (self.raw is not None and self.raw.data) else {}
+        return d.get("kpts", np.empty((0, 17, 3)))
 
     def palette(self, i):
         return _PALETTE[int(i) % len(_PALETTE)]
@@ -228,8 +236,9 @@ class OverlayEngine:
         with self._lock:
             return sum(1 for o in self.overlays.values() if o.enabled and not o.error)
 
-    def run(self, frame, det, geo, t: int) -> int:
-        """Execute all enabled overlays on `frame` in place. Returns # executed."""
+    def run(self, frame, det, geo, t: int, raw=None) -> int:
+        """Execute all enabled overlays on `frame` in place. Returns # executed.
+        `raw` is the pre-tracker detection (carries pose keypoints / masks)."""
         with self._lock:
             items = list(self.overlays.values())
         ran = 0
@@ -237,7 +246,7 @@ class OverlayEngine:
             if not ov.enabled or ov.fn is None:
                 continue
             try:
-                ctx = OverlayCtx(frame, det, geo, t, ov.state, ov.params)
+                ctx = OverlayCtx(frame, det, geo, t, ov.state, ov.params, raw=raw)
                 ov.fn(ctx)
                 ov.error = ""
                 ran += 1
@@ -289,6 +298,29 @@ BUILTINS: dict[str, tuple[str, str]] = {
         "    y = 90\n"
         "    for k, v in c.most_common():\n"
         "        ctx.text(f'{k}: {v}', (12, y), 'cyan', 0.8); y += 30\n"),
+    "raised_hands": (
+        "Ring people raising a hand (a wrist above the head). Needs pose mode.",
+        "def draw(ctx):\n"
+        "    for kp in ctx.kpts:\n"
+        "        nose = kp[0]\n"
+        "        if nose[2] < 0.3: continue\n"
+        "        up = (kp[9][2] > 0.3 and kp[9][1] < nose[1]) or \\\n"
+        "             (kp[10][2] > 0.3 and kp[10][1] < nose[1])\n"
+        "        if up:\n"
+        "            ctx.ring((int(nose[0]), int(nose[1])), 42, 'lime', 3, glow=True)\n"
+        "            ctx.text('hand up', (int(nose[0]) - 34, int(nose[1]) - 52), 'lime', 0.6)\n"),
+    "pose_glow": (
+        "Glowing skeleton + joint dots for every person. Needs pose mode.",
+        "def draw(ctx):\n"
+        "    E = [(5,6),(5,7),(7,9),(6,8),(8,10),(5,11),(6,12),(11,12),\n"
+        "         (11,13),(13,15),(12,14),(14,16)]\n"
+        "    for i, kp in enumerate(ctx.kpts):\n"
+        "        col = ctx.palette(i)\n"
+        "        for a, b in E:\n"
+        "            if kp[a][2] > 0.3 and kp[b][2] > 0.3:\n"
+        "                ctx.line((kp[a][0], kp[a][1]), (kp[b][0], kp[b][1]), col, 3)\n"
+        "        for x, y, c in kp:\n"
+        "            if c > 0.3: ctx.ring((x, y), 3, col, 2)\n"),
     "speed_vectors": (
         "Per-track velocity arrows from frame-to-frame motion.",
         "def draw(ctx):\n"

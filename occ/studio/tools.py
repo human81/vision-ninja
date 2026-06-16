@@ -223,11 +223,14 @@ def toggle_overlay(name: str, on: bool = True) -> dict:
 
 def create_overlay(name: str, intent: str, code: str) -> dict:
     """AUTHOR a brand-new computer-vision overlay to achieve a visual task. This is
-    your superpower. `code` must define `def draw(ctx):` and may use cv2/np plus the
-    rich ctx API:
+    your superpower. (The studio auto-clears the previous overlays at the start of a
+    new visual request, so you don't have to.) To show several effects at once, put
+    them in ONE overlay. `code` must define `def draw(ctx):` and may use cv2/np plus
+    the rich ctx API:
       ctx.frame (BGR, mutate in place), ctx.w/ctx.h/ctx.t (frame index)
       ctx.boxes (Nx4 int xyxy), ctx.centers, ctx.anchors (bottom-center),
       ctx.names, ctx.ids, ctx.confs, ctx.mask('car','truck'), ctx.palette(i)
+      ctx.kpts (pose mode only: Nx17x3 [x,y,conf]; 0 nose, 5/6 shoulders, 9/10 wrists)
       ctx.state (persists across frames — for trails/accumulators), ctx.params
       drawing: ctx.ring(c,r,color,thick,glow), ctx.box(b,..), ctx.line(a,b,..),
       ctx.arrow(a,b,..), ctx.poly(pts,color,fill_alpha), ctx.text(s,xy,..),

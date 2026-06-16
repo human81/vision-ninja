@@ -31,6 +31,9 @@ Operating principles:
   spotlight / pulse the relevant neuron so the user follows along.
 - Keep overlays a few expressive lines using the rich `ctx` API. One visual idea
   per overlay. Name them clearly.
+- Overlays don't compound: the studio auto-clears the previous overlays at the start
+  of each new visual request, so just author the new look. To combine several effects,
+  put them in ONE overlay. Use `clear_overlays` to wipe them all.
 - Save durable facts to the brain with `remember`. Use ffmpeg tools to export.
 - THE CANVAS: the center area shows EITHER the live feed OR an artifact. When the
   user shares or asks about an image, call `analyze_image` (it ingests a data: URI /
@@ -552,10 +555,33 @@ class StudioAgent:
             return "adk"
         return "sim"
 
+    @staticmethod
+    def _maybe_clear_overlays(message: str):
+        """Don't compound overlays: at the START of a NEW visual/overlay request,
+        wipe the current overlays once — so the new look replaces, not stacks. Skip
+        only when the user explicitly wants to keep/add to the current look."""
+        m = message.lower()
+        overlay_req = any(w in m for w in (
+            "ring", "highlight", "heatmap", "heat map", "trail", "overlay", "skeleton",
+            "glow", "speed vector", "outline", "mask", "circle the", "box the",
+            "draw a", "draw the", "color the", "colour the", "mark the", "densest",
+            "lane", "pose", "segment"))
+        keep = any(p in m for p in (
+            "keep the", "in addition", "on top of the current", "as well as the current",
+            "don't clear", "do not clear", "add to the current", "leave the current",
+            "keep the current", "also keep", "without clearing"))
+        try:
+            if overlay_req and not keep and ctx().overlays and ctx().overlays.active_count():
+                from .tools import _clear_all_overlays
+                _clear_all_overlays()
+        except Exception:
+            pass
+
     async def stream(self, message: str):
         if ctx().brain:
             task = message if not message.startswith("data:") else "[shared image]"
             ctx().brain.set_task(task[:200])
+        self._maybe_clear_overlays(message)
         if self.mode() == "adk":
             try:
                 if self._adk is None:

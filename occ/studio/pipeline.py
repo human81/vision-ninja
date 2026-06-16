@@ -246,7 +246,7 @@ class StudioPipeline:
                                              getattr(det, "cls_label", None))
                 vis = renderer.draw_annotations(vis, ann, geo)
                 if self.overlays:                       # the agent's dynamic overlays
-                    self.overlays.run(vis, tracked, geo, n)
+                    self.overlays.run(vis, tracked, geo, n, raw=last_raw)
                 vis = renderer.draw_counts(vis, geo)
                 self._record_frame(vis, fps)
                 ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 72])
