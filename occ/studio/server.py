@@ -132,6 +132,10 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         pipe.set_annotations(await req.json())
         return {"ok": True, "count": len(pipe.annotation_dicts())}
 
+    @app.post("/annotations/save")
+    def save_ann():
+        return {"saved": pipe.save_annotations()}
+
     # ---------- overlays ----------
     @app.get("/overlays")
     def get_overlays():

@@ -58,12 +58,18 @@
   #wrap{position:relative;line-height:0;border-radius:10px;overflow:hidden;background:#000}
   #img,#media{width:100%;display:block}
   #video{width:100%;display:block;background:#000;max-height:62vh}
-  #livebtn{position:absolute;right:8px;top:8px;cursor:pointer;z-index:3;
+  #drawcv{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:4}
+  .drawbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+  .drawbar button{background:#141c29;border:1px solid var(--line);color:var(--fg);
+    border-radius:7px;padding:5px 10px;font-size:12px;cursor:pointer}
+  .drawbar button:hover{border-color:#3a4658}
+  .drawbar button[data-tog].on{border-color:var(--cyan);color:var(--cyan)}
+  #livebtn{position:absolute;right:8px;top:8px;cursor:pointer;z-index:6;
     background:#0e1521cc;border:1px solid var(--line);color:var(--mut)}
   #livebtn.on{border-color:var(--accent);color:var(--accent)}
   .canvascap{font-size:12px;color:var(--cyan);margin-top:6px;min-height:15px}
   #drape{position:absolute;inset:0;pointer-events:none}
-  .hud{position:absolute;left:10px;top:10px;display:flex;gap:6px}
+  .hud{position:absolute;left:10px;top:10px;display:flex;gap:6px;z-index:5}
   .ov-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
   .chip{display:inline-flex;align-items:center;gap:6px;background:#141c29;border:1px solid var(--line);
     border-radius:999px;padding:4px 10px;font-size:12px;cursor:pointer}
@@ -184,11 +190,21 @@
           <img id=img src=/stream.mjpg>
           <img id=media style=display:none>
           <video id=video controls playsinline preload=metadata style=display:none></video>
+          <canvas id=drawcv></canvas>
           <div class=hud><span class=pill id=src>source</span>
             <span class=pill id=canvasmode>live</span></div>
           <button id=livebtn class="pill on" onclick="setCanvas('live')">● live</button>
         </div>
         <div class=canvascap id=canvascap></div>
+        <div class=drawbar id=drawbar>
+          <button data-tog onclick="toggleDraw()">✏ Draw</button>
+          <button onclick="drawTool('zone')">+ Zone</button>
+          <button onclick="drawTool('line')">+ Line</button>
+          <button onclick="drawFinish()">Finish</button>
+          <button onclick="drawClear()">Clear</button>
+          <button onclick="drawSave()">Save</button>
+          <span class=muted style=font-size:10px>click to add points · click 1st point closes a zone · drag a vertex · ⏎ finish · Esc cancel</span>
+        </div>
         <div class=ov-chips id=ovchips></div>
         <div class=cfg id=cfg></div>
         <div class=cfg id=dwell style=margin-top:4px></div>
@@ -340,6 +356,7 @@ function setCanvas(mode,src,caption){
     vid.load();}   /* show native controls + big play button; user controls playback w/ audio */
   else{hide(media);hide(vid);try{vid.pause();}catch(e){}img.style.display='block';
     $('canvasmode').textContent='live';$('livebtn').classList.add('on');}
+  if(window.setDrawEnabled&&mode!=='live')window.setDrawEnabled(false);  /* draw only on live */
 }
 
 async function send(text){
@@ -605,6 +622,57 @@ function applyTimeline(d){ // agent-driven (Co-Director)
   (d.video||[]).forEach(c=>NLE.video.push({id:++NLE._id,name:c.src,kind:'video',t0:c.t0||0,off:c.offset||0,dur:c.duration||3,len:c.duration||3}));
   (d.audio||[]).forEach(c=>NLE.audio.push({id:++NLE._id,name:c.src,kind:'audio',t0:c.t0||0,off:c.offset||0,dur:c.duration||3,len:c.duration||3}));
   nleSetMode('edit');drawTimeline();}
+
+/* ---------------- manual draw editor on the LIVE canvas ---------------- */
+(function(){
+  const img=$('img'),cv=$('drawcv'),ctx=cv.getContext('2d');
+  let mode='idle',draft=[],shapes=[],cursor=null,drag=null,hover=-1,selected=-1,dash=0,enabled=false;
+  const SNAP=12,ZC='#ffb400',LC='#3fb950',SC='#36d7e0',POS='#3fb950',NEG='#f85149',CUR='#e6edf3',SNAPC='#ff5cf0';
+  function resize(){cv.width=img.clientWidth||cv.clientWidth;cv.height=img.clientHeight||cv.clientHeight;}
+  img.addEventListener('load',resize);window.addEventListener('resize',resize);setTimeout(resize,500);
+  const toPx=v=>[v[0]*cv.width,v[1]*cv.height],nrm=(x,y)=>[x/cv.width,y/cv.height],d2=(ax,ay,bx,by)=>(ax-bx)**2+(ay-by)**2;
+  function unitN(a,b){let dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy)||1;return[dy/L,-dx/L];}
+  function hitVertex(x,y){let best=null,bd=SNAP*SNAP;shapes.forEach((s,si)=>s.vertices.forEach((v,vi)=>{let[px,py]=toPx(v);let d=d2(px,py,x,y);if(d<bd){bd=d;best=[si,vi];}}));return best;}
+  function snapTarget(x,y){if(mode==='zone'&&draft.length>=3){let[fx,fy]=toPx(draft[0]);if(d2(fx,fy,x,y)<SNAP*SNAP)return{x:fx,y:fy,kind:'close'};}if(mode!=='idle'){let h=hitVertex(x,y);if(h){let[px,py]=toPx(shapes[h[0]].vertices[h[1]]);return{x:px,y:py,kind:'vertex'};}}return null;}
+  function inPoly(verts,x,y){let inside=false;for(let i=0,j=verts.length-1;i<verts.length;j=i++){let[xi,yi]=toPx(verts[i]),[xj,yj]=toPx(verts[j]);if(((yi>y)!=(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))inside=!inside;}return inside;}
+  function hoverShape(x,y){for(let i=0;i<shapes.length;i++){let s=shapes[i];if(s.type==='active_zone'&&s.vertices.length>=3&&inPoly(s.vertices,x,y))return i;for(let j=0;j<s.vertices.length-1;j++){let a=toPx(s.vertices[j]),b=toPx(s.vertices[j+1]);let dx=b[0]-a[0],dy=b[1]-a[1],L2=dx*dx+dy*dy||1,t=Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/L2));if(d2(x,y,a[0]+t*dx,a[1]+t*dy)<100)return i;}}return -1;}
+  function finish(){if(mode==='zone'&&draft.length>=3||mode==='line'&&draft.length>=2){shapes.push({type:mode==='zone'?'active_zone':'crossing_line',id:(mode==='zone'?'zone':'line')+shapes.length,vertices:draft});selected=shapes.length-1;draft=[];mode='idle';return post();}draft=[];mode='idle';}
+  function post(){return fetch('/annotations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(shapes)}).then(()=>{try{pollConfig();}catch(e){}});}
+  const evp=e=>{let r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top];};
+  cv.addEventListener('mousemove',e=>{if(!enabled)return;let[x,y]=evp(e);cursor=[x,y];if(drag)shapes[drag[0]].vertices[drag[1]]=nrm(x,y);else if(mode==='idle')hover=hoverShape(x,y);});
+  cv.addEventListener('mouseleave',()=>{cursor=null;});
+  cv.addEventListener('mousedown',e=>{if(!enabled||e.button!==0||mode!=='idle')return;let[x,y]=evp(e);let h=hitVertex(x,y);if(h){drag=h;selected=h[0];}else{let s=hoverShape(x,y);if(s>=0)selected=s;}});
+  window.addEventListener('mouseup',()=>{if(drag){post();drag=null;}});
+  cv.addEventListener('click',e=>{if(!enabled||mode==='idle')return;let[x,y]=evp(e);let sn=snapTarget(x,y);if(sn&&sn.kind==='close'){finish();return;}let p=sn?[sn.x,sn.y]:[x,y];if(draft.length){let[lx,ly]=toPx(draft[draft.length-1]);if(d2(lx,ly,p[0],p[1])<SNAP*SNAP)return;}draft.push(nrm(p[0],p[1]));});
+  cv.addEventListener('dblclick',()=>{if(enabled&&mode!=='idle')finish();});
+  cv.addEventListener('contextmenu',e=>{e.preventDefault();if(enabled&&mode!=='idle')finish();});
+  window.addEventListener('keydown',e=>{if(!enabled)return;let tg=(e.target.tagName||'').toUpperCase();if(tg==='INPUT'||tg==='SELECT'||tg==='TEXTAREA')return;if(e.key==='Enter'&&mode!=='idle')finish();else if(e.key==='Escape'){draft=[];mode='idle';}else if(e.key==='Backspace'&&draft.length){draft.pop();e.preventDefault();}else if(e.key==='f'||e.key==='F'){if(mode==='line'&&draft.length>=2)draft.reverse();else if(selected>=0&&shapes[selected].type==='crossing_line'){shapes[selected].vertices.reverse();post();}}else if(e.key==='z')mode='zone',draft=[];else if(e.key==='l')mode='line',draft=[];});
+  function arrow(x,y,nx,ny,len,col){let ex=x+nx*len,ey=y+ny*len,a=Math.atan2(ey-y,ex-x),h=6;ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(ex,ey);ctx.stroke();ctx.beginPath();ctx.moveTo(ex,ey);ctx.lineTo(ex-h*Math.cos(a-0.5),ey-h*Math.sin(a-0.5));ctx.lineTo(ex-h*Math.cos(a+0.5),ey-h*Math.sin(a+0.5));ctx.closePath();ctx.fill();}
+  function direction(a,b){let[nx,ny]=unitN(a,b),band=22;ctx.fillStyle='rgba(63,185,80,0.16)';ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.lineTo(b[0]+nx*band,b[1]+ny*band);ctx.lineTo(a[0]+nx*band,a[1]+ny*band);ctx.closePath();ctx.fill();let L=Math.hypot(b[0]-a[0],b[1]-a[1]),n=Math.max(1,Math.floor(L/80));for(let i=1;i<=n;i++){let t=i/(n+1);arrow(a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,nx,ny,18,POS);}}
+  function tag(txt,x,y,col){ctx.font='12px system-ui';let w=ctx.measureText(txt).width;x=Math.min(Math.max(x,2),cv.width-w-8);y=Math.min(Math.max(y,14),cv.height-4);ctx.fillStyle='rgba(13,17,23,0.85)';ctx.fillRect(x-4,y-13,w+8,17);ctx.strokeStyle=col;ctx.lineWidth=1;ctx.strokeRect(x-4,y-13,w+8,17);ctx.fillStyle=col;ctx.fillText(txt,x,y);}
+  function handles(pts,col){pts.forEach(p=>{ctx.fillStyle='#0d1117';ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fill();ctx.stroke();});}
+  function plusMinus(pts){let j=pts.length>2?Math.floor(pts.length/2)-1:0,a=pts[j],b=pts[j+1];let mx=(a[0]+b[0])/2,my=(a[1]+b[1])/2,[nx,ny]=unitN(a,b),d=20;tag('+',mx+nx*d,my+ny*d,POS);tag('−',mx-nx*d,my-ny*d,NEG);}
+  function loupe(x,y){if(!img.naturalWidth)return;const R=52,z=4,half=R/z;const sx=img.naturalWidth/cv.width,sy=img.naturalHeight/cv.height,cx=cv.width-R-14,cy=R+14;ctx.save();ctx.imageSmoothingEnabled=false;ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.clip();ctx.drawImage(img,(x-half)*sx,(y-half)*sy,2*half*sx,2*half*sy,cx-R,cy-R,2*R,2*R);ctx.restore();ctx.strokeStyle=CUR;ctx.lineWidth=2;ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.stroke();ctx.strokeStyle=SNAPC;ctx.beginPath();ctx.moveTo(cx-9,cy);ctx.lineTo(cx+9,cy);ctx.moveTo(cx,cy-9);ctx.lineTo(cx,cy+9);ctx.stroke();}
+  function draw(){if(!cv.width)return;dash=(dash+0.5)%17;ctx.clearRect(0,0,cv.width,cv.height);
+    shapes.forEach((s,si)=>{let pts=s.vertices.map(toPx),sel=si===selected,hov=si===hover;let col=sel?SC:(s.type==='active_zone'?ZC:LC);ctx.shadowColor=col;ctx.shadowBlur=sel?12:0;
+      if(s.type==='active_zone'){ctx.fillStyle=col+(hov?'33':'22');ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.fill();ctx.strokeStyle=col;ctx.lineWidth=sel?3:2;ctx.setLineDash(sel?[10,7]:[]);ctx.lineDashOffset=-dash;ctx.stroke();ctx.setLineDash([]);}
+      else{ctx.shadowBlur=0;for(let j=0;j<pts.length-1;j++)direction(pts[j],pts[j+1]);ctx.shadowBlur=sel?12:0;ctx.strokeStyle=col;ctx.lineWidth=sel?3:2;ctx.setLineDash(sel?[10,7]:[]);ctx.lineDashOffset=-dash;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();ctx.setLineDash([]);ctx.shadowBlur=0;plusMinus(pts);}
+      ctx.shadowBlur=0;handles(pts,col);tag(s.id,pts[0][0]+8,pts[0][1]-6,col);});
+    if(draft.length){let pts=draft.map(toPx),col=mode==='zone'?ZC:LC;
+      if(mode==='zone'){if(cursor&&pts.length>=2){ctx.fillStyle=col+'22';ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.lineTo(...cursor);ctx.closePath();ctx.fill();}ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();if(cursor){ctx.setLineDash([8,6]);ctx.beginPath();ctx.moveTo(...pts[pts.length-1]);ctx.lineTo(...cursor);ctx.stroke();if(pts.length>=2){ctx.beginPath();ctx.moveTo(...cursor);ctx.lineTo(...pts[0]);ctx.stroke();}ctx.setLineDash([]);}if(pts.length>=3){ctx.strokeStyle=SNAPC;ctx.lineWidth=2;ctx.beginPath();ctx.arc(pts[0][0],pts[0][1],9,0,7);ctx.stroke();}}
+      else{for(let j=0;j<pts.length-1;j++)direction(pts[j],pts[j+1]);ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();if(cursor){direction(pts[pts.length-1],cursor);ctx.setLineDash([8,6]);ctx.strokeStyle=col;ctx.beginPath();ctx.moveTo(...pts[pts.length-1]);ctx.lineTo(...cursor);ctx.stroke();ctx.setLineDash([]);let dx=cursor[0]-pts[pts.length-1][0],dy=cursor[1]-pts[pts.length-1][1];tag(Math.round(Math.hypot(dx,dy))+'px  '+Math.round(-Math.atan2(dy,dx)*180/Math.PI)+'°',cursor[0]+14,cursor[1]-12,col);}}
+      pts.forEach(p=>{ctx.fillStyle=col;ctx.fillRect(p[0]-4,p[1]-4,8,8);});}
+    if(cursor){let[x,y]=cursor;if(mode!=='idle'){ctx.strokeStyle='rgba(230,237,243,0.30)';ctx.lineWidth=1;ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(cv.width,y);ctx.moveTo(x,0);ctx.lineTo(x,cv.height);ctx.stroke();ctx.setLineDash([]);ctx.strokeStyle=CUR;ctx.lineWidth=1;ctx.beginPath();ctx.arc(x,y,6,0,7);ctx.stroke();tag(Math.round(x)+','+Math.round(y)+'  ('+(x/cv.width).toFixed(3)+', '+(y/cv.height).toFixed(3)+')',x+14,y+20,CUR);}let sn=snapTarget(x,y);if(sn){ctx.strokeStyle=SNAPC;ctx.lineWidth=2;ctx.beginPath();ctx.arc(sn.x,sn.y,10,0,7);ctx.stroke();if(sn.kind==='close')tag('click to close',sn.x+14,sn.y-10,SNAPC);}if(mode!=='idle'||drag)loupe(x,y);}}
+  function loop(){if(enabled&&cv.width)draw();else ctx.clearRect(0,0,cv.width,cv.height);requestAnimationFrame(loop);}
+  requestAnimationFrame(loop);
+  fetch('/annotations').then(r=>r.json()).then(a=>{shapes=(a||[]).map(s=>({type:s.type,id:s.id,vertices:s.vertices}));}).catch(()=>{});
+  window.setDrawEnabled=on=>{enabled=on;cv.style.pointerEvents=on?'auto':'none';if(!on){mode='idle';draft=[];}let t=document.querySelector('.drawbar button[data-tog]');if(t)t.classList.toggle('on',on);};
+  window.toggleDraw=()=>window.setDrawEnabled(!enabled);
+  window.drawTool=t=>{window.setDrawEnabled(true);mode=t;draft=[];};
+  window.drawFinish=()=>finish();
+  window.drawClear=()=>{shapes=[];draft=[];mode='idle';selected=-1;post();};
+  window.drawSave=()=>fetch('/annotations/save',{method:'POST'}).then(()=>toast('annotations saved to disk'));
+})();
 
 /* ---------------- suggestions ---------------- */
 const SUGG=["find the cars and highlight the busiest lane with a heatmap",
