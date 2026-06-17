@@ -477,13 +477,13 @@ def _draw_temple_arms(ctx, f, quad, color):
     TL, TR, BR, BL = [np.array(p, float) for p in quad]
     ex, ey = _frame_axes(f)
     ec = f.eyes_center
-    # connect at the outer edge around EYE level (where real hinges sit), tucked a
-    # touch INWARD so the frame rim covers the join (drawn before the front).
-    tuck = f.eye_dist * 0.05
-    hinges = [TL * 0.55 + BL * 0.45 + ex * tuck,        # left: outer edge, eye level
-              TR * 0.55 + BR * 0.45 - ex * tuck]        # right
-    ears = [ec - ex * (f.face_w * 0.52) + ey * (f.eye_dist * 0.06),   # face-edge, ear height
-            ec + ex * (f.face_w * 0.52) + ey * (f.eye_dist * 0.06)]
+    # connect near the TOP-outer corner of the frame, tucked well INWARD so the rim
+    # covers the flat hinge end (arms are drawn BEFORE the front) — no visible stub.
+    tuck = f.eye_dist * 0.11
+    hinges = [TL * 0.72 + BL * 0.28 + ex * tuck,        # left: top-outer corner
+              TR * 0.72 + BR * 0.28 - ex * tuck]        # right
+    ears = [ec - ex * (f.face_w * 0.52) + ey * (f.eye_dist * 0.05),   # face-edge, ear height
+            ec + ex * (f.face_w * 0.52) + ey * (f.eye_dist * 0.05)]
     th = max(3, int(f.eye_dist * 0.11))
     hi = tuple(min(255, c + 50) for c in color)
     dk = tuple(max(0, c - 30) for c in color)
