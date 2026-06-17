@@ -428,7 +428,11 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     # ---------- the agent stream ----------
     @app.get("/agent/mode")
     def agent_mode():
+        from .live import LIVE_MODEL
+        from .live_openai import OPENAI_REALTIME_MODEL
         return {"mode": agent.mode(), "has_key": _HAS_KEY,
+                "has_openai": bool(os.environ.get("OPENAI_API_KEY")),
+                "live_models": {"gemini": LIVE_MODEL, "openai": OPENAI_REALTIME_MODEL},
                 "simulation": settings.simulation}
 
     @app.post("/agent/chat")
@@ -475,14 +479,25 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     @app.websocket("/ws/live")
     async def ws_live(ws: WebSocket):
         await ws.accept()
-        if not _HAS_KEY:
-            await ws.send_text(json.dumps({"type": "error",
-                "message": "live voice needs a Gemini API key (GEMINI_API_KEY)"}))
-            await ws.close()
-            return
-        from .live import LiveBridge
+        backend = (ws.query_params.get("backend") or "gemini").lower()
+        if backend == "openai":
+            if not os.environ.get("OPENAI_API_KEY"):
+                await ws.send_text(json.dumps({"type": "error",
+                    "message": "OpenAI Realtime needs OPENAI_API_KEY"}))
+                await ws.close()
+                return
+            from .live_openai import OpenAIRealtimeBridge
+            bridge = OpenAIRealtimeBridge(settings)
+        else:
+            if not _HAS_KEY:
+                await ws.send_text(json.dumps({"type": "error",
+                    "message": "live voice needs a Gemini API key (GEMINI_API_KEY)"}))
+                await ws.close()
+                return
+            from .live import LiveBridge
+            bridge = LiveBridge(settings)
         try:
-            await LiveBridge(settings).run(ws)
+            await bridge.run(ws)
         except WebSocketDisconnect:
             pass
         except Exception as e:

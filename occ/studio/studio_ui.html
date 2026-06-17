@@ -83,6 +83,9 @@
   .voicebar button:hover{border-color:#3a4658}
   .voicebar button.on{border-color:var(--accent);color:var(--accent);background:rgba(63,185,80,.12)}
   .voicebar #vstop{border-color:#3a2530;color:var(--danger)}
+  .voicebar #vbackend{background:#141c29;border:1px solid var(--line);color:var(--fg);
+    border-radius:7px;padding:5px 8px;font-size:12px;cursor:pointer}
+  .voicebar #vbackend:hover{border-color:#3a4658}
   .vdot{width:9px;height:9px;border-radius:50%;background:#3a4658;display:inline-block;margin:0 2px}
   .vdot.live{background:var(--danger);box-shadow:0 0 0 0 rgba(248,81,73,.6);animation:vpulse 1.4s infinite}
   .vdot.speaking{background:var(--cyan);box-shadow:0 0 0 0 rgba(54,215,224,.6);animation:vpulse 1s infinite}
@@ -352,6 +355,10 @@
           <button id=vcam onclick="vToggle('cam')" title="run overlays on your camera">📷 Camera</button>
           <button id=vscr onclick="vToggle('screen')" title="share + analyze your screen">🖥 Screen</button>
           <button id=vdetect onclick="vToggleDetect()" title="object detection · tracking · occupancy (off when live)">🔎 Detection</button>
+          <select id=vbackend onchange="vSetBackend(this.value)" title="Live Voice model — OpenAI is strongest at Haitian Creole / non-English accents">
+            <option value=gemini>🜂 Gemini Live</option>
+            <option value=openai>🗣 OpenAI Realtime · Creole</option>
+          </select>
           <span id=vdot class=vdot></span><span id=vstatus class=muted>tap Mic to talk</span>
           <span style=flex:1></span>
           <button id=vstop onclick="vStop()">⏹ End</button>
@@ -665,7 +672,11 @@ async function pollStats(){try{let s=await(await fetch('/stats')).json();
   setTimeout(pollStats,600);}
 async function pollMode(){try{let m=await(await fetch('/agent/mode')).json();
   $('mode').className='pill '+(m.mode==='adk'?'adk':'sim');
-  $('mode').innerHTML='mode <b>'+(m.mode==='adk'?'ADK · Gemini':'sim ($0)')+'</b>';}catch(e){}}
+  $('mode').innerHTML='mode <b>'+(m.mode==='adk'?'ADK · Gemini':'sim ($0)')+'</b>';
+  const sel=$('vbackend');if(sel){const oa=sel.querySelector('option[value=openai]');
+    if(oa){oa.disabled=!m.has_openai;
+      oa.textContent=m.has_openai?'🗣 OpenAI Realtime · Creole':'🗣 OpenAI (add OPENAI_API_KEY)';}}
+  }catch(e){}}
 async function pollConfig(){try{let c=await(await fetch('/config')).json();
   let det=c['detector.backend']==='owlv2'?('owlv2: '+(c['detector.owlv2_prompt']||'')):
     (c['detector.backend']+' '+(c['detector.model']||''));
@@ -807,8 +818,14 @@ window.setTask=async(t)=>{await fetch('/config',{method:'POST',headers:{'Content
 
 /* ---------------- BIDI Live Voice (Gemini Live + tools + overlays on YOU) ---------------- */
 const VOICE={live:null,cam:null,actx:null,pctx:null,worklet:null,micStream:null,
-  vidStream:null,vidTimer:null,playHead:0,srcs:new Set(),botMsg:null,
-  on:{mic:false,cam:false,screen:false}};
+  vidStream:null,vidTimer:null,playHead:0,srcs:new Set(),botMsg:null,userMsg:null,
+  backend:'gemini',on:{mic:false,cam:false,screen:false}};
+function vSetBackend(be){
+  VOICE.backend=be;
+  toast(be==='openai'?'Live Voice → OpenAI Realtime (Creole-strong)':'Live Voice → Gemini Live');
+  // reconnect on the new backend if a session is live
+  if(VOICE.live){try{VOICE.live.close();}catch(e){}VOICE.live=null;
+    if(VOICE.on.mic||VOICE.on.cam||VOICE.on.screen)vEnsureLive().then(()=>vStatus('listening…','live'));}}
 function vStatus(t,dot){$('vstatus').textContent=t;$('vdot').className='vdot'+(dot?' '+dot:'');}
 function b64FromBuf(buf){const b=new Uint8Array(buf);let s='';const C=0x8000;
   for(let i=0;i<b.length;i+=C)s+=String.fromCharCode.apply(null,b.subarray(i,i+C));return btoa(s);}
@@ -819,7 +836,8 @@ function vEnsureLive(){
   if(VOICE.live&&VOICE.live.readyState<=1)return Promise.resolve(VOICE.live);
   return new Promise((resolve,reject)=>{
     const proto=location.protocol==='https:'?'wss:':'ws:';
-    const ws=new WebSocket(proto+'//'+location.host+'/ws/live');VOICE.live=ws;
+    const be=(VOICE.backend||'gemini');
+    const ws=new WebSocket(proto+'//'+location.host+'/ws/live?backend='+be);VOICE.live=ws;
     ws.onopen=()=>resolve(ws);
     ws.onmessage=(e)=>{try{vOnLive(JSON.parse(e.data));}catch(err){}};
     ws.onclose=()=>{if(VOICE.on.mic)vStatus('disconnected');};

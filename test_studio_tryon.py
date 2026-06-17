@@ -182,6 +182,40 @@ def offline():
     check("BIDI user transcript not doubled", user_txt == "put on the aviators",
           repr(user_txt))
 
+    # --- OpenAI Realtime backend (the Creole-strong Live Voice) — offline logic ---
+    from occ.studio import live_openai as LO
+    sch = LO.tools_payload()
+    check("OpenAI tool schemas built for every tool", len(sch) == len(T.ALL_TOOLS)
+          and all(s.get("name") and s["parameters"]["type"] == "object" for s in sch),
+          f"{len(sch)} schemas")
+    # event translation + de-dup (deltas then the .done aggregate → ONE bubble)
+    acc = {"user": "", "model": ""}
+    fr = []
+    for ev in [{"type": "response.output_audio_transcript.delta", "delta": "Bonjou"},
+               {"type": "response.output_audio_transcript.delta", "delta": " zanmi"},
+               {"type": "response.output_audio_transcript.done", "transcript": "Bonjou zanmi"},
+               {"type": "response.output_audio.delta", "delta": "QUJD"},
+               {"type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "mete linèt yo"},
+               {"type": "response.done", "response": {"output": [{"type": "message"}]}}]:
+        fr += LO.event_to_frames(ev, acc)
+    mtxt = "".join(f["text"] for f in fr if f.get("type") == "transcript" and f["role"] == "model")
+    utxt = "".join(f["text"] for f in fr if f.get("type") == "transcript" and f["role"] == "user")
+    check("OpenAI model transcript not doubled", mtxt == "Bonjou zanmi", repr(mtxt))
+    check("OpenAI Creole user transcript flows", utxt == "mete linèt yo", repr(utxt))
+    check("OpenAI audio + turn_complete emitted",
+          sum(1 for f in fr if f["type"] == "audio") == 1
+          and sum(1 for f in fr if f["type"] == "turn_complete") == 1)
+    # a tool-only response.done is intermediate → must NOT close the turn
+    tool_only = LO.event_to_frames(
+        {"type": "response.done", "response": {"output": [{"type": "function_call"}]}},
+        {"user": "", "model": ""})
+    check("OpenAI tool-only turn stays open (no premature turn_complete)",
+          not any(f["type"] == "turn_complete" for f in tool_only))
+    # 16k browser mic → 24k OpenAI input
+    out = LO.resample_pcm16(bytes(1600 * 2), 16000, 24000)
+    check("OpenAI 16k→24k resample", len(out) // 2 == 2400, f"{len(out)//2} samples")
+
 
 # ----------------------------- ONLINE -----------------------------
 def _get(path):
@@ -250,6 +284,31 @@ def online():
     else:
         check("live pipeline frame grab", False, "no frame")
 
+    # OpenAI Realtime LIVE turn — opt-in (bills OpenAI), so off by default.
+    # STUDIO_TEST_OPENAI=1 .venv/bin/python test_studio_tryon.py
+    if os.environ.get("STUDIO_TEST_OPENAI") == "1" and _get("/agent/mode").get("has_openai"):
+        async def creole_turn():
+            uri = STUDIO_URL.replace("http", "ws") + "/ws/live?backend=openai"
+            async with websockets.connect(uri, max_size=None) as ws:
+                await asyncio.sleep(0.3)
+                await ws.send(json.dumps({"type": "text",
+                    "text": "Pale Kreyòl. Di m yon ti bonjou kout epi mete yon mask ninja."}))
+                model, audio, tools, t0 = [], 0, [], time.time()
+                while time.time() - t0 < 35:
+                    m = json.loads(await asyncio.wait_for(ws.recv(), timeout=35))
+                    if m.get("type") == "transcript" and m["role"] == "model":
+                        model.append(m["text"])
+                    elif m.get("type") == "audio":
+                        audio += 1
+                    elif m.get("type") == "tool":
+                        tools.append(m.get("data", {}).get("name"))
+                    elif m.get("type") == "turn_complete" and audio:
+                        break
+                return "".join(model), audio, tools
+        txt, audio, tools = asyncio.get_event_loop().run_until_complete(creole_turn())
+        check("OpenAI Realtime live: spoke + tool-called", audio > 0 and "apply_face_filter" in tools,
+              f"{audio} audio, tools={tools}, said={txt[:60]!r}")
+
 
 def ui():
     try:
@@ -293,6 +352,10 @@ def ui():
         pg.click("#tgl-max"); pg.wait_for_timeout(450)  # restore
         check("un-maximize restores panels",
               (lambda c: "cl" not in c.split() and "cr" not in c.split())(pg.get_attribute("#grid", "class") or ""))
+        # Live Voice backend selector (Gemini ↔ OpenAI Realtime for Creole)
+        check("voice backend selector present",
+              pg.eval_on_selector_all("#vbackend option", "e=>e.map(o=>o.value).join(',')")
+              == "gemini,openai")
         b.close()
     check("no uncaught JS errors", not errs, "; ".join(errs[:3]))
 
