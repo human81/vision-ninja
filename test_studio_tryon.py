@@ -225,6 +225,34 @@ def offline():
     check("narrate exposes a model arg (Creole TTS)",
           "model" in inspect.signature(T.narrate).parameters)
 
+    # --- gesture browsing logic (deterministic; no camera / mediapipe needed) ---
+    from occ.studio.gestures import GestureBrowser, _HOLD_FRAMES
+    from types import SimpleNamespace as NS
+    def _hand(x, y=0.5):                       # 21 landmarks; only [8]=index tip matters
+        return [NS(x=x, y=y, z=0) for _ in range(21)]
+    gb = GestureBrowser()
+    gb.active = True; gb.store = "eyewear"
+    gb.items = [{"title": f"g{i}", "img": ""} for i in range(10)]
+    gb._drive("Open_Palm", _hand(0.82), 1000, 1000)
+    far_right = gb.idx
+    gb._drive("Open_Palm", _hand(0.18), 1000, 1000)
+    check("gesture: hand position scrubs the carousel", far_right == 9 and gb.idx == 0,
+          f"right={far_right} left={gb.idx}")
+    calls = []
+    gb._select = lambda: calls.append("select")
+    for _ in range(_HOLD_FRAMES + 3):          # fist must HOLD to fire, then latch
+        gb._drive("Closed_Fist", _hand(0.5), 1000, 1000)
+    check("gesture: fist holds then fires try-on exactly once", calls == ["select"], calls)
+    gb._drive("Open_Palm", _hand(0.5), 1000, 1000)  # release
+    gb._cool = 0; gb._switch_store = lambda: calls.append("switch")
+    gb._drive("Victory", _hand(0.5), 1000, 1000)
+    gb._cool = 0; gb._clear = lambda: calls.append("clear")
+    gb._drive("Thumb_Down", _hand(0.5), 1000, 1000)
+    check("gesture: V switches store, thumbs-down clears",
+          calls == ["select", "switch", "clear"], calls)
+    check("gesture_browse tool registered", "gesture_browse" in
+          {f.__name__ for f in T.ALL_TOOLS})
+
 
 # ----------------------------- ONLINE -----------------------------
 def _get(path):
@@ -365,6 +393,7 @@ def ui():
         check("voice backend selector present",
               pg.eval_on_selector_all("#vbackend option", "e=>e.map(o=>o.value).join(',')")
               == "gemini,openai")
+        check("gesture-browse button present", pg.is_visible("#vgest"))
         b.close()
     check("no uncaught JS errors", not errs, "; ".join(errs[:3]))
 

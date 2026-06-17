@@ -59,6 +59,8 @@ class StudioPipeline:
         self._rec_frames = 0
         self._writer = None
         self._detect_on = True             # YOLO detect + track + occupancy; OFF when you go live
+        from .gestures import GestureBrowser
+        self.gestures = GestureBrowser()   # hands-free store browsing (lazy mediapipe)
 
     # ---- annotations ----
     def set_annotations(self, items: list[dict]):
@@ -132,6 +134,16 @@ class StudioPipeline:
         counts, no compute). Returns the new state."""
         self._detect_on = bool(on)
         return self._detect_on
+
+    def set_gesture_browse(self, on=None, store=None) -> dict:
+        """Toggle hands-free gesture browsing of the sponsored stores. When on, a
+        product carousel is drawn on the live video and your hand drives it (move to
+        browse, fist to try on, V to switch store, thumbs-down to clear)."""
+        st = self.gestures.toggle(on=on, store=store)
+        if self.gestures.active:
+            self._detect_on = False          # browsing is a clean-feed experience
+            self.set_render_flags(draw_boxes=False, draw_labels=False, draw_counts=False)
+        return st
 
     def start_camera(self) -> str:
         """Switch the live source to the browser push feed, remembering the prior
@@ -300,6 +312,11 @@ class StudioPipeline:
                 vis = renderer.draw_annotations(vis, ann, geo)
                 if self.overlays:                       # the agent's dynamic overlays
                     self.overlays.run(vis, tracked, geo, n, raw=last_raw, clean=frame)
+                if self.gestures.active:                 # hands-free store browsing
+                    try:
+                        self.gestures.process(vis, frame)
+                    except Exception:
+                        pass
                 vis = renderer.draw_counts(vis, geo)
                 self._record_frame(vis, fps)
                 ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 72])
@@ -411,7 +428,8 @@ class StudioPipeline:
         with self._lock:
             return {**self._stats, "fps": round(self._fps, 1), "status": self._status,
                     "recording": self._rec, "rec_frames": self._rec_frames,
-                    "rec_name": self._rec_name, "detect_on": self._detect_on}
+                    "rec_name": self._rec_name, "detect_on": self._detect_on,
+                    "gesture": self.gestures.state()}
 
     # ---- still-image detection (for analyze_image on a shared photo) ----
     def detect_still(self, frame):

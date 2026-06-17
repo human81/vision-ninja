@@ -355,6 +355,7 @@
           <button id=vcam onclick="vToggle('cam')" title="run overlays on your camera">📷 Camera</button>
           <button id=vscr onclick="vToggle('screen')" title="share + analyze your screen">🖥 Screen</button>
           <button id=vdetect onclick="vToggleDetect()" title="object detection · tracking · occupancy (off when live)">🔎 Detection</button>
+          <button id=vgest onclick="vToggleGestures()" title="browse the store hands-free — move to scroll, fist to try on, V to switch, thumbs-down to clear">🖐 Gestures</button>
           <select id=vbackend onchange="vSetBackend(this.value)" title="Live Voice model — OpenAI is strongest at Haitian Creole / non-English accents">
             <option value=gemini>🜂 Gemini Live</option>
             <option value=openai>🗣 OpenAI Realtime · Creole</option>
@@ -664,6 +665,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>switchTab(b.d
 async function pollStats(){try{let s=await(await fetch('/stats')).json();
   $('fps').textContent=s.fps??'–';$('tracks').textContent=s.tracks??'–';
   if('detect_on' in s){const d=$('vdetect');if(d)d.classList.toggle('on',!!s.detect_on);}
+  if(s.gesture){const g=$('vgest');if(g)g.classList.toggle('on',!!s.gesture.active);}
   $('src').textContent=(s.status||'').startsWith('error')?('⚠ '+s.status.slice(7,46)):
     ((s.status==='running'?'● ':'○ ')+'live');
   let dw=s.dwell||[];
@@ -970,6 +972,16 @@ async function vToggleDetect(){
   $('vdetect').classList.toggle('on',on);
   try{await fetch('/detection',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on})});}catch(e){}
   toast(on?'detection + occupancy ON':'detection + occupancy OFF');
+  pollStats();
+}
+
+/* hands-free gesture browsing — move to scroll · fist to try · V switch · 👎 clear */
+async function vToggleGestures(){
+  const on=!$('vgest').classList.contains('on');
+  $('vgest').classList.toggle('on',on);
+  try{await fetch('/gestures',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on})});}catch(e){}
+  toast(on?'🖐 Gesture browsing ON — move your hand to scroll, fist to try on':'Gesture browsing off');
+  if(on&&NLE.mode!=='voice'){toast('tip: turn on 📷 Camera so it can see your hand');}
   pollStats();
 }
 

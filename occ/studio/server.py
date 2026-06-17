@@ -120,6 +120,14 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         b = await req.json()
         return JSONResponse({"detect_on": pipe.set_detection(bool(b.get("on", True)))})
 
+    @app.post("/gestures")
+    async def gestures_route(req: Request):
+        """Toggle hands-free gesture browsing (UI button; the agent can also do this)."""
+        b = await req.json()
+        on = b.get("on")
+        return JSONResponse(pipe.set_gesture_browse(
+            on=None if on is None else bool(on), store=b.get("store") or None))
+
     @app.post("/filter")
     async def filter_route(req: Request):
         """Apply an AR face filter directly (UI chip; the agent can also do this)."""

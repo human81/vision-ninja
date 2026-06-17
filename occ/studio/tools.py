@@ -283,6 +283,18 @@ def go_live() -> dict:
     return {"status": "success", "cleared": n, "mode": "live", "ui": "overlays"}
 
 
+def gesture_browse(on: bool = True, store: str = "") -> dict:
+    """HANDS-FREE gesture browsing: turn the live video into a shoppable, gesture-
+    controlled store. The user moves their HAND to scroll a product carousel drawn on
+    the video, makes a FIST to try the centred item on (live AR for eyewear), a ✌ V
+    to switch eyewear↔apparel, and 👎 thumbs-down to clear. Use when the user says
+    'let me browse with my hands', 'gesture mode', 'shop with gestures'. store:
+    'eyewear' | 'apparel' (optional)."""
+    st = ctx().pipe.set_gesture_browse(on=bool(on), store=store or None)
+    return {"status": "success", "gesture": st, "mode": "live", "ui": "overlays",
+            "action": "spotlight", "target": "#wrap"}
+
+
 FACE_FILTERS_LIST = ["ninja_mask", "sunglasses", "glasses", "dog", "cat",
                      "mustache", "crown", "clown_nose", "heart_eyes",
                      "face_mesh", "anonymize"]
@@ -1434,7 +1446,7 @@ ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render, set_detection,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays, go_live,
-    apply_face_filter, try_eyewear, set_lens_tint, shop_search, try_product,
+    apply_face_filter, try_eyewear, set_lens_tint, shop_search, try_product, gesture_browse,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, extend_video, narrate, generate_music,
