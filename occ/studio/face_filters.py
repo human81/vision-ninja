@@ -251,17 +251,20 @@ def clean_lenses(rgba, tint=None, opacity=None):
         lh = (holes > 0) & (region > 0)               # this lens's opening (clear lens)
         ys, xs = np.where(lh)
         if len(xs) > 30:
-            # CLEAR lens: fill the EXACT opening shape (the hollow inside the rim) —
-            # NOT its convex hull — so the new lens matches the frame's hole exactly
-            # (no oversize edge / rounded corners poking past the rim). Bridge any
-            # arm that splits the opening (close), then pull in ~1px so it sits just
-            # BEHIND the rim.
-            nz = len(xs)
-            ak = max(7, int(0.16 * np.sqrt(nz)))
-            op = cv2.morphologyEx(lh.astype(np.uint8), cv2.MORPH_CLOSE,
-                                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ak, ak)))
-            op = cv2.erode(op, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
-            im = op > 0
+            # CLEAR lens: fill the EXACT opening shape (the hollow inside the rim),
+            # pulled INSIDE the rim so the lens sits BEHIND the frame — no edge /
+            # rounded corner pokes past it. Only bridge (close) when an arm actually
+            # splits the opening (else closing would oversize a clean opening).
+            nz = len(xs); lhu = lh.astype(np.uint8)
+            ncomp, _ = cv2.connectedComponents(lhu)
+            if ncomp - 1 >= 2:                         # opening split by an arm → bridge it
+                ak = max(7, int(0.16 * np.sqrt(nz)))
+                lhu = cv2.morphologyEx(lhu, cv2.MORPH_CLOSE,
+                                       cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ak, ak)))
+            er = max(3, int(0.05 * np.sqrt(nz)))       # tuck the lens behind the rim
+            im = cv2.erode(lhu, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (er, er))) > 0
+            if not im.any():
+                im = lhu > 0
             sv, ss = np.median(hsv[:, :, 2][lh]), np.median(hsv[:, :, 1][lh])
             samp = np.median(bgr[lh].reshape(-1, 3), 0)
         else:
