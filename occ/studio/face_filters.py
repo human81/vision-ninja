@@ -199,6 +199,42 @@ def _eyes_quad(face, wscale=2.25, hscale=1.0, down=0.08):
             c + half_w + half_h, c - half_w + half_h]
 
 
+def remove_arms(rgba):
+    """Mask a front-on glasses cutout down to JUST the two lens discs + the bridge
+    between them — dropping temple arms/hinge stubs entirely (they look unnatural
+    laid flat across the face). Robust to clear OR sunglasses lenses:
+      fill lens holes → morphological OPEN (thin arms+bridge vanish, lens cores
+      remain) → keep the 2 largest blobs (lenses) → keep = dilated-lenses ∪ the
+      column band between the two lens centres (re-includes the bridge/brow bar,
+      excludes the outer arms)."""
+    a = rgba[:, :, 3]
+    h, w = a.shape
+    binm = (a > 40).astype(np.uint8)
+    ff = binm.copy()
+    cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)   # background → 1
+    filled = (binm | (ff == 0)).astype(np.uint8)                        # + interior holes
+    k = max(9, int(0.22 * h))
+    cores = cv2.morphologyEx(filled, cv2.MORPH_OPEN,
+                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    n, lbl, stats, cent = cv2.connectedComponentsWithStats(cores, 8)
+    if n < 3:
+        return trim_arms(rgba)                       # couldn't split lenses → fall back
+    idx = sorted(range(1, n), key=lambda i: -stats[i, cv2.CC_STAT_AREA])[:2]
+    keepcore = np.isin(lbl, idx).astype(np.uint8)
+    cx = sorted(int(cent[i][0]) for i in idx)
+    dk = max(5, int(0.09 * h))
+    dil = cv2.dilate(keepcore, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dk, dk)))
+    band = np.zeros_like(a); band[:, cx[0]:cx[1] + 1] = 1
+    keep = (dil > 0) | (band > 0)
+    out = rgba.copy()
+    out[:, :, 3] = np.where(keep, a, 0)
+    cols = np.where((out[:, :, 3] > 20).any(0))[0]
+    rows = np.where((out[:, :, 3] > 20).any(1))[0]
+    if len(cols) and len(rows):
+        out = out[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+    return np.ascontiguousarray(out)
+
+
 def trim_arms(rgba):
     """Crop residual temple-arm stubs from a front-on glasses cutout: keep only the
     column range spanned by the TALL lens block (arms are thin strips at the far

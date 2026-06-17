@@ -484,12 +484,12 @@ def _eyewear_asset(image: str):
     raw = _fetch_bytes(image)
     if not raw:
         return None, False
-    from .face_filters import load_eyewear_rgba, glassify, trim_arms
+    from .face_filters import load_eyewear_rgba, glassify, remove_arms
     canon = _canonical_eyewear(raw, image)
     rgba = load_eyewear_rgba(canon or raw)
     if rgba is None:
         return None, False
-    return glassify(trim_arms(rgba)), bool(canon)
+    return glassify(remove_arms(rgba)), bool(canon)
 
 
 def prefetch_eyewear(image: str = "") -> dict:
