@@ -875,7 +875,8 @@ const STORES={
   apparel:{ep:'/garments',key:'garments',defcat:'top',
     cats:[['top','Tops'],['bottom','Bottoms'],['all','All'],['haiti','🇭🇹 Haiti WC']]},
   eyewear:{ep:'/eyewear',key:'eyewear',defcat:'ar',
-    cats:[['ar','✨ Live AR'],['men','Men'],['women','Women'],['all','All']]},
+    cats:[['ar','✨ Live AR'],['aviator','Aviator'],['round','Round'],['wayfarer','Wayfarer'],
+          ['cat-eye','Cat-eye'],['rectangle','Rectangle'],['browline','Browline'],['all','All']]},
 };
 let STORE='apparel',CATALOG={},GCAT='top',EYEMODE='ar';
 async function loadGarments(){ if(!CATALOG.apparel)await loadStore('apparel'); }
@@ -898,7 +899,7 @@ function renderCats(){
 function gSetCat(c){GCAT=c;renderCats();renderItems();}
 function renderItems(){
   const wrap=$('garments'),cat=CATALOG[STORE];if(!wrap||!cat)return;
-  const items=cat.items.map((g,i)=>[g,i]).filter(([g])=>GCAT==='all'||g.cat===GCAT||(GCAT==='ar'&&g.ar)).slice(0,150);
+  const items=cat.items.map((g,i)=>[g,i]).filter(([g])=>GCAT==='all'||g.cat===GCAT||(GCAT==='ar'&&g.ar)||g.shape===GCAT).slice(0,150);
   wrap.innerHTML=items.map(([g,i])=>
     `<div class=gcard onclick="vTryItem(${i})" title="${(g.title||'').replace(/"/g,'&quot;')}${g.price?' · $'+g.price:''}">
        <img loading=lazy src="${g.img}${g.img.includes('?')?'&':'?'}width=180" onerror="this.style.opacity=.2">

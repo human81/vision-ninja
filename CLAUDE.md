@@ -44,6 +44,8 @@ OCC_SOURCE=assets/videos/market-square.mp4 .venv/bin/uvicorn occ.studio.server:a
 # tests
 .venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–5 (the green gate; expect 27/27)
 .venv/bin/python test_proto_roundtrip.py test_phase2.py test_phase3.py test_phase4.py test_e2e_web.py
+# AR try-on / face-filter / stylist regression (offline always; +endpoints/WS/UI if studio up)
+.venv/bin/python test_studio_tryon.py            # 49/49; STUDIO_URL=http://127.0.0.1:8011 for online+UI
 ```
 
 After any change, run `fishfood.py` and expect **ALL PASS — 27/27**. It also writes

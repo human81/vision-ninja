@@ -323,10 +323,31 @@ import json as _json
 import re as _re
 
 _EYEWEAR_WORDS = ("glass", "sunglass", "shade", "frame", "eyewear", "aviator",
-                  "optical", "specs", "spectacle", "lens", "wayfarer", "cat-eye")
+                  "optical", "specs", "spectacle", "lens", "wayfarer", "cat-eye",
+                  "cateye", "browline", "clubmaster", "rimless")
 _APPAREL_WORDS = ("polo", "shirt", "tee", "t-shirt", "tshirt", "jersey", "jacket",
                   "coat", "dress", "pant", "jean", "chino", "sweater", "hoodie",
                   "knit", "garment", "outfit", "blazer", "suit", "wear", "top")
+
+# spoken shape -> canonical frame-shape tag (set on eyewear.json by the vision tagger)
+_SHAPE_SYNS = {
+    "aviator": "aviator", "pilot": "aviator", "teardrop": "aviator",
+    "round": "round", "circular": "round", "circle": "round",
+    "rectangle": "rectangle", "rectangular": "rectangle",
+    "square": "square", "cat-eye": "cat-eye", "cateye": "cat-eye", "cat eye": "cat-eye",
+    "oval": "oval", "wayfarer": "wayfarer", "browline": "browline", "clubmaster": "browline",
+    "geometric": "geometric", "hexagonal": "hexagonal", "hexagon": "hexagonal",
+    "sport": "sport", "sporty": "sport", "wrap": "sport", "wraparound": "sport",
+    "rimless": "rimless", "oversized": "oversized", "oversize": "oversized",
+}
+
+
+def _query_shape(query: str):
+    q = query.lower()
+    for word, tag in _SHAPE_SYNS.items():
+        if word in q:
+            return tag
+    return None
 
 
 @functools.lru_cache(maxsize=1)
@@ -348,7 +369,7 @@ def _load_catalogs():
 
 def _guess_store(query: str):
     q = query.lower()
-    if any(w in q for w in _EYEWEAR_WORDS):
+    if _query_shape(query) or any(w in q for w in _EYEWEAR_WORDS):
         return "eyewear"
     if any(w in q for w in _APPAREL_WORDS):
         return "apparel"
@@ -357,14 +378,20 @@ def _guess_store(query: str):
 
 def _search_catalog(query: str, store: str | None = None, limit: int = 8):
     toks = [t for t in _re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 1]
+    want_shape = _query_shape(query)         # shape-accurate eyewear search
     cats = _load_catalogs()
     pool = cats.get(store, []) if store else (cats["apparel"] + cats["eyewear"])
     scored = []
     for it in pool:
         title = (it.get("title", "") or "").lower()
         hay = " ".join(str(it.get(k, "")) for k in
-                       ("title", "brand", "type", "store", "gender")).lower()
+                       ("title", "brand", "type", "store", "gender", "shape")).lower()
         score = sum(hay.count(t) for t in toks) + 2 * sum(1 for t in toks if t in title)
+        if want_shape:
+            if it.get("shape") == want_shape:
+                score += 6                   # strong boost for the exact frame shape
+            elif it.get("store") == "eyewear" and it.get("shape"):
+                score -= 1                   # demote other eyewear shapes
         if score > 0:
             scored.append((score, it))
     scored.sort(key=lambda x: -x[0])
