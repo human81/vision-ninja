@@ -441,7 +441,7 @@ def try_product(query: str = "", image: str = "") -> dict:
 
 
 _CANON_DIR = "out/studio/cache/eyewear_canon"
-_CANON_VER = "v2-noarms"          # bump to invalidate cached renders when the prompt changes
+_CANON_VER = "v3-nanofix"         # bump to invalidate cached renders when the pipeline changes
 _CANON_PROMPT = (
     "Show ONLY the FRONT of these eyeglasses — the two lens rims joined by the nose "
     "bridge (and the brow bar if it has one), matching their exact colour, pattern "
@@ -450,12 +450,30 @@ _CANON_PROMPT = (
     "lenses equal, lenses transparent (see-through) unless they are sunglasses, "
     "sharp even studio lighting, on a PURE WHITE seamless background, centered, the "
     "frame front filling ~85% of the width. No face, no arms, no shadow, no text.")
+# final nano-banana correction pass — polish the OpenCV-armless front into a clean,
+# symmetric, flawless asset just before it becomes the live-AR overlay.
+_CORRECT_PROMPT = (
+    "Polish this into a FLAWLESS front-on eyeglasses product image: perfectly "
+    "symmetric lens rims joined by the nose bridge (and brow bar if present), smooth "
+    "clean frame edges, absolutely NO temple arms or hinges, no rough or cut edges, "
+    "lenses transparent and see-through unless they are sunglasses. Keep the EXACT "
+    "frame colour, pattern and shape. PURE WHITE seamless background, centered. No "
+    "face, no arms, no text.")
+
+
+def _flatten_white_jpg(rgba) -> bytes:
+    bgr = rgba[:, :, :3].copy()
+    bgr[rgba[:, :, 3] < 128] = (255, 255, 255)
+    return cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()
 
 
 def _canonical_eyewear(raw: bytes, url: str):
-    """Use the image model to render a canonical FRONT-ON version of the frames
-    (fixes odd product-shot angles so the AR warp sits right). Cached by URL on
-    disk so it's generated ONCE per product. Returns png bytes or None."""
+    """Render a canonical, ARMLESS, polished FRONT-ON version of the frames so the AR
+    warp sits right. Three layers, cached by URL on disk (generated ONCE per product):
+      1) image model → front-on render,
+      2) OpenCV remove_arms → drop temple arms/hinges,
+      3) nano-banana correction pass → polish into a flawless clean asset.
+    Returns png bytes or None."""
     import hashlib
     os.makedirs(_CANON_DIR, exist_ok=True)
     key = hashlib.md5(((url or "") + "|" + _CANON_VER).encode()).hexdigest()
@@ -465,15 +483,24 @@ def _canonical_eyewear(raw: bytes, url: str):
     if not _has_key():
         return None
     from . import genmedia
+    from .face_filters import load_eyewear_rgba, remove_arms
+    model = ctx().settings.model_for("image_edit")
     try:
-        out, _, _ = genmedia.edit_image([raw], _CANON_PROMPT,
-                                        model=ctx().settings.model_for("image_edit"))
+        p1, _, _ = genmedia.edit_image([raw], _CANON_PROMPT, model=model)   # 1) front-on
     except Exception:
         return None
-    if out:
-        open(cache, "wb").write(out)
-        ctx().ledger.record("agent_brain", model=ctx().settings.model_for("image_edit"),
-                            input_tokens=350, output_tokens=1300, label="eyewear_canonical")
+    if not p1:
+        return None
+    try:                                                                    # 2) drop arms
+        armless = remove_arms(load_eyewear_rgba(p1))
+        p2, _, _ = genmedia.edit_image([_flatten_white_jpg(armless)],       # 3) nano polish
+                                       _CORRECT_PROMPT, model=model)
+    except Exception:
+        p2 = None
+    out = p2 or p1
+    open(cache, "wb").write(out)
+    ctx().ledger.record("agent_brain", model=model, input_tokens=700,
+                        output_tokens=2600, label="eyewear_canonical")
     return out
 
 
