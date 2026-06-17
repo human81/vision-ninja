@@ -101,9 +101,12 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         return StreamingResponse(gen(),
                                  media_type="multipart/x-mixed-replace; boundary=frame")
 
+    import secrets
+    boot_id = secrets.token_hex(4)        # changes on every server (re)start
+
     @app.get("/stats")
     def stats():
-        return JSONResponse(pipe.stats())
+        return JSONResponse({**pipe.stats(), "boot": boot_id})
 
     @app.post("/render")
     async def set_render_route(req: Request):

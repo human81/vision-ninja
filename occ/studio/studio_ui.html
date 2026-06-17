@@ -814,7 +814,8 @@ async function vStartVideo(which){
     const vw=v.videoWidth||640,vh=v.videoHeight||360;if(!vw)return;
     const sc=Math.min(1,640/Math.max(vw,vh));cv.width=Math.round(vw*sc);cv.height=Math.round(vh*sc);
     cx.drawImage(v,0,0,cv.width,cv.height);
-    cv.toBlob(b=>{if(b&&cam.readyState===1)b.arrayBuffer().then(ab=>cam.send(ab));},'image/jpeg',0.72);
+    const c=VOICE.cam;   // use the CURRENT socket (the restart-watchdog may have replaced it)
+    cv.toBlob(b=>{if(b&&c&&c.readyState===1)b.arrayBuffer().then(ab=>c.send(ab));},'image/jpeg',0.72);
     if(i%5===0&&VOICE.live&&VOICE.live.readyState===1){
       const data=cv.toDataURL('image/jpeg',0.6).split(',')[1];
       VOICE.live.send(JSON.stringify({type:'video',data}));}
@@ -1197,6 +1198,31 @@ addMsg('bot',"🥷 I'm the Vision Ninja. Tell me a visual outcome — I'll pick 
 pollStats();pollMode();pollConfig();pollOverlays();pollUsage();pollBrain();loadGraph();
 setInterval(pollUsage,1500);setInterval(pollBrain,2500);setInterval(pollConfig,3000);
 setInterval(()=>{if($('pane-graph').classList.contains('active'))drawGraph();},1500);
+
+/* keep the live MJPEG self-healing — a dropped stream or a server RESTART would
+   otherwise freeze the <img> on its last frame forever (it never auto-retries) */
+(function(){
+  const img=$('img'); if(!img) return;
+  let busy=false,lastBoot=null;
+  function reconnect(){ if(busy)return; busy=true;
+    setTimeout(()=>{ if(img.style.display!=='none' && ($('canvasmode').textContent||'live')==='live')
+      img.src='/stream.mjpg?t='+Date.now(); busy=false; }, 500); }
+  img.addEventListener('error',reconnect);
+  img.addEventListener('stalled',reconnect);
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden)reconnect(); });
+  setInterval(async()=>{ try{
+    const s=await(await fetch('/stats')).json();
+    if(lastBoot && s.boot && s.boot!==lastBoot){           // server restarted → re-attach stream + camera
+      reconnect();
+      if(VOICE&&(VOICE.on.cam||VOICE.on.screen)&&VOICE.cam&&VOICE.cam.readyState!==1){
+        try{VOICE.cam.close();}catch(e){}
+        const proto=location.protocol==='https:'?'wss:':'ws:';
+        VOICE.cam=new WebSocket(proto+'//'+location.host+'/ws/cam');VOICE.cam.binaryType='arraybuffer';
+      }
+    }
+    lastBoot=s.boot;
+  }catch(e){} }, 3000);
+})();
 </script>
 </body>
 </html>
