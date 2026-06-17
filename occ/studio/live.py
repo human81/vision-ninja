@@ -167,6 +167,10 @@ class LiveBridge:
         # the browser routes them through the existing handleFrame().
         for fc in event.get_function_calls() or []:
             if fc.name:
+                from .agent import fitting_on
+                f = fitting_on(fc.name)
+                if f:
+                    await self._safe_send(ws, f)
                 await self._safe_send(ws, {"type": "log",
                                            "data": {"text": f"{fc.name} …"}})
         for fr in event.get_function_responses() or []:

@@ -217,7 +217,13 @@ def ui():
         check("12 face-filter chips", pg.eval_on_selector_all("#filterbar button", "e=>e.length") == 12)
         pg.click("#store-eyewear"); pg.wait_for_timeout(1200)
         check("store switch → Ralba sponsor", "Ralba Optical" in (pg.text_content("#sponsor") or ""))
-        check("eyewear AR toggle visible", pg.is_visible("#eyemode"))
+        # one unified glasses try-on with a courteous fitting loader
+        pg.evaluate("()=>vShowFitting('Tailoring your fit','fitting…')")
+        pg.wait_for_timeout(150)
+        check("fitting loader shows", "on" in (pg.get_attribute("#fitloader", "class") or ""))
+        pg.evaluate("()=>vHideFitting()")
+        pg.wait_for_timeout(150)
+        check("fitting loader hides", "on" not in (pg.get_attribute("#fitloader", "class") or ""))
         # showCatalog renders agent results deterministically
         pg.evaluate("""()=>showCatalog({store:'apparel',matches:[
           {title:'POLO Navy',price:'150',img:'x',store:'apparel'},

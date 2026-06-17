@@ -199,9 +199,10 @@ def _eyes_quad(face, wscale=2.25, hscale=1.0, down=0.08):
             c + half_w + half_h, c - half_w + half_h]
 
 
-def _eyewear_quad(face, rgba, wscale=2.15, down=0.26):
-    """Place a REAL product cutout on the eyes, preserving the cutout's own aspect
-    ratio so frames aren't distorted. Seats them on the eye line, following pose."""
+def _eyewear_quad(face, rgba, wscale=2.1, down=0.08):
+    """Place a front-on glasses cutout on the eyes, preserving its aspect ratio so
+    frames aren't distorted. Lenses (~25/75% of a 2.1·IPD-wide asset) land on the
+    pupils; seats on the eye line and follows head roll/yaw."""
     h, w = rgba.shape[:2]
     ex, ey = _frame_axes(face)
     c = face.eyes_center + ey * (face.eye_dist * down)
@@ -209,6 +210,30 @@ def _eyewear_quad(face, rgba, wscale=2.15, down=0.26):
     H = W * (h / max(1, w))
     hw = ex * (W / 2.0); hh = ey * (H / 2.0)
     return [c - hw - hh, c + hw - hh, c + hw + hh, c - hw + hh]
+
+
+def glassify(rgba):
+    """OpenCV realism pass for eyewear: turn an enclosed 'clear lens' (white on the
+    studio backdrop) into SEE-THROUGH glass — eyes show through — with a cool tint
+    and a diagonal sheen. Dark/tinted (sun) lenses are detected and left opaque."""
+    rgba = rgba.copy()
+    bgr = rgba[:, :, :3]; a = rgba[:, :, 3]
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    lens = ((hsv[:, :, 1] < 40) & (hsv[:, :, 2] > 195) & (a > 180)).astype(np.uint8) * 255
+    lens = cv2.morphologyEx(lens, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    lm = lens > 0
+    if not lm.any():
+        return rgba                              # sunglasses / tinted → keep opaque
+    a[lm] = 64                                    # see-through
+    bgr[lm] = (bgr[lm] * 0.35 + np.array([62, 47, 38]) * 0.65).astype(np.uint8)  # cool glass
+    h, w = a.shape                               # diagonal sheen across the lens band
+    yy, xx = np.mgrid[0:h, 0:w]
+    diag = (xx + yy).astype(np.float32); diag /= max(1.0, diag.max())
+    sheen = ((diag > 0.40) & (diag < 0.47)).astype(np.float32)
+    sheen = cv2.GaussianBlur(sheen, (0, 0), max(2, w // 200)) * lm
+    bgr[:] = np.clip(bgr.astype(np.float32) + sheen[..., None] * 230, 0, 255).astype(np.uint8)
+    a[:] = np.clip(a.astype(np.float32) + sheen * 130, 0, 255).astype(np.uint8)
+    return rgba
 
 
 # ---- live eyewear try-on: warp the actual selected product onto the face ----
@@ -265,13 +290,22 @@ def set_current_eyewear(rgba, label=""):
 
 def filter_eyewear(ctx):
     """Real-time try-on of the SELECTED eyewear product (set_current_eyewear) —
-    warped onto each face's eyes with the dense landmarks, following head pose."""
+    warped onto each face's eyes with the dense landmarks, following head pose,
+    with a soft contact shadow on the nose/cheeks for depth (so it reads as WORN,
+    not pasted)."""
     with _EYEWEAR_LOCK:
         rgba = _EYEWEAR["rgba"]
     if rgba is None:
         return
     for f in ctx.faces:
-        ctx.warp(rgba, _eyewear_quad(f, rgba))
+        q = _eyewear_quad(f, rgba)
+        ex, ey = _frame_axes(f)
+        # soft contact shadow: a dark, slightly-down-offset copy of the frame alpha
+        shadow = np.zeros_like(rgba)
+        shadow[:, :, 3] = (rgba[:, :, 3].astype(np.float32) * 0.42).astype(np.uint8)
+        off = ey * (f.eye_dist * 0.06)
+        ctx.warp(shadow, [p + off for p in q])
+        ctx.warp(rgba, q)
 
 
 # ================================ the filters =================================

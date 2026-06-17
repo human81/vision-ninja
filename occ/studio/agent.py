@@ -48,6 +48,10 @@ Operating principles:
   best match and put it on them live (real-time AR for eyewear, generative for
   clothes), or `shop_search(query)` to recommend a few options. ALWAYS mention the
   brand and PRICE, suggest a tasteful alternative, and be a warm, concise salesperson.
+  GLASSES are ONE unified live try-on (try_product/try_eyewear render the frames
+  front-on and fit them to the face — it takes a few seconds while it tailors, and
+  the screen shows a 'tailoring your fit' loader). Say something warm meanwhile,
+  like "let me tailor these to you".
 - Save durable facts to the brain with `remember`. Use ffmpeg tools to export.
 - THE CANVAS: the center area shows EITHER the live feed OR an artifact. When the
   user shares or asks about an image, call `analyze_image` (it ingests a data: URI /
@@ -69,6 +73,21 @@ _COCO = {"person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
          "truck", "boat", "bird", "cat", "dog", "horse", "sheep", "cow",
          "backpack", "umbrella", "handbag", "suitcase", "bottle", "cup",
          "chair", "couch", "tv", "laptop", "cell phone", "book", "clock"}
+
+
+# tools whose work makes the user WAIT (Gemini) → show the courteous fitting loader
+_FITTING_TOOLS = {
+    "try_eyewear": ("Tailoring your fit", "fitting your frames to your face…"),
+    "try_product": ("Finding & tailoring your fit", "one moment…"),
+    "virtual_try_on": ("Styling your look", "dressing you in the look…"),
+}
+
+
+def fitting_on(name: str):
+    if name in _FITTING_TOOLS:
+        t, s = _FITTING_TOOLS[name]
+        return {"type": "fitting", "data": {"on": True, "title": t, "sub": s}}
+    return None
 
 
 # ---------------- NDJSON frame dispatch ----------------
@@ -142,6 +161,8 @@ def frames_for(name: str, res) -> list[dict]:
     if name in ("list_sources", "save_source", "use_source"):
         srcs = ctx().sources.list() if ctx().sources else []
         out.append({"type": "sources", "data": {"items": srcs}})
+    if name in _FITTING_TOOLS:                  # close the fitting loader
+        out.append({"type": "fitting", "data": {"on": False}})
     out.append({"type": "tool", "data": {"name": name, "ok": ok,
                                          "detail": res.get("error", "")}})
     if res.get("ui"):
@@ -579,6 +600,9 @@ class ADKRunner:
                 new_message=new_message,
                 run_config=RunConfig(streaming_mode=StreamingMode.SSE)):
             for fc in event.get_function_calls() or []:
+                f = fitting_on(fc.name)
+                if f:
+                    yield f
                 yield {"type": "log", "data": {"text": f"{fc.name} …"}}
             for fr in event.get_function_responses() or []:
                 for f in frames_for(fr.name, fr.response):

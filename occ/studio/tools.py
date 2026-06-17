@@ -430,8 +430,8 @@ def try_product(query: str = "", image: str = "") -> dict:
         return {"status": "error", "error": f"no product matched '{query}'",
                 "ui": "overlays"}
     best = matches[0]
-    if best["store"] == "eyewear" and best.get("ar"):
-        res = try_eyewear(image=best["img"], label=best["title"])
+    if best["store"] == "eyewear":
+        res = try_eyewear(image=best["img"], label=best["title"])   # one unified glasses try-on
     else:
         res = virtual_try_on(garment=best["img"], which="frame")
     res["product"] = _slim(best)
@@ -440,19 +440,76 @@ def try_product(query: str = "", image: str = "") -> dict:
     return res
 
 
-def try_eyewear(image: str = "", label: str = "") -> dict:
-    """LIVE EYEWEAR TRY-ON (Ralba Optical): warp an actual glasses/sunglasses
-    PRODUCT image onto the person's eyes in the live video, tracked to dense
-    facial landmarks — real-time, follows head pose. `image` = product image URL /
-    path / data URI (a transparent PNG cutout fits best). For a photoreal still
-    instead, use virtual_try_on(garment=<image>, which='frame')."""
+_CANON_DIR = "out/studio/cache/eyewear_canon"
+_CANON_PROMPT = (
+    "Render EXACTLY these eyeglasses as a clean, perfectly SYMMETRICAL FRONT-ON "
+    "product shot: both lenses equal and fully visible, bridge centered, the frame "
+    "front filling ~92% of the image width, temple arms folded flat behind so the "
+    "front is unobstructed and level, lenses transparent (see-through) unless they "
+    "are sunglasses, sharp even studio lighting, on a PURE WHITE seamless "
+    "background. No face, no mannequin, no shadow, no text. Centered.")
+
+
+def _canonical_eyewear(raw: bytes, url: str):
+    """Use the image model to render a canonical FRONT-ON version of the frames
+    (fixes odd product-shot angles so the AR warp sits right). Cached by URL on
+    disk so it's generated ONCE per product. Returns png bytes or None."""
+    import hashlib
+    os.makedirs(_CANON_DIR, exist_ok=True)
+    cache = os.path.join(_CANON_DIR, hashlib.md5((url or "").encode()).hexdigest() + ".png")
+    if os.path.exists(cache) and os.path.getsize(cache) > 1000:
+        return open(cache, "rb").read()
+    if not _has_key():
+        return None
+    from . import genmedia
+    try:
+        out, _, _ = genmedia.edit_image([raw], _CANON_PROMPT,
+                                        model=ctx().settings.model_for("image_edit"))
+    except Exception:
+        return None
+    if out:
+        open(cache, "wb").write(out)
+        ctx().ledger.record("agent_brain", model=ctx().settings.model_for("image_edit"),
+                            input_tokens=350, output_tokens=1300, label="eyewear_canonical")
+    return out
+
+
+def _eyewear_asset(image: str):
+    """(rgba, fitted) — the realistic try-on asset for a product image: a canonical
+    front-on render (generative) refined into see-through glass (OpenCV), with a
+    graceful fallback to the raw cutout if generation is unavailable."""
     raw = _fetch_bytes(image)
     if not raw:
-        return {"status": "error", "error": "could not load eyewear image", "ui": "overlays"}
-    from .face_filters import load_eyewear_rgba, set_current_eyewear
-    rgba = load_eyewear_rgba(raw)
+        return None, False
+    from .face_filters import load_eyewear_rgba, glassify
+    canon = _canonical_eyewear(raw, image)
+    rgba = load_eyewear_rgba(canon or raw)
     if rgba is None:
-        return {"status": "error", "error": "could not decode eyewear image", "ui": "overlays"}
+        return None, False
+    return glassify(rgba), bool(canon)
+
+
+def prefetch_eyewear(image: str = "") -> dict:
+    """Warm the cache: generate + cache a product's canonical render WITHOUT
+    applying it (called on hover so the actual try-on is instant)."""
+    raw = _fetch_bytes(image)
+    if not raw:
+        return {"status": "error"}
+    _canonical_eyewear(raw, image)
+    return {"status": "success"}
+
+
+def try_eyewear(image: str = "", label: str = "") -> dict:
+    """LIVE EYEWEAR TRY-ON (Ralba Optical): put an actual glasses PRODUCT on the
+    person in the live video — real-time, tracked to dense facial landmarks and
+    following head pose. The frames are first rendered FRONT-ON by the image model
+    and refined into realistic see-through glass (so they sit like they're worn,
+    not pasted), then warped live. `image` = product image URL / path / data URI.
+    For a single photoreal still instead, use virtual_try_on(which='frame')."""
+    rgba, fitted = _eyewear_asset(image)
+    if rgba is None:
+        return {"status": "error", "error": "could not load eyewear image", "ui": "overlays"}
+    from .face_filters import set_current_eyewear
     set_current_eyewear(rgba, label or "eyewear")
     try:
         ctx().overlays.clear()
@@ -461,7 +518,8 @@ def try_eyewear(image: str = "", label: str = "") -> dict:
     except Exception as e:
         return {"status": "error", "error": f"{type(e).__name__}: {e}", "ui": "overlays"}
     _meter("overlay", units={"overlay_frames": 1}, label="try_eyewear")
-    return {"status": "success", "name": "eyewear", "label": label, "ui": "overlays"}
+    return {"status": "success", "name": "eyewear", "label": label,
+            "fitted": fitted, "ui": "overlays"}
 
 
 # ---------- perception / the agent's eyes ----------

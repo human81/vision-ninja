@@ -153,6 +153,18 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         return JSONResponse(try_eyewear(image=b.get("image") or b.get("url") or "",
                                         label=b.get("label", "")))
 
+    @app.post("/eyewear/prefetch")
+    async def eyewear_prefetch(req: Request):
+        """Warm the canonical render in the background (called on hover) so the
+        actual try-on is instant. Returns immediately; generation runs in a thread."""
+        import asyncio as _aio
+        from .tools import prefetch_eyewear
+        b = await req.json()
+        img = b.get("image") or b.get("url") or ""
+        if img:
+            _aio.get_event_loop().run_in_executor(None, prefetch_eyewear, img)
+        return JSONResponse({"status": "queued"})
+
     @app.post("/tryon")
     async def tryon_route(req: Request):
         """Garment virtual try-on on the live frame (you). garment = URL / data URI."""
