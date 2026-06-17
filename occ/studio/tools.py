@@ -976,19 +976,31 @@ def emit_proto() -> dict:
 
 
 # ---------- audio (TTS narration; Lyria music gated) ----------
-def narrate(text: str, voice: str = "Puck") -> dict:
-    """Generate spoken NARRATION (Gemini TTS) as a WAV and add it to the library —
-    use it as an audio clip in the NLE timeline. voice: Puck|Charon|Kore|Fenrir|…"""
-    if not _has_key():
-        return {"status": "error", "error": "TTS needs a Gemini key"}
+def narrate(text: str, voice: str = "", model: str = "") -> dict:
+    """Generate spoken NARRATION as a WAV and add it to the library — use it as an
+    audio clip in the NLE timeline. Two TTS engines (provider inferred from model):
+      • Gemini (default) — voices Puck|Charon|Kore|Fenrir|Leda
+      • OpenAI gpt-4o-mini-tts — BEST non-English accents incl. Haitian Creole;
+        voices alloy|ash|ballad|coral|echo|fable|onyx|nova|sage|shimmer
+    For Creole/French narration pass model='gpt-4o-mini-tts'."""
     from . import genmedia
-    wav, err = genmedia.tts(text, voice)
+    model = model or genmedia.TTS_MODEL
+    provider = genmedia.tts_provider(model)
+    if provider == "openai":
+        if not os.environ.get("OPENAI_API_KEY"):
+            return {"status": "error", "error": "OpenAI TTS needs OPENAI_API_KEY"}
+        voice = voice or "alloy"
+    else:
+        if not _has_key():
+            return {"status": "error", "error": "TTS needs a Gemini key"}
+        voice = voice or "Puck"
+    wav, err = genmedia.tts(text, voice, model)
     if not wav:
         return {"status": "error", "error": err}
     os.makedirs("out/studio/exports", exist_ok=True)
     out = f"out/studio/exports/narration_{time.strftime('%H%M%S')}.wav"
     open(out, "wb").write(wav)
-    ctx().ledger.record("agent_brain", model="gemini-2.5-flash-preview-tts",
+    ctx().ledger.record("agent_brain", model=model,
                         input_tokens=len(text) // 4 + 20, output_tokens=200, label="tts")
     if ctx().library:
         ctx().library.add("audio", out, caption=f"narration: {text[:50]}",

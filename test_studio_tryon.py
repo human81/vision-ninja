@@ -17,6 +17,7 @@ import os
 import sys
 import time
 import json
+import inspect
 import urllib.request
 
 import cv2
@@ -215,6 +216,14 @@ def offline():
     # 16k browser mic → 24k OpenAI input
     out = LO.resample_pcm16(bytes(1600 * 2), 16000, 24000)
     check("OpenAI 16k→24k resample", len(out) // 2 == 2400, f"{len(out)//2} samples")
+
+    # --- multilingual narration TTS routing (gpt-4o-mini-tts ↔ Gemini) ---
+    from occ.studio import genmedia as GM
+    check("TTS provider: gpt-* → openai", GM.tts_provider("gpt-4o-mini-tts") == "openai")
+    check("TTS provider: gemini → gemini",
+          GM.tts_provider("gemini-2.5-flash-preview-tts") == "gemini")
+    check("narrate exposes a model arg (Creole TTS)",
+          "model" in inspect.signature(T.narrate).parameters)
 
 
 # ----------------------------- ONLINE -----------------------------

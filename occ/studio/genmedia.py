@@ -16,6 +16,18 @@ VISION_MODEL = "gemini-2.5-flash"
 IMAGE_MODEL = "gemini-2.5-flash-image"      # "nano-banana"
 VEO_MODEL = "veo-3.0-fast-generate-001"
 
+# Narration TTS. Provider is inferred from the model id (gpt-* → OpenAI, else
+# Gemini) — both are multilingual; OpenAI's gpt-4o-mini-tts is the strongest at
+# non-English accents (Haitian Creole). Default via env (a "setting").
+TTS_MODEL = os.environ.get("STUDIO_TTS_MODEL", "gemini-2.5-flash-preview-tts")
+# Default voice per provider (Gemini prebuilt vs OpenAI named voices).
+_OPENAI_VOICES = {"alloy", "ash", "ballad", "coral", "echo", "fable",
+                  "onyx", "nova", "sage", "shimmer"}
+
+
+def tts_provider(model: str) -> str:
+    return "openai" if (model or "").lower().startswith("gpt") else "gemini"
+
 _CLIENT = None
 _CLIENT_LOCK = threading.Lock()
 
@@ -154,9 +166,13 @@ def plan_story(brief: str, n: int = 3, model: str = VISION_MODEL):
         return [], None
 
 
-def tts(text: str, voice: str = "Puck", model: str = "gemini-2.5-flash-preview-tts"):
-    """Text-to-speech. Returns (wav_bytes | None, error). Gemini TTS emits raw
-    16-bit PCM @ 24kHz mono — we wrap it in a WAV container."""
+def tts(text: str, voice: str = "Puck", model: str | None = None):
+    """Text-to-speech → (wav_bytes | None, error). Routes by model id: gpt-* →
+    OpenAI gpt-4o-mini-tts (best non-English accents, incl. Haitian Creole), else
+    Gemini TTS. Both emit/are normalized to WAV. `model` defaults to TTS_MODEL."""
+    model = model or TTS_MODEL
+    if tts_provider(model) == "openai":
+        return _tts_openai(text, voice, model)
     import io
     import wave
     from google.genai import types
@@ -182,6 +198,45 @@ def tts(text: str, voice: str = "Puck", model: str = "gemini-2.5-flash-preview-t
         return buf.getvalue(), ""
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
+
+
+def _tts_openai(text: str, voice: str, model: str = "gpt-4o-mini-tts"):
+    """OpenAI multilingual TTS → (wav_bytes | None, error). Raw HTTPS POST so we
+    add no SDK dependency. We request raw `pcm` (24kHz 16-bit mono) and wrap it in
+    a clean WAV — OpenAI's `wav` format uses a streaming header (unknown length)
+    that strict parsers (ffmpeg in the NLE) mishandle. `voice` falls back to a
+    valid OpenAI voice."""
+    import io
+    import json
+    import urllib.request
+    import wave
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        return None, "OpenAI TTS needs OPENAI_API_KEY"
+    v = voice if voice in _OPENAI_VOICES else "alloy"
+    body = json.dumps({"model": model, "voice": v, "input": text,
+                       "response_format": "pcm"}).encode()
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/audio/speech", data=body,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            pcm = r.read()
+        if not pcm:
+            return None, "no audio returned"
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000)
+            w.writeframes(pcm)
+        return buf.getvalue(), ""
+    except Exception as e:
+        detail = ""
+        if hasattr(e, "read"):
+            try:
+                detail = " " + e.read().decode()[:200]
+            except Exception:
+                pass
+        return None, f"{type(e).__name__}: {e}{detail}"
 
 
 def generate_video(prompt: str, image_jpg: bytes | None = None,
