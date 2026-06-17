@@ -130,6 +130,58 @@ def offline():
         check(f"filter '{name}' draws", (not ov.error) and drew,
               (ov.error or (f"{changed_px}px" + (" (reactive)" if name in REACTIVE else ""))))
 
+    # --- BIDI transcript de-dup (no chat bubbles twice during live voice) ---
+    # Gemini Live streams the transcript as deltas AND re-sends the full aggregate
+    # at turn end; LiveBridge._emit_event must drop that duplicate so the bubble
+    # renders once. Feed synthetic events through it with a fake websocket.
+    import asyncio
+    from types import SimpleNamespace
+    from occ.studio.live import LiveBridge
+
+    class _FakeWS:
+        def __init__(self): self.sent = []
+        async def send_text(self, s): self.sent.append(json.loads(s))
+
+    def _ev(out=None, inp=None, done=False):
+        def _tr(t): return SimpleNamespace(text=t) if t is not None else None
+        return SimpleNamespace(
+            content=None, output_transcription=_tr(out), input_transcription=_tr(inp),
+            get_function_calls=lambda: [], get_function_responses=lambda: [],
+            interrupted=False, turn_complete=done)
+
+    async def _drive(events):
+        br = LiveBridge.__new__(LiveBridge)
+        br._accum = {"user": "", "model": ""}
+        ws = _FakeWS()
+        for e in events:
+            await br._emit_event(ws, e)
+        return ws.sent
+
+    def _run(coro):  # own loop; don't null the global (online() needs get_event_loop)
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    # deltas then a final aggregate that repeats the whole turn
+    frames = _run(_drive([
+        _ev(out="hello there"), _ev(out=" friend."),
+        _ev(out="hello there friend."), _ev(done=True)]))
+    model_txt = "".join(f["text"] for f in frames if f.get("type") == "transcript"
+                        and f.get("role") == "model")
+    check("BIDI model transcript not doubled", model_txt == "hello there friend.",
+          repr(model_txt))
+
+    # user side: deltas + aggregate must also collapse to one
+    frames = _run(_drive([
+        _ev(inp="put on"), _ev(inp=" the aviators"),
+        _ev(inp="put on the aviators"), _ev(done=True)]))
+    user_txt = "".join(f["text"] for f in frames if f.get("type") == "transcript"
+                       and f.get("role") == "user")
+    check("BIDI user transcript not doubled", user_txt == "put on the aviators",
+          repr(user_txt))
+
 
 # ----------------------------- ONLINE -----------------------------
 def _get(path):
@@ -231,6 +283,16 @@ def ui():
         pg.wait_for_timeout(300)
         check("showCatalog renders stylist results",
               pg.eval_on_selector_all("#garments .gcard", "e=>e.length") == 2)
+        # collapsible panels → maximize collapses both side columns so the canvas grows
+        cw0 = pg.eval_on_selector("#col-center", "e=>e.getBoundingClientRect().width")
+        pg.click("#tgl-max"); pg.wait_for_timeout(450)
+        cls = pg.get_attribute("#grid", "class") or ""
+        cw1 = pg.eval_on_selector("#col-center", "e=>e.getBoundingClientRect().width")
+        check("maximize collapses both panels", "cl" in cls.split() and "cr" in cls.split())
+        check("canvas column grows when maximized", cw1 > cw0 + 100, f"{cw0:.0f}→{cw1:.0f}px")
+        pg.click("#tgl-max"); pg.wait_for_timeout(450)  # restore
+        check("un-maximize restores panels",
+              (lambda c: "cl" not in c.split() and "cr" not in c.split())(pg.get_attribute("#grid", "class") or ""))
         b.close()
     check("no uncaught JS errors", not errs, "; ".join(errs[:3]))
 

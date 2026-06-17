@@ -70,6 +70,10 @@ class LiveBridge:
 
         queue = LiveRequestQueue()
         self._queue = queue
+        # per-turn transcript accumulators (user/model). Gemini Live streams the
+        # transcript as deltas AND then re-sends the full aggregate at turn end —
+        # we keep the running text per side to drop that duplicate (see _emit_event).
+        self._accum = {"user": "", "model": ""}
         run_config = RunConfig(
             streaming_mode=StreamingMode.BIDI,
             response_modalities=["AUDIO"],
@@ -139,10 +143,11 @@ class LiveBridge:
 
     async def _emit_event(self, ws, event):
         """Translate one ADK live Event into browser frames."""
-        # 1) model audio (inline pcm 24k) + any text parts (transcript)
+        # 1) model AUDIO (inline pcm 24k). NB: we do NOT emit content.parts text as a
+        # transcript — in AUDIO mode that final aggregate DUPLICATES output_transcription
+        # and shows the bubble twice. The transcript comes solely from (2).
         content = getattr(event, "content", None)
         if content and getattr(content, "parts", None):
-            role = getattr(content, "role", "model") or "model"
             for p in content.parts:
                 inline = getattr(p, "inline_data", None)
                 if inline is not None and getattr(inline, "data", None):
@@ -151,20 +156,30 @@ class LiveBridge:
                         await self._safe_send(ws, {
                             "type": "audio",
                             "data": base64.b64encode(inline.data).decode("ascii")})
-                txt = getattr(p, "text", None)
-                if txt:
-                    await self._safe_send(ws, {
-                        "type": "transcript", "role": role, "text": txt,
-                        "partial": bool(getattr(event, "partial", False))})
 
-        # 2) explicit input/output transcriptions (what each side said)
+        # 2) the spoken transcript — the ONE source per side.
         for attr, role in (("input_transcription", "user"),
                            ("output_transcription", "model")):
             tr = getattr(event, attr, None)
             tx = getattr(tr, "text", None) if tr is not None else None
-            if tx:
-                await self._safe_send(ws, {"type": "transcript", "role": role,
-                                           "text": tx, "partial": False})
+            if not tx:
+                continue
+            acc = self._accum.get(role, "")
+            # The final aggregate re-sends the whole turn — skip it (it equals what
+            # we've already streamed). Cumulative re-sends (each = full-so-far) →
+            # emit only the new tail. Plain deltas → emit and append.
+            if acc and tx == acc:
+                continue
+            if acc and tx.startswith(acc):
+                delta = tx[len(acc):]
+                self._accum[role] = tx
+                if delta:
+                    await self._safe_send(ws, {"type": "transcript", "role": role,
+                                               "text": delta, "partial": False})
+                continue
+            self._accum[role] = acc + tx
+            await self._safe_send(ws, {"type": "transcript", "role": role,
+                                       "text": tx, "partial": False})
 
         # 3) tool calls (spoken request -> studio tool). Reuse the SAME NDJSON
         # vocabulary the text agent emits (log / tool / refresh / canvas / …) so
@@ -187,6 +202,7 @@ class LiveBridge:
         if getattr(event, "interrupted", False):
             await self._safe_send(ws, {"type": "interrupted"})
         if getattr(event, "turn_complete", False):
+            self._accum = {"user": "", "model": ""}
             await self._safe_send(ws, {"type": "turn_complete"})
 
     @staticmethod

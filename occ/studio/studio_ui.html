@@ -19,8 +19,19 @@
   .pill.sim{background:rgba(255,180,0,.14);color:var(--amber)}
   .pill.adk{background:rgba(63,185,80,.16);color:var(--accent)}
   .grid{display:grid;grid-template-columns:370px minmax(0,1fr) 360px;gap:12px;padding:12px;
-        height:calc(100vh - 47px)}
+        height:calc(100vh - 47px);transition:grid-template-columns .26s cubic-bezier(.4,0,.2,1)}
+  /* collapsible side panels → canvas grows. cl=hide left, cr=hide right */
+  .grid.cl{grid-template-columns:0 minmax(0,1fr) 360px}
+  .grid.cr{grid-template-columns:370px minmax(0,1fr) 0}
+  .grid.cl.cr{grid-template-columns:0 minmax(0,1fr) 0}
+  .grid.cl #col-left,.grid.cr #col-right{overflow:hidden;gap:0}
+  .grid.cl #col-left>*,.grid.cr #col-right>*{opacity:0;transition:opacity .12s}
   .col{display:flex;flex-direction:column;gap:12px;min-height:0;min-width:0}
+  /* header toggle chips */
+  .vtog{background:#0e1626;border:1px solid var(--line);color:var(--mut);
+        border-radius:7px;padding:4px 8px;cursor:pointer;font-size:13px;line-height:1}
+  .vtog:hover{color:#cfe6ff;border-color:#2c3c5a}
+  .vtog.on{color:var(--cyan);border-color:var(--cyan)}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
         padding:12px;min-height:0}
   .card.flex{display:flex;flex-direction:column;flex:1;min-height:0}
@@ -276,13 +287,19 @@
   <span class=pill>fps <b id=fps>–</b></span>
   <span class=pill>tracks <b id=tracks>–</b></span>
   <span style=flex:1></span>
+  <span style="display:flex;gap:5px;margin-right:4px">
+    <button class=vtog id=tgl-left title="Hide / show chat panel (left)">◧</button>
+    <button class=vtog id=tgl-right title="Hide / show side panel (right)">◨</button>
+    <button class=vtog id=tgl-max title="Maximize canvas (collapse both panels)">⤢</button>
+    <button class=vtog id=tgl-full title="True full screen">⛶</button>
+  </span>
   <span class=pill>points <b id=pts>0</b> / <span id=ptsbud>100k</span></span>
   <span class=pill>brain $<b id=usd>0</b></span>
 </header>
 
-<div class=grid>
+<div class="grid" id=grid>
   <!-- LEFT: chat -->
-  <div class=col>
+  <div class=col id=col-left>
     <div class="card flex" id=panel-chat>
       <h2>Conversation <span class=muted id=think></span></h2>
       <div id=log></div>
@@ -296,7 +313,7 @@
   </div>
 
   <!-- CENTER: live view + overlays + config -->
-  <div class=col>
+  <div class=col id=col-center>
     <div class="card flex" id=panel-live>
       <h2>Live View / Canvas
         <span id=modeswitch><button data-m=live class=on onclick="nleSetMode('live')">▶ Live</button><button data-m=voice onclick="nleSetMode('voice')">🎙 Live Voice</button><button data-m=edit onclick="nleSetMode('edit')">✂ Edit</button></span>
@@ -414,7 +431,7 @@
   </div>
 
   <!-- RIGHT: meter / brain / graph -->
-  <div class=col>
+  <div class=col id=col-right>
     <div class="card flex" id=panel-right>
       <div class=tabs>
         <button data-tab=meter class=active>Meter</button>
@@ -578,6 +595,29 @@ async function send(text){
 }
 $('send').onclick=()=>send();
 $('msg').addEventListener('keydown',e=>{if(e.key==='Enter')send();});
+
+/* ---------------- collapsible panels → bigger canvas ---------------- */
+function vSyncTog(){const g=$('grid');
+  $('tgl-left').classList.toggle('on',!g.classList.contains('cl'));
+  $('tgl-right').classList.toggle('on',!g.classList.contains('cr'));
+  $('tgl-max').classList.toggle('on',g.classList.contains('cl')&&g.classList.contains('cr'));}
+$('tgl-left').onclick=()=>{$('grid').classList.toggle('cl');vSyncTog();};
+$('tgl-right').onclick=()=>{$('grid').classList.toggle('cr');vSyncTog();};
+$('tgl-max').onclick=()=>{const g=$('grid');
+  const max=!(g.classList.contains('cl')&&g.classList.contains('cr'));
+  g.classList.toggle('cl',max);g.classList.toggle('cr',max);vSyncTog();};
+$('tgl-full').onclick=()=>{const el=$('wrap')||document.documentElement;
+  if(document.fullscreenElement){document.exitFullscreen();}
+  else{(el.requestFullscreen?el.requestFullscreen():el.webkitRequestFullscreen&&el.webkitRequestFullscreen()); }};
+document.addEventListener('fullscreenchange',()=>{
+  $('tgl-full').classList.toggle('on',!!document.fullscreenElement);});
+/* keyboard: [ chat · ] panels · \ maximize · F fullscreen (ignore while typing) */
+window.addEventListener('keydown',e=>{const tg=(e.target.tagName||'').toUpperCase();
+  if(tg==='INPUT'||tg==='SELECT'||tg==='TEXTAREA'||e.metaKey||e.ctrlKey)return;
+  if(e.key==='[')$('tgl-left').click();
+  else if(e.key===']')$('tgl-right').click();
+  else if(e.key==='\\')$('tgl-max').click();});
+vSyncTog();
 
 /* ---------------- agent drives the UI ---------------- */
 function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');
@@ -791,7 +831,7 @@ function vOnLive(m){const t=m.type;
   if(t==='audio'){vPlay(m.data);vStatus('speaking…','speaking');return;}
   if(t==='transcript'){vTranscript(m.role,m.text);return;}
   if(t==='interrupted'){vStopPlayback();return;}
-  if(t==='turn_complete'){VOICE.botMsg=null;if(VOICE.on.mic)vStatus('listening…','live');return;}
+  if(t==='turn_complete'){VOICE.botMsg=null;VOICE.userMsg=null;if(VOICE.on.mic)vStatus('listening…','live');return;}
   if(t==='error'){toast('live: '+(m.message||'error'));vStatus('error');return;}
   if(t==='log'){vStatus('▸ '+((m.data&&m.data.text)||'…'),'live');return;}
   if(t==='tool'){const d=m.data||{};vStatus('▸ '+(d.name||'tool'),'live');
@@ -800,7 +840,12 @@ function vOnLive(m){const t=m.type;
   if(['fitting','catalog','refresh','canvas','ui_action','library','sources','export','timeline','scene'].includes(t)){handleFrame(m);}
 }
 function vTranscript(role,text){if(!text)return;
-  if(role==='user'){addMsg('user','🎙 '+text.replace(/</g,'&lt;'));VOICE.botMsg=null;return;}
+  // transcripts stream as deltas — accumulate each side into ONE bubble per turn
+  if(role==='user'){
+    if(!VOICE.userMsg){VOICE.userMsg=addMsg('user','');VOICE.userMsg._t='🎙 ';}
+    VOICE.userMsg._t+=text;VOICE.userMsg.textContent=VOICE.userMsg._t;
+    VOICE.botMsg=null;$('log').scrollTop=1e9;return;}
+  VOICE.userMsg=null;  // model speaking → user turn is closed
   if(!VOICE.botMsg){VOICE.botMsg=addMsg('bot','');VOICE.botMsg._t='';}
   VOICE.botMsg._t+=text;VOICE.botMsg.textContent=VOICE.botMsg._t;$('log').scrollTop=1e9;}
 
@@ -897,7 +942,7 @@ function vStop(){
   ['mic','cam','screen'].forEach(k=>{VOICE.on[k]=false;$(VBTN[k]).classList.remove('on');});
   vStopVideo();vStopMic();vStopPlayback();
   try{VOICE.live&&VOICE.live.close();}catch(e){}VOICE.live=null;
-  try{VOICE.pctx&&VOICE.pctx.close();}catch(e){}VOICE.pctx=null;VOICE.playHead=0;VOICE.botMsg=null;
+  try{VOICE.pctx&&VOICE.pctx.close();}catch(e){}VOICE.pctx=null;VOICE.playHead=0;VOICE.botMsg=null;VOICE.userMsg=null;
   vStatus('tap Mic to talk');
 }
 
