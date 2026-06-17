@@ -441,24 +441,27 @@ def try_product(query: str = "", image: str = "") -> dict:
 
 
 _CANON_DIR = "out/studio/cache/eyewear_canon"
-_CANON_VER = "v3-nanofix"         # bump to invalidate cached renders when the pipeline changes
+_CANON_VER = "v4-cleanlens"       # bump to invalidate cached renders when the pipeline changes
 _CANON_PROMPT = (
     "Show ONLY the FRONT of these eyeglasses — the two lens rims joined by the nose "
     "bridge (and the brow bar if it has one), matching their exact colour, pattern "
     "and shape. The temple arms / legs MUST be ENTIRELY ABSENT — do not render them "
-    "at all, not even folded or as stubs. Perfectly FRONT-ON and symmetric, both "
-    "lenses equal, lenses transparent (see-through) unless they are sunglasses, "
-    "sharp even studio lighting, on a PURE WHITE seamless background, centered, the "
-    "frame front filling ~85% of the width. No face, no arms, no shadow, no text.")
+    "at all, not even folded, not as stubs, and NOTHING of an arm visible THROUGH or "
+    "BEHIND the lenses. The lenses must be perfectly clean, showing only what is "
+    "behind them. Perfectly FRONT-ON and symmetric, both lenses equal, lenses "
+    "transparent (see-through) unless they are sunglasses, sharp even studio "
+    "lighting, on a PURE WHITE seamless background, centered, the frame front "
+    "filling ~85% of the width. No face, no arms, no shadow, no text.")
 # final nano-banana correction pass — polish the OpenCV-armless front into a clean,
 # symmetric, flawless asset just before it becomes the live-AR overlay.
 _CORRECT_PROMPT = (
     "Polish this into a FLAWLESS front-on eyeglasses product image: perfectly "
     "symmetric lens rims joined by the nose bridge (and brow bar if present), smooth "
-    "clean frame edges, absolutely NO temple arms or hinges, no rough or cut edges, "
-    "lenses transparent and see-through unless they are sunglasses. Keep the EXACT "
-    "frame colour, pattern and shape. PURE WHITE seamless background, centered. No "
-    "face, no arms, no text.")
+    "clean frame edges, absolutely NO temple arms or hinges anywhere, and NOTHING of "
+    "an arm visible THROUGH or BEHIND the lenses — the lenses must be perfectly clean "
+    "and clear. No rough or cut edges. Lenses transparent and see-through unless they "
+    "are sunglasses. Keep the EXACT frame colour, pattern and shape. PURE WHITE "
+    "seamless background, centered. No face, no arms, no text.")
 
 
 def _flatten_white_jpg(rgba) -> bytes:
@@ -511,12 +514,14 @@ def _eyewear_asset(image: str):
     raw = _fetch_bytes(image)
     if not raw:
         return None, False
-    from .face_filters import load_eyewear_rgba, glassify, remove_arms
+    from .face_filters import load_eyewear_rgba, clean_lenses, remove_arms
     canon = _canonical_eyewear(raw, image)
     rgba = load_eyewear_rgba(canon or raw)
     if rgba is None:
         return None, False
-    return glassify(remove_arms(rgba)), bool(canon)
+    # remove_arms drops the OUTER arms; clean_lenses rebuilds each lens interior so
+    # any arm crossing BEHIND/THROUGH the lens is painted over (eye shows clean).
+    return clean_lenses(remove_arms(rgba)), bool(canon)
 
 
 def prefetch_eyewear(image: str = "") -> dict:

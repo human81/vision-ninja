@@ -199,6 +199,57 @@ def _eyes_quad(face, wscale=2.25, hscale=1.0, down=0.08):
             c + half_w + half_h, c - half_w + half_h]
 
 
+def clean_lenses(rgba):
+    """Rebuild each lens INTERIOR as a clean lens — transparent glass (clear frames)
+    or a uniform tint (sunglasses) — which PAINTS OVER any temple arm that crosses
+    the lens in the source render (the in-lens part `remove_arms` can't drop because
+    it lives inside the lens disc, blocking the eye). Preserves the rim and adds a
+    glassy sheen. Falls back to glassify() if the two lenses can't be isolated."""
+    rgba = rgba.copy(); a = rgba[:, :, 3]; bgr = rgba[:, :, :3]; h, w = a.shape
+    binm = (a > 40).astype(np.uint8)
+    ff = binm.copy()
+    cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)
+    filled = (binm | (ff == 0)).astype(np.uint8)
+    k = max(9, int(0.20 * h))
+    cores = cv2.morphologyEx(filled, cv2.MORPH_OPEN,
+                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    n, lbl, stats, _ = cv2.connectedComponentsWithStats(cores, 8)
+    if n < 3:
+        return glassify(rgba)
+    idx = sorted(range(1, n), key=lambda i: -stats[i, cv2.CC_STAT_AREA])[:2]
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    lens_union = np.zeros((h, w), np.uint8)
+    for i in idx:
+        core = (lbl == i).astype(np.uint8)
+        lensreg = cv2.dilate(core, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))) & filled
+        cnts, _ = cv2.findContours(lensreg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            continue
+        hull = cv2.convexHull(max(cnts, key=cv2.contourArea))
+        diam = np.sqrt(max(1, stats[i, cv2.CC_STAT_AREA])); rim = max(2, int(0.06 * diam))
+        lf = np.zeros((h, w), np.uint8); cv2.fillConvexPoly(lf, hull, 1)
+        interior = cv2.erode(lf, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rim * 2, rim * 2)))
+        im = interior > 0
+        if not im.any():
+            continue
+        clear = (np.median(hsv[:, :, 2][im]) > 170 and np.median(hsv[:, :, 1][im]) < 50)
+        if clear:                                    # transparent glass — eye shows through
+            a[im] = 60; bgr[im] = (62, 47, 38)
+        else:                                        # sunglasses — uniform tint (arm-robust median)
+            a[im] = 235
+            bgr[im] = np.median(bgr[im].reshape(-1, 3), 0).astype(np.uint8)
+        lens_union |= interior
+    lm = lens_union > 0
+    if lm.any():                                     # glassy diagonal sheen
+        yy, xx = np.mgrid[0:h, 0:w]
+        diag = (xx + yy).astype(np.float32); diag /= max(1.0, diag.max())
+        sheen = ((diag > 0.40) & (diag < 0.47)).astype(np.float32)
+        sheen = cv2.GaussianBlur(sheen, (0, 0), max(2, w // 200)) * lm
+        bgr[:] = np.clip(bgr.astype(np.float32) + sheen[..., None] * 220, 0, 255).astype(np.uint8)
+        a[:] = np.clip(a.astype(np.float32) + sheen * 120, 0, 255).astype(np.uint8)
+    return rgba
+
+
 def remove_arms(rgba):
     """Mask a front-on glasses cutout down to JUST the two lens discs + the bridge
     between them — dropping temple arms/hinge stubs entirely (they look unnatural
