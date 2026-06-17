@@ -220,6 +220,7 @@ def clean_lenses(rgba, tint=None, opacity=None):
     Preserves the rim, adds a glassy sheen. Falls back to glassify() if the two
     lenses can't be isolated."""
     rgba = rgba.copy(); a = rgba[:, :, 3]; bgr = rgba[:, :, :3]; h, w = a.shape
+    orig_a = a.copy(); orig_bgr = bgr.copy()       # to composite the rim back ON TOP
     binm = (a > 40).astype(np.uint8)
     ff = binm.copy()
     cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)
@@ -251,36 +252,34 @@ def clean_lenses(rgba, tint=None, opacity=None):
         lh = (holes > 0) & (region > 0)               # this lens's opening (clear lens)
         ys, xs = np.where(lh)
         if len(xs) > 30:
-            # CLEAR lens: fill the EXACT opening shape (the hollow inside the rim),
-            # pulled INSIDE the rim so the lens sits BEHIND the frame — no edge /
-            # rounded corner pokes past it. Only bridge (close) when an arm actually
-            # splits the opening (else closing would oversize a clean opening).
-            nz = len(xs); lhu = lh.astype(np.uint8)
-            ncomp, _ = cv2.connectedComponents(lhu)
+            # CLEAR lens: the opening is the enclosed transparent region.
+            nz = len(xs); opening = lh.astype(np.uint8)
+            ncomp, _ = cv2.connectedComponents(opening)
             if ncomp - 1 >= 2:                         # opening split by an arm → bridge it
                 ak = max(7, int(0.16 * np.sqrt(nz)))
-                lhu = cv2.morphologyEx(lhu, cv2.MORPH_CLOSE,
-                                       cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ak, ak)))
-            er = max(3, int(0.05 * np.sqrt(nz)))       # tuck the lens behind the rim
-            im = cv2.erode(lhu, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (er, er))) > 0
-            if not im.any():
-                im = lhu > 0
+                opening = cv2.morphologyEx(opening, cv2.MORPH_CLOSE,
+                                           cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ak, ak)))
             sv, ss = np.median(hsv[:, :, 2][lh]), np.median(hsv[:, :, 1][lh])
             samp = np.median(bgr[lh].reshape(-1, 3), 0)
         else:
-            # OPAQUE sunglass (no transparent opening): erode the disc by the rim.
+            # OPAQUE sunglass (no transparent opening): the disc minus the rim.
             cnts, _ = cv2.findContours((region & filled).astype(np.uint8),
                                        cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not cnts:
                 continue
             hull = cv2.convexHull(max(cnts, key=cv2.contourArea))
-            diam = np.sqrt(max(1, stats[i, cv2.CC_STAT_AREA])); rim = max(2, int(0.05 * diam))
+            diam = np.sqrt(max(1, stats[i, cv2.CC_STAT_AREA])); rim = max(2, int(0.06 * diam))
             fm = np.zeros((h, w), np.uint8); cv2.fillConvexPoly(fm, hull, 1)
-            im = cv2.erode(fm, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rim * 2, rim * 2))) > 0
-            if not im.any():
+            opening = (cv2.erode(fm, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rim, rim))) > 0).astype(np.uint8)
+            if not opening.any():
                 continue
-            sv, ss = np.median(hsv[:, :, 2][im]), np.median(hsv[:, :, 1][im])
-            samp = np.median(bgr[im].reshape(-1, 3), 0)
+            sv, ss = np.median(hsv[:, :, 2][opening > 0]), np.median(hsv[:, :, 1][opening > 0])
+            samp = np.median(bgr[opening > 0].reshape(-1, 3), 0)
+        # FILL the FULL opening (covers any hinge/arm INSIDE the lens), dilated a hair
+        # so there's no gap at the rim. The rim is composited back on top afterward,
+        # so this never overshoots the visible frame.
+        rt = max(2, int(0.04 * np.sqrt(max(1, int(opening.sum())))))
+        im = cv2.dilate(opening, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rt, rt))) > 0
         is_clear = clear_force or (forced is None and sv > 165 and ss < 55)
         if is_clear:                                  # transparent glass — eye shows through
             a[im] = int(opacity) if opacity else 58
@@ -289,7 +288,14 @@ def clean_lenses(rgba, tint=None, opacity=None):
             col = forced if forced is not None else samp
             a[im] = int(opacity) if opacity else 222
             bgr[im] = np.array(col, np.uint8)
-        lens_union |= im.astype(np.uint8)
+        lens_union |= (opening > 0).astype(np.uint8)
+        # composite the ORIGINAL RIM back ON TOP in a band around the opening — the
+        # frame now DEFINES the lens edge (no overshoot) and covers corner hinges.
+        ek = max(1, rt // 2)
+        band = (cv2.dilate(opening, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rt * 4, rt * 4))) > 0) \
+            & ~(cv2.erode(opening, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ek, ek))) > 0)
+        rr = band & (orig_a > 170)                    # original frame (rim) pixels in the band
+        a[rr] = orig_a[rr]; bgr[rr] = orig_bgr[rr]
     lm = lens_union > 0
     if lm.any():                                     # glassy diagonal sheen
         yy, xx = np.mgrid[0:h, 0:w]
