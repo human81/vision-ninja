@@ -129,6 +129,16 @@ def set_detect_every(n: int) -> dict:
     return {"status": "success", "detect_every": max(1, int(n)), "ui": "config"}
 
 
+def set_detection(on: bool = True) -> dict:
+    """Turn object DETECTION + TRACKING + OCCUPANCY analysis ON/OFF on the live video.
+    It is OFF by default once the user's camera is live (a selfie feed isn't a scene
+    to analyze). Turn it ON when the user wants to detect / track / COUNT objects
+    ('count the people', 'ring the cars', 'occupancy'). OFF = a clean pass-through —
+    face filters / AR try-on / overlays still run, but no boxes, counts or compute."""
+    state = ctx().pipe.set_detection(bool(on))
+    return {"status": "success", "detect_on": state, "ui": "config"}
+
+
 def set_render(boxes: bool = True, labels: bool = True, trails: bool = True,
                counts: bool = True) -> dict:
     """Control what is DRAWN on the live frame. Pass false to HIDE: `boxes` =
@@ -1378,7 +1388,7 @@ def direct_story(brief: str, scenes: int = 3, mode: str = "fast",
 
 
 ALL_TOOLS = [
-    plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render,
+    plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render, set_detection,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays,
     apply_face_filter, try_eyewear, shop_search, try_product,

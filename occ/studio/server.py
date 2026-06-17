@@ -114,6 +114,12 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         return pipe.set_render_flags(**{"draw_" + k: v for k, v in b.items()
                                         if k in ("boxes", "labels", "trails", "counts")})
 
+    @app.post("/detection")
+    async def set_detection_route(req: Request):
+        """Toggle detection+tracking+occupancy (off by default once the camera is live)."""
+        b = await req.json()
+        return JSONResponse({"detect_on": pipe.set_detection(bool(b.get("on", True)))})
+
     @app.post("/filter")
     async def filter_route(req: Request):
         """Apply an AR face filter directly (UI chip; the agent can also do this)."""

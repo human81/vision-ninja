@@ -58,6 +58,7 @@ class StudioPipeline:
         self._rec_name: str | None = None
         self._rec_frames = 0
         self._writer = None
+        self._detect_on = True             # YOLO detect + track + occupancy; OFF when you go live
 
     # ---- annotations ----
     def set_annotations(self, items: list[dict]):
@@ -125,23 +126,35 @@ class StudioPipeline:
         push_frame(frame)
         return True
 
+    def set_detection(self, on: bool) -> bool:
+        """Turn the YOLO detect + track + occupancy analysis ON/OFF live. OFF = the
+        feed passes through clean (face filters/overlays still run; no boxes, no
+        counts, no compute). Returns the new state."""
+        self._detect_on = bool(on)
+        return self._detect_on
+
     def start_camera(self) -> str:
         """Switch the live source to the browser push feed, remembering the prior
-        source so stop_camera() can restore it. Returns the prior source.uri."""
+        source so stop_camera() can restore it. Detection/tracking/occupancy default
+        OFF when you go live (it's a selfie feed, not a scene to analyze). Returns
+        the prior source.uri."""
         from ..sources import PUSH
         prev = str(self.cfg.get("source.uri", ""))
         with self._lock:
             self._prev_source = getattr(self, "_prev_source", None) or prev
+            self._prev_detect = self._detect_on
+        self._detect_on = False                     # go live = analysis off by default
         PUSH.clear()
         if not prev.startswith("push:"):
             self.reconfigure({"source.uri": "push://camera"})
         return self._prev_source
 
     def stop_camera(self):
-        """Restore the source that was active before BIDI camera capture started."""
+        """Restore the source (and detection state) from before BIDI camera capture."""
         prev = getattr(self, "_prev_source", None)
         from ..sources import PUSH
         PUSH.clear()
+        self._detect_on = getattr(self, "_prev_detect", True)
         if prev and not str(prev).startswith("push:"):
             self.reconfigure({"source.uri": prev})
         self._prev_source = None
@@ -269,14 +282,19 @@ class StudioPipeline:
                 if version != seen_ann:
                     geo_engine = GeometryEngine(ann)
                     seen_ann = version
-                if n % every == 0:
+                detect_on = self._detect_on
+                if not detect_on:             # going live: no YOLO detect/track/occupancy
+                    last_raw = sv.Detections.empty()
+                    last_tracked = sv.Detections.empty()
+                elif n % every == 0:
                     last_raw = det.detect(frame)
                     if task != "classify":
                         last_tracked = trk.update(last_raw, frame)
-                tracked = last_tracked if task != "classify" else sv.Detections.empty()
+                tracked = (last_tracked if (detect_on and task != "classify")
+                           else sv.Detections.empty())
                 geo = geo_engine.update(tracked, frame.shape[1], frame.shape[0], n / fps)
                 vis = renderer.draw(frame, tracked)
-                if task != "detect":          # masks / keypoints / obb / classify label
+                if detect_on and task != "detect":   # masks / keypoints / obb / classify label
                     vis = renderer.draw_task(vis, last_raw, task,
                                              getattr(det, "cls_label", None))
                 vis = renderer.draw_annotations(vis, ann, geo)
@@ -393,7 +411,7 @@ class StudioPipeline:
         with self._lock:
             return {**self._stats, "fps": round(self._fps, 1), "status": self._status,
                     "recording": self._rec, "rec_frames": self._rec_frames,
-                    "rec_name": self._rec_name}
+                    "rec_name": self._rec_name, "detect_on": self._detect_on}
 
     # ---- still-image detection (for analyze_image on a shared photo) ----
     def detect_still(self, frame):

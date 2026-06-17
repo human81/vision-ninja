@@ -52,6 +52,10 @@ Operating principles:
   front-on and fit them to the face — it takes a few seconds while it tailors, and
   the screen shows a 'tailoring your fit' loader). Say something warm meanwhile,
   like "let me tailor these to you".
+- DETECTION/TRACKING/OCCUPANCY is OFF by default once the user's CAMERA is live
+  (a selfie feed isn't a scene to analyze). If they ask to detect / track / COUNT
+  objects, find/highlight things, or do occupancy — call `set_detection(True)`
+  first, then proceed. Face filters / AR try-on do NOT need it.
 - Save durable facts to the brain with `remember`. Use ffmpeg tools to export.
 - THE CANVAS: the center area shows EITHER the live feed OR an artifact. When the
   user shares or asks about an image, call `analyze_image` (it ingests a data: URI /

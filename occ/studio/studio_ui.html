@@ -317,6 +317,7 @@
           <button id=vmic onclick="vToggle('mic')" title="talk to the ninja">🎤 Mic</button>
           <button id=vcam onclick="vToggle('cam')" title="run overlays on your camera">📷 Camera</button>
           <button id=vscr onclick="vToggle('screen')" title="share + analyze your screen">🖥 Screen</button>
+          <button id=vdetect onclick="vToggleDetect()" title="object detection · tracking · occupancy (off when live)">🔎 Detection</button>
           <span id=vdot class=vdot></span><span id=vstatus class=muted>tap Mic to talk</span>
           <span style=flex:1></span>
           <button id=vstop onclick="vStop()">⏹ End</button>
@@ -598,6 +599,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>switchTab(b.d
 /* ---------------- polling ---------------- */
 async function pollStats(){try{let s=await(await fetch('/stats')).json();
   $('fps').textContent=s.fps??'–';$('tracks').textContent=s.tracks??'–';
+  if('detect_on' in s){const d=$('vdetect');if(d)d.classList.toggle('on',!!s.detect_on);}
   $('src').textContent=(s.status||'').startsWith('error')?('⚠ '+s.status.slice(7,46)):
     ((s.status==='running'?'● ':'○ ')+'live');
   let dw=s.dwell||[];
@@ -879,6 +881,15 @@ function vStop(){
   try{VOICE.live&&VOICE.live.close();}catch(e){}VOICE.live=null;
   try{VOICE.pctx&&VOICE.pctx.close();}catch(e){}VOICE.pctx=null;VOICE.playHead=0;VOICE.botMsg=null;
   vStatus('tap Mic to talk');
+}
+
+/* detection + tracking + occupancy on/off (OFF by default once the camera is live) */
+async function vToggleDetect(){
+  const on=!$('vdetect').classList.contains('on');
+  $('vdetect').classList.toggle('on',on);
+  try{await fetch('/detection',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on})});}catch(e){}
+  toast(on?'detection + occupancy ON':'detection + occupancy OFF');
+  pollStats();
 }
 
 /* ---- AR face filters (one-tap) ---- */
