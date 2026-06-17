@@ -199,10 +199,33 @@ def _eyes_quad(face, wscale=2.25, hscale=1.0, down=0.08):
             c + half_w + half_h, c - half_w + half_h]
 
 
-def _eyewear_quad(face, rgba, wscale=2.1, down=0.08):
-    """Place a front-on glasses cutout on the eyes, preserving its aspect ratio so
-    frames aren't distorted. Lenses (~25/75% of a 2.1·IPD-wide asset) land on the
-    pupils; seats on the eye line and follows head roll/yaw."""
+def trim_arms(rgba):
+    """Crop residual temple-arm stubs from a front-on glasses cutout: keep only the
+    column range spanned by the TALL lens block (arms are thin strips at the far
+    left/right). No-op when the front already fills the width."""
+    a = rgba[:, :, 3]
+    op = a > 40
+    cols = np.where(op.any(0))[0]
+    if len(cols) < 2:
+        return rgba
+    ys = np.where(op, np.arange(a.shape[0])[:, None], -1)
+    top = np.where(op.any(0), op.argmax(0), 0)
+    bot = a.shape[0] - 1 - np.where(op[::-1].any(0), op[::-1].argmax(0), 0)
+    span = np.where(op.any(0), bot - top, 0)
+    keep = np.where(span > 0.5 * span.max())[0]
+    if len(keep) < 2:
+        return rgba
+    x0, x1 = int(keep.min()), int(keep.max())
+    if x0 < a.shape[1] * 0.06 and x1 > a.shape[1] * 0.94:
+        return rgba                                  # already armless — leave it
+    pad = int((x1 - x0) * 0.02)
+    return np.ascontiguousarray(rgba[:, max(0, x0 - pad):min(a.shape[1], x1 + pad + 1)])
+
+
+def _eyewear_quad(face, rgba, wscale=1.9, down=0.06):
+    """Place a front-on (ARMLESS) glasses cutout on the eyes, preserving its aspect
+    ratio so frames aren't distorted. Lenses land on the pupils; seats on the eye
+    line and follows head roll/yaw."""
     h, w = rgba.shape[:2]
     ex, ey = _frame_axes(face)
     c = face.eyes_center + ey * (face.eye_dist * down)

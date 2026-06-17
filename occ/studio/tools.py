@@ -441,13 +441,15 @@ def try_product(query: str = "", image: str = "") -> dict:
 
 
 _CANON_DIR = "out/studio/cache/eyewear_canon"
+_CANON_VER = "v2-noarms"          # bump to invalidate cached renders when the prompt changes
 _CANON_PROMPT = (
-    "Render EXACTLY these eyeglasses as a clean, perfectly SYMMETRICAL FRONT-ON "
-    "product shot: both lenses equal and fully visible, bridge centered, the frame "
-    "front filling ~92% of the image width, temple arms folded flat behind so the "
-    "front is unobstructed and level, lenses transparent (see-through) unless they "
-    "are sunglasses, sharp even studio lighting, on a PURE WHITE seamless "
-    "background. No face, no mannequin, no shadow, no text. Centered.")
+    "Show ONLY the FRONT of these eyeglasses — the two lens rims joined by the nose "
+    "bridge (and the brow bar if it has one), matching their exact colour, pattern "
+    "and shape. The temple arms / legs MUST be ENTIRELY ABSENT — do not render them "
+    "at all, not even folded or as stubs. Perfectly FRONT-ON and symmetric, both "
+    "lenses equal, lenses transparent (see-through) unless they are sunglasses, "
+    "sharp even studio lighting, on a PURE WHITE seamless background, centered, the "
+    "frame front filling ~85% of the width. No face, no arms, no shadow, no text.")
 
 
 def _canonical_eyewear(raw: bytes, url: str):
@@ -456,7 +458,8 @@ def _canonical_eyewear(raw: bytes, url: str):
     disk so it's generated ONCE per product. Returns png bytes or None."""
     import hashlib
     os.makedirs(_CANON_DIR, exist_ok=True)
-    cache = os.path.join(_CANON_DIR, hashlib.md5((url or "").encode()).hexdigest() + ".png")
+    key = hashlib.md5(((url or "") + "|" + _CANON_VER).encode()).hexdigest()
+    cache = os.path.join(_CANON_DIR, key + ".png")
     if os.path.exists(cache) and os.path.getsize(cache) > 1000:
         return open(cache, "rb").read()
     if not _has_key():
@@ -481,12 +484,12 @@ def _eyewear_asset(image: str):
     raw = _fetch_bytes(image)
     if not raw:
         return None, False
-    from .face_filters import load_eyewear_rgba, glassify
+    from .face_filters import load_eyewear_rgba, glassify, trim_arms
     canon = _canonical_eyewear(raw, image)
     rgba = load_eyewear_rgba(canon or raw)
     if rgba is None:
         return None, False
-    return glassify(rgba), bool(canon)
+    return glassify(trim_arms(rgba)), bool(canon)
 
 
 def prefetch_eyewear(image: str = "") -> dict:
