@@ -153,11 +153,16 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
 
     @app.post("/eyewear/try")
     async def eyewear_try(req: Request):
-        """Real-time AR try-on: warp a product frame onto the live face."""
+        """Real-time AR try-on: warp a product frame onto the live face. The first fit
+        of a product runs a slow Gemini render — do it OFF the event loop so the live
+        feed / audio never freeze."""
+        import asyncio as _aio
+        import functools as _ft
         from .tools import try_eyewear
         b = await req.json()
-        return JSONResponse(try_eyewear(image=b.get("image") or b.get("url") or "",
-                                        label=b.get("label", "")))
+        res = await _aio.get_event_loop().run_in_executor(None, _ft.partial(
+            try_eyewear, image=b.get("image") or b.get("url") or "", label=b.get("label", "")))
+        return JSONResponse(res)
 
     @app.post("/eyewear/tint")
     async def eyewear_tint(req: Request):
@@ -187,7 +192,10 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         garment = b.get("garment") or b.get("url") or b.get("image") or ""
         if not garment:
             return JSONResponse({"status": "error", "error": "no garment"}, status_code=400)
-        res = virtual_try_on(garment, which="frame")
+        import asyncio as _aio
+        import functools as _ft
+        res = await _aio.get_event_loop().run_in_executor(None, _ft.partial(
+            virtual_try_on, garment, which="frame"))      # off the event loop (~8s Gemini)
         out = res.get("output", "")
         if out:
             res["url"] = "/download/" + Path(out).name

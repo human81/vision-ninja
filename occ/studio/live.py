@@ -54,7 +54,8 @@ class LiveBridge:
         """Drive a full BIDI session until the socket closes."""
         from google.adk.agents import Agent
         from google.adk.runners import InMemoryRunner
-        from google.adk.agents.run_config import RunConfig, StreamingMode
+        from google.adk.agents.run_config import (RunConfig, StreamingMode,
+                                                  ToolThreadPoolConfig)
         from google.adk.agents.live_request_queue import LiveRequestQueue
         from google.genai import types
 
@@ -75,6 +76,9 @@ class LiveBridge:
             output_audio_transcription=types.AudioTranscriptionConfig(),
             input_audio_transcription=types.AudioTranscriptionConfig(),
             session_resumption=types.SessionResumptionConfig(),
+            # run tools (incl. the slow Gemini try-on) OFF the event loop so the
+            # live audio/video and the /stream.mjpg never freeze while one runs.
+            tool_thread_pool_config=ToolThreadPoolConfig(max_workers=4),
         )
 
         await ws.send_text(json.dumps({"type": "ready", "model": LIVE_MODEL}))

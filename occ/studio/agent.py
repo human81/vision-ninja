@@ -605,7 +605,8 @@ class ADKRunner:
             self._session_ready = True
 
     async def stream(self, message: str):
-        from google.adk.agents.run_config import RunConfig, StreamingMode
+        from google.adk.agents.run_config import (RunConfig, StreamingMode,
+                                                  ToolThreadPoolConfig)
         from google.genai import types
         await self._ensure_session()
         new_message = types.Content(role="user",
@@ -615,7 +616,8 @@ class ADKRunner:
         async for event in self.runner.run_async(
                 user_id=self.user_id, session_id=self.session_id,
                 new_message=new_message,
-                run_config=RunConfig(streaming_mode=StreamingMode.SSE)):
+                run_config=RunConfig(streaming_mode=StreamingMode.SSE,
+                                     tool_thread_pool_config=ToolThreadPoolConfig(max_workers=4))):
             for fc in event.get_function_calls() or []:
                 f = fitting_on(fc.name)
                 if f:

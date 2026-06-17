@@ -796,7 +796,8 @@ function vOnLive(m){const t=m.type;
   if(t==='log'){vStatus('▸ '+((m.data&&m.data.text)||'…'),'live');return;}
   if(t==='tool'){const d=m.data||{};vStatus('▸ '+(d.name||'tool'),'live');
     if(d.name==='create_overlay'&&d.ok){switchTab('code');pollOverlays();}return;}
-  if(['refresh','canvas','ui_action','library','sources','export','timeline','scene'].includes(t)){handleFrame(m);}
+  // fitting loader + shopped catalog must work over the BIDI voice path too
+  if(['fitting','catalog','refresh','canvas','ui_action','library','sources','export','timeline','scene'].includes(t)){handleFrame(m);}
 }
 function vTranscript(role,text){if(!text)return;
   if(role==='user'){addMsg('user','🎙 '+text.replace(/</g,'&lt;'));VOICE.botMsg=null;return;}
