@@ -26,12 +26,28 @@ STUDIO_URL = os.environ.get("STUDIO_URL", "http://127.0.0.1:8011")
 FACE = "assets/test/face.jpg"
 
 _results = []
+_VERBOSE = True
 
 
 def check(name, cond, detail=""):
     _results.append((name, bool(cond), detail))
-    print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f"  — {detail}" if detail else ""))
+    if _VERBOSE:
+        print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f"  — {detail}" if detail else ""))
     return bool(cond)
+
+
+def collect_offline():
+    """Run the OFFLINE checks silently and return [(name, ok, detail), …].
+    Lets fishfood fold these in as a level without the standalone printing."""
+    global _VERBOSE
+    _VERBOSE = False
+    _results.clear()
+    try:
+        offline()
+    except Exception as e:
+        _results.append(("studio try-on offline crashed", False, repr(e)))
+    _VERBOSE = True
+    return list(_results)
 
 
 # ----------------------------- OFFLINE -----------------------------

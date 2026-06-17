@@ -351,6 +351,25 @@ def level5(frames):
         cmd=".venv/bin/python test_e2e_web.py")
 
 
+def level6(frames):
+    """Studio AR try-on — face landmarks, every filter, sponsored stylist + shape
+    search (test_studio_tryon's OFFLINE phase, no server). SKIPs without [face]."""
+    try:
+        import mediapipe  # noqa: F401  (the [face] extra)
+    except Exception:
+        record(6, "studio AR try-on", "SKIP", "mediapipe not installed ([face] extra)")
+        return
+    try:
+        import test_studio_tryon as st
+        results = st.collect_offline()
+    except Exception as e:
+        record(6, "studio AR try-on offline", "FAIL", f"{type(e).__name__}: {e}")
+        return
+    for name, ok, detail in results:
+        record(6, name, "PASS" if ok else "FAIL", detail,
+               cmd=".venv/bin/python test_studio_tryon.py")
+
+
 def write_runbook(path="out/fishfood/RUNBOOK.md"):
     """Standalone command to reproduce each check, grouped by level."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -370,11 +389,11 @@ def write_runbook(path="out/fishfood/RUNBOOK.md"):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--level", type=int, default=5, help="max level to run (1-5)")
+    ap.add_argument("--level", type=int, default=6, help="max level to run (1-6)")
     ap.add_argument("--frames", type=int, default=120, help="frames per clip")
     args = ap.parse_args()
     print(f"FISHFOOD — levels 1–{args.level}, {args.frames} frames/clip\n")
-    levels = [level1, level2, level3, level4, level5]
+    levels = [level1, level2, level3, level4, level5, level6]
     for i, fn in enumerate(levels[:args.level], start=1):
         print(f"── Level {i} ──")
         fn(args.frames)
