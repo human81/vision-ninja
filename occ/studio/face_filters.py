@@ -251,11 +251,17 @@ def clean_lenses(rgba, tint=None, opacity=None):
         lh = (holes > 0) & (region > 0)               # this lens's opening (clear lens)
         ys, xs = np.where(lh)
         if len(xs) > 30:
-            # CLEAR lens: convex hull of the OPENING fits exactly to the rim's inner
-            # edge — no inset band/double-edge — and covers any hinge/arm inside it.
-            hull = cv2.convexHull(np.stack([xs, ys], 1))
-            fm = np.zeros((h, w), np.uint8); cv2.fillConvexPoly(fm, hull, 1)
-            im = fm > 0
+            # CLEAR lens: fill the EXACT opening shape (the hollow inside the rim) —
+            # NOT its convex hull — so the new lens matches the frame's hole exactly
+            # (no oversize edge / rounded corners poking past the rim). Bridge any
+            # arm that splits the opening (close), then pull in ~1px so it sits just
+            # BEHIND the rim.
+            nz = len(xs)
+            ak = max(7, int(0.16 * np.sqrt(nz)))
+            op = cv2.morphologyEx(lh.astype(np.uint8), cv2.MORPH_CLOSE,
+                                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ak, ak)))
+            op = cv2.erode(op, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+            im = op > 0
             sv, ss = np.median(hsv[:, :, 2][lh]), np.median(hsv[:, :, 1][lh])
             samp = np.median(bgr[lh].reshape(-1, 3), 0)
         else:
