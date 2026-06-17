@@ -495,6 +495,7 @@ function handleFrame(f){
   else if(f.type==='library'){renderLib(d.items);if(d.query!==undefined)$('libq').value=d.query;switchTab('library');}
   else if(f.type==='sources'){renderSources(d.items);switchTab('sources');}
   else if(f.type==='ui_action'){driveUI(d);}
+  else if(f.type==='catalog'){showCatalog(d);}
   else if(f.type==='refresh'){refreshPanel(d.panel);}
   else if(f.type==='final'){if(curText.trim()==='')cur._text.textContent=d.text||'';}
   else if(f.type==='error'){ensureActs().innerHTML='<div class="act err">▸ <b>error</b> '+(d.text||'')+'</div>';}
@@ -919,6 +920,33 @@ async function vTryItem(i){
       else{toast('eyewear: '+(r.error||'failed'));$('tryonstatus').textContent='';}
     }catch(e){toast('eyewear failed');$('tryonstatus').textContent='';}
   }else{ vTryOnWith(g.img,g.title); }   // generative VTO (garments, or eyewear photoreal)
+}
+/* the agent (stylist) found products → reveal the try-on picker + show them */
+const SPONSORS={apparel:{name:'Mode Marco',url:'https://modemarco.ca'},
+                eyewear:{name:'Ralba Optical',url:'https://ralbaoptical.com'}};
+function showCatalog(d){
+  if(!d||!d.matches||!d.matches.length)return;
+  const store=d.store||'apparel';
+  // reveal the Live-Voice try-on UI without disturbing the mic session
+  $('livewrap').style.display='';$('voicebar').style.display='flex';
+  $('filterbar').style.display='flex';$('tryonbar').style.display='block';
+  document.querySelectorAll('#modeswitch button').forEach(b=>b.classList.toggle('on',b.dataset.m==='voice'));
+  NLE.mode='voice';STORE=store;
+  document.querySelectorAll('.storebtn').forEach(b=>b.classList.toggle('on',b.id==='store-'+store));
+  $('eyemode').style.display=store==='eyewear'?'inline-flex':'none';
+  const sp=SPONSORS[store]||{};
+  $('sponsor').href=sp.url||'#';$('sponsor').innerHTML=sp.name?('✦ Sponsored by <b>'+sp.name+'</b>'):'';
+  window.__matches={store,items:d.matches};
+  $('garments').innerHTML=d.matches.map((g,i)=>
+    `<div class=gcard onclick="vTryMatch(${i})" title="${(g.title||'').replace(/"/g,'&quot;')}${g.price?' · $'+g.price:''}">
+       <img loading=lazy src="${g.img}${g.img.includes('?')?'&':'?'}width=180" onerror="this.style.opacity=.2">
+       <div class=gt>${(g.title||'').slice(0,18)}</div><div class=gp>${g.price?'$'+g.price:'try on'}</div></div>`).join('');
+}
+function vTryMatch(i){const m=window.__matches;if(!m||!m.items[i])return;const g=m.items[i];$('garmenturl').value=g.img;
+  if(m.store==='eyewear'&&g.ar){
+    fetch('/eyewear/try',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:g.img,label:g.title})})
+      .then(r=>r.json()).then(()=>{setCanvas('live');pollOverlays();toast('👓 '+(g.title||''));});
+  } else vTryOnWith(g.img,g.title);
 }
 function vUpload(){$('garmentfile').click();}
 $('garmentfile').addEventListener('change',async(e)=>{

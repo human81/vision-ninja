@@ -318,6 +318,101 @@ def _fetch_bytes(s: str) -> bytes | None:
     return None
 
 
+import functools
+import json as _json
+import re as _re
+
+_EYEWEAR_WORDS = ("glass", "sunglass", "shade", "frame", "eyewear", "aviator",
+                  "optical", "specs", "spectacle", "lens", "wayfarer", "cat-eye")
+_APPAREL_WORDS = ("polo", "shirt", "tee", "t-shirt", "tshirt", "jersey", "jacket",
+                  "coat", "dress", "pant", "jean", "chino", "sweater", "hoodie",
+                  "knit", "garment", "outfit", "blazer", "suit", "wear", "top")
+
+
+@functools.lru_cache(maxsize=1)
+def _load_catalogs():
+    base = os.path.dirname(__file__)
+    out = {}
+    for store, key, fn in (("apparel", "garments", "garments.json"),
+                           ("eyewear", "eyewear", "eyewear.json")):
+        try:
+            d = _json.loads(open(os.path.join(base, fn)).read())
+            items = d.get(key, [])
+            for it in items:
+                it["store"] = store
+            out[store] = items
+        except Exception:
+            out[store] = []
+    return out
+
+
+def _guess_store(query: str):
+    q = query.lower()
+    if any(w in q for w in _EYEWEAR_WORDS):
+        return "eyewear"
+    if any(w in q for w in _APPAREL_WORDS):
+        return "apparel"
+    return None                              # search both
+
+
+def _search_catalog(query: str, store: str | None = None, limit: int = 8):
+    toks = [t for t in _re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 1]
+    cats = _load_catalogs()
+    pool = cats.get(store, []) if store else (cats["apparel"] + cats["eyewear"])
+    scored = []
+    for it in pool:
+        title = (it.get("title", "") or "").lower()
+        hay = " ".join(str(it.get(k, "")) for k in
+                       ("title", "brand", "type", "store", "gender")).lower()
+        score = sum(hay.count(t) for t in toks) + 2 * sum(1 for t in toks if t in title)
+        if score > 0:
+            scored.append((score, it))
+    scored.sort(key=lambda x: -x[0])
+    return [it for _, it in scored[:limit]]
+
+
+def _slim(it: dict) -> dict:
+    return {"title": it.get("title", ""), "price": it.get("price", ""),
+            "brand": it.get("brand", ""), "img": it.get("img", ""),
+            "store": it.get("store", ""), "ar": bool(it.get("ar"))}
+
+
+def shop_search(query: str, store: str = "") -> dict:
+    """SHOP the sponsored stores — Mode Marco (apparel) + Ralba Optical (eyewear) —
+    for products matching `query` (e.g. 'navy polo', 'hugo aviator', 'haiti jersey').
+    Returns ranked matches with title, brand and PRICE so you can recommend options
+    like a stylist, then call try_product to put one on the user. store: optional
+    'apparel' | 'eyewear'."""
+    matches = _search_catalog(query, store=store or _guess_store(query))
+    return {"status": "success", "query": query,
+            "matches": [_slim(m) for m in matches],
+            "store": (matches[0]["store"] if matches else ""), "ui": None}
+
+
+def try_product(query: str = "", image: str = "") -> dict:
+    """SELL + TRY ON anything: find the product in the sponsored stores that best
+    matches `query` (brand/colour/style, e.g. 'hugo aviator sunglasses', 'light
+    blue polo', 'haiti jersey') and TRY IT ON the live person — real-time AR for
+    eyewear, generative for apparel. Pass `image` directly to try a specific
+    product URL. Then tell the user the brand + price (you're the store's stylist)."""
+    if image and not query:
+        return try_eyewear(image=image)
+    store = _guess_store(query)
+    matches = _search_catalog(query, store=store) or _search_catalog(query)
+    if not matches:
+        return {"status": "error", "error": f"no product matched '{query}'",
+                "ui": "overlays"}
+    best = matches[0]
+    if best["store"] == "eyewear" and best.get("ar"):
+        res = try_eyewear(image=best["img"], label=best["title"])
+    else:
+        res = virtual_try_on(garment=best["img"], which="frame")
+    res["product"] = _slim(best)
+    res["alternatives"] = [_slim(m) for m in matches[1:5]]
+    res["catalog"] = {"store": best["store"], "matches": [_slim(m) for m in matches[:12]]}
+    return res
+
+
 def try_eyewear(image: str = "", label: str = "") -> dict:
     """LIVE EYEWEAR TRY-ON (Ralba Optical): warp an actual glasses/sunglasses
     PRODUCT image onto the person's eyes in the live video, tracked to dense
@@ -1166,7 +1261,7 @@ ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays,
-    apply_face_filter, try_eyewear,
+    apply_face_filter, try_eyewear, shop_search, try_product,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, extend_video, narrate, generate_music,

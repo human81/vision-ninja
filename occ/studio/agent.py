@@ -41,6 +41,13 @@ Operating principles:
   landmarks and follows head pose. For CLOTHES/GARMENTS ("try this jacket/shirt on
   me") call `virtual_try_on(garment=<image path/URL/data URI>, which='frame')` — it
   dresses the person in the live frame and shows the result on the canvas.
+- YOU ARE ALSO THE STORE'S STYLIST — you can SELL anything in the sponsored shops
+  (Mode Marco apparel + Ralba Optical eyewear). When the user asks to try on or see
+  a product ("try the HUGO aviators on me", "show me a navy polo", "put the Haiti
+  jersey on me", "what sunglasses suit me"): call `try_product(query)` to find the
+  best match and put it on them live (real-time AR for eyewear, generative for
+  clothes), or `shop_search(query)` to recommend a few options. ALWAYS mention the
+  brand and PRICE, suggest a tasteful alternative, and be a warm, concise salesperson.
 - Save durable facts to the brain with `remember`. Use ffmpeg tools to export.
 - THE CANVAS: the center area shows EITHER the live feed OR an artifact. When the
   user shares or asks about an image, call `analyze_image` (it ingests a data: URI /
@@ -140,8 +147,14 @@ def frames_for(name: str, res) -> list[dict]:
     if res.get("ui"):
         out.append({"type": "refresh", "data": {"panel": res["ui"]}})
     if name in ("create_overlay", "toggle_overlay", "remove_overlay", "clear_overlays",
-                "clear_annotations", "apply_face_filter"):
+                "clear_annotations", "apply_face_filter", "try_eyewear", "try_product"):
         out.append({"type": "refresh", "data": {"panel": "overlays"}})
+    # the ninja-as-stylist: show shopped products in the try-on strip
+    if name == "shop_search":
+        out.append({"type": "catalog", "data": {"store": res.get("store", ""),
+                                                "matches": res.get("matches", [])}})
+    if isinstance(res.get("catalog"), dict):
+        out.append({"type": "catalog", "data": res["catalog"]})
     if name in ("nano_banana", "virtual_try_on", "describe_image", "analyze_image",
                 "save_to_library", "generate_video", "extend_video"):
         out.append({"type": "refresh", "data": {"panel": "library"}})
@@ -257,6 +270,24 @@ class SimRunner:
         if fname and (trigger or "filter" in m):
             add("apply_face_filter", {"name": fname},
                 f"Applying the {fname.replace('_', ' ')} look.", f"face filter: {fname}")
+            return steps, acts
+
+        # ---- ninja-as-stylist: shop & try REAL products by voice ----
+        shop_trigger = any(w in m for w in ("try on", "try the", "put the", "put on",
+            "wear", "show me", "do you have", "recommend", "sell me", "i want",
+            "looking for", "what about", "suits me", "suit me"))
+        prod_word = any(w in m for w in (
+            "glass", "sunglass", "shade", "frame", "eyewear", "aviator", "optical",
+            "polo", "shirt", "tee", "jersey", "jacket", "coat", "dress", "jean",
+            "sweater", "hoodie", "knit", "blazer", "hugo", "carrera", "calvin klein",
+            "coach", "gant", "under armour", "ralba", "mode marco", "haiti"))
+        if shop_trigger and prod_word:
+            if any(w in m for w in ("show me", "do you have", "recommend", "options",
+                                    "what about", "looking for", "suits me", "suit me")):
+                add("shop_search", {"query": original}, None, "shop the sponsored stores")
+            else:
+                add("try_product", {"query": original},
+                    "Finding that and trying it on you…", "try it on live")
             return steps, acts
 
         # hide / show the detection boxes + tracking
