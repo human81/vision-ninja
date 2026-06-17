@@ -199,12 +199,26 @@ def _eyes_quad(face, wscale=2.25, hscale=1.0, down=0.08):
             c + half_w + half_h, c - half_w + half_h]
 
 
-def clean_lenses(rgba):
-    """Rebuild each lens INTERIOR as a clean lens — transparent glass (clear frames)
-    or a uniform tint (sunglasses) — which PAINTS OVER any temple arm that crosses
-    the lens in the source render (the in-lens part `remove_arms` can't drop because
-    it lives inside the lens disc, blocking the eye). Preserves the rim and adds a
-    glassy sheen. Falls back to glassify() if the two lenses can't be isolated."""
+# named lens tints (BGR). "clear" → see-through glass; others → coloured sunglasses.
+_LENS_TINTS = {
+    "clear": None, "smoke": (42, 42, 48), "grey": (70, 70, 72), "gray": (70, 70, 72),
+    "dark": (22, 22, 26), "black": (15, 15, 15), "brown": (28, 52, 92),
+    "amber": (22, 95, 152), "blue": (152, 92, 42), "green": (46, 92, 46),
+    "rose": (120, 92, 175), "purple": (140, 70, 120), "gold": (45, 175, 215),
+    "mirror": (205, 205, 205), "silver": (180, 180, 185),
+}
+
+
+def clean_lenses(rgba, tint=None, opacity=None):
+    """FULLY remove the original lenses and PAINT new clean ones — so ANY temple arm
+    / hinge that was inside the lens in the source is completely gone from the
+    reconstruction. By default the new lens MATCHES the original (sampled colour &
+    clarity): clear frames → see-through glass (eye shows through), tinted/sun frames
+    → the original lens colour. Controllable:
+      tint    — None=match original; 'clear'; a name in _LENS_TINTS; or a BGR tuple.
+      opacity — None=auto (clear≈58, tinted≈222); else 1-255 (low = more see-through).
+    Preserves the rim, adds a glassy sheen. Falls back to glassify() if the two
+    lenses can't be isolated."""
     rgba = rgba.copy(); a = rgba[:, :, 3]; bgr = rgba[:, :, :3]; h, w = a.shape
     binm = (a > 40).astype(np.uint8)
     ff = binm.copy()
@@ -216,29 +230,57 @@ def clean_lenses(rgba):
     n, lbl, stats, _ = cv2.connectedComponentsWithStats(cores, 8)
     if n < 3:
         return glassify(rgba)
+    # resolve the control override
+    clear_force, forced = False, None
+    if isinstance(tint, str):
+        t = tint.lower().strip()
+        if t == "clear":
+            clear_force = True
+        elif t in _LENS_TINTS and _LENS_TINTS[t] is not None:
+            forced = _LENS_TINTS[t]
+    elif tint is not None:
+        forced = tuple(int(c) for c in tint)
+    # the lens OPENINGS = enclosed transparent regions inside the rims (clear lenses).
+    holes = ((ff != 1) & (binm == 0)).astype(np.uint8)
     idx = sorted(range(1, n), key=lambda i: -stats[i, cv2.CC_STAT_AREA])[:2]
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     lens_union = np.zeros((h, w), np.uint8)
     for i in idx:
         core = (lbl == i).astype(np.uint8)
-        lensreg = cv2.dilate(core, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))) & filled
-        cnts, _ = cv2.findContours(lensreg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not cnts:
-            continue
-        hull = cv2.convexHull(max(cnts, key=cv2.contourArea))
-        diam = np.sqrt(max(1, stats[i, cv2.CC_STAT_AREA])); rim = max(2, int(0.06 * diam))
-        lf = np.zeros((h, w), np.uint8); cv2.fillConvexPoly(lf, hull, 1)
-        interior = cv2.erode(lf, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rim * 2, rim * 2)))
-        im = interior > 0
-        if not im.any():
-            continue
-        clear = (np.median(hsv[:, :, 2][im]) > 170 and np.median(hsv[:, :, 1][im]) < 50)
-        if clear:                                    # transparent glass — eye shows through
-            a[im] = 60; bgr[im] = (62, 47, 38)
-        else:                                        # sunglasses — uniform tint (arm-robust median)
-            a[im] = 235
-            bgr[im] = np.median(bgr[im].reshape(-1, 3), 0).astype(np.uint8)
-        lens_union |= interior
+        region = cv2.dilate(core, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+        lh = (holes > 0) & (region > 0)               # this lens's opening (clear lens)
+        ys, xs = np.where(lh)
+        if len(xs) > 30:
+            # CLEAR lens: convex hull of the OPENING fits exactly to the rim's inner
+            # edge — no inset band/double-edge — and covers any hinge/arm inside it.
+            hull = cv2.convexHull(np.stack([xs, ys], 1))
+            fm = np.zeros((h, w), np.uint8); cv2.fillConvexPoly(fm, hull, 1)
+            im = fm > 0
+            sv, ss = np.median(hsv[:, :, 2][lh]), np.median(hsv[:, :, 1][lh])
+            samp = np.median(bgr[lh].reshape(-1, 3), 0)
+        else:
+            # OPAQUE sunglass (no transparent opening): erode the disc by the rim.
+            cnts, _ = cv2.findContours((region & filled).astype(np.uint8),
+                                       cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not cnts:
+                continue
+            hull = cv2.convexHull(max(cnts, key=cv2.contourArea))
+            diam = np.sqrt(max(1, stats[i, cv2.CC_STAT_AREA])); rim = max(2, int(0.05 * diam))
+            fm = np.zeros((h, w), np.uint8); cv2.fillConvexPoly(fm, hull, 1)
+            im = cv2.erode(fm, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rim * 2, rim * 2))) > 0
+            if not im.any():
+                continue
+            sv, ss = np.median(hsv[:, :, 2][im]), np.median(hsv[:, :, 1][im])
+            samp = np.median(bgr[im].reshape(-1, 3), 0)
+        is_clear = clear_force or (forced is None and sv > 165 and ss < 55)
+        if is_clear:                                  # transparent glass — eye shows through
+            a[im] = int(opacity) if opacity else 58
+            bgr[im] = (62, 47, 38)
+        else:                                         # match original (or forced) tint
+            col = forced if forced is not None else samp
+            a[im] = int(opacity) if opacity else 222
+            bgr[im] = np.array(col, np.uint8)
+        lens_union |= im.astype(np.uint8)
     lm = lens_union > 0
     if lm.any():                                     # glassy diagonal sheen
         yy, xx = np.mgrid[0:h, 0:w]
@@ -348,8 +390,20 @@ def glassify(rgba):
 
 # ---- live eyewear try-on: warp the actual selected product onto the face ----
 import threading as _threading  # noqa: E402
-_EYEWEAR = {"rgba": None, "label": ""}
+_EYEWEAR = {"rgba": None, "armless": None, "label": "", "color": (45, 45, 45),
+            "tint": None, "opacity": None}
 _EYEWEAR_LOCK = _threading.Lock()
+
+
+def frame_color(rgba):
+    """Median colour of the FRAME (opaque, non-lens, non-white pixels) — used to
+    paint the synthesized temple arms so they match the frame."""
+    a = rgba[:, :, 3]; bgr = rgba[:, :, :3]
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    rim = (a > 200) & ~((hsv[:, :, 1] < 45) & (hsv[:, :, 2] > 190))
+    if int(rim.sum()) < 20:
+        return (45, 45, 45)
+    return tuple(int(x) for x in np.median(bgr[rim].reshape(-1, 3), 0))
 
 
 def _knockout_bg(bgr, existing_alpha=None):
@@ -392,26 +446,73 @@ def load_eyewear_rgba(raw: bytes):
     return rgba
 
 
-def set_current_eyewear(rgba, label=""):
+def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None):
+    """`rgba` is the ARMLESS front (remove_arms output). We store it so the lenses
+    can be re-tinted live, and paint the lenses now via clean_lenses(tint, opacity)."""
     with _EYEWEAR_LOCK:
-        _EYEWEAR["rgba"] = rgba
+        _EYEWEAR["armless"] = rgba
+        _EYEWEAR["tint"] = tint
+        _EYEWEAR["opacity"] = opacity
+        _EYEWEAR["rgba"] = clean_lenses(rgba, tint, opacity)
         _EYEWEAR["label"] = label
+        _EYEWEAR["color"] = color or frame_color(rgba)
+
+
+def set_lens_tint(tint=None, opacity=None) -> bool:
+    """Re-paint the CURRENT glasses' lenses live (tint/opacity) without re-fetching —
+    re-runs clean_lenses on the stored armless front. Returns False if nothing's on."""
+    with _EYEWEAR_LOCK:
+        if _EYEWEAR["armless"] is None:
+            return False
+        _EYEWEAR["tint"] = tint
+        _EYEWEAR["opacity"] = opacity
+        _EYEWEAR["rgba"] = clean_lenses(_EYEWEAR["armless"], tint, opacity)
+        return True
+
+
+def _draw_temple_arms(ctx, f, quad, color):
+    """Synthesize the temple arms (legs) from each lens hinge BACK to the ears,
+    using the dense landmarks, in the frame's colour — so the glasses read as truly
+    worn. Drawn BEFORE the lens front so the rim covers the hinge join cleanly."""
+    TL, TR, BR, BL = [np.array(p, float) for p in quad]
+    ex, ey = _frame_axes(f)
+    ec = f.eyes_center
+    # connect at the outer edge around EYE level (where real hinges sit), tucked a
+    # touch INWARD so the frame rim covers the join (drawn before the front).
+    tuck = f.eye_dist * 0.05
+    hinges = [TL * 0.55 + BL * 0.45 + ex * tuck,        # left: outer edge, eye level
+              TR * 0.55 + BR * 0.45 - ex * tuck]        # right
+    ears = [ec - ex * (f.face_w * 0.52) + ey * (f.eye_dist * 0.06),   # face-edge, ear height
+            ec + ex * (f.face_w * 0.52) + ey * (f.eye_dist * 0.06)]
+    th = max(3, int(f.eye_dist * 0.11))
+    hi = tuple(min(255, c + 50) for c in color)
+    dk = tuple(max(0, c - 30) for c in color)
+    for hinge, ear in zip(hinges, ears):
+        d = ear - hinge; n = np.linalg.norm(d) or 1.0
+        p = np.array([-d[1], d[0]]) / n                    # perpendicular
+        mid = (hinge + ear) / 2 + ey * (f.eye_dist * 0.04)  # slight downward bow to the ear
+        poly = np.array([hinge + p * (th / 2), mid + p * (th * 0.40), ear + p * (th * 0.30),
+                         ear - p * (th * 0.30), mid - p * (th * 0.40), hinge - p * (th / 2)],
+                        np.int32)
+        cv2.fillPoly(ctx.frame, [poly], color, cv2.LINE_AA)
+        cv2.polylines(ctx.frame, [poly], True, dk, 1, cv2.LINE_AA)
+        cv2.line(ctx.frame, tuple(hinge.astype(int)), tuple(ear.astype(int)), hi, 1, cv2.LINE_AA)
 
 
 def filter_eyewear(ctx):
     """Real-time try-on of the SELECTED eyewear product (set_current_eyewear) —
-    warped onto each face's eyes with the dense landmarks, following head pose,
-    with a soft contact shadow on the nose/cheeks for depth (so it reads as WORN,
-    not pasted)."""
+    warped onto each face's eyes with the dense landmarks, following head pose, with
+    SYNTHESIZED temple arms (frame-coloured, from the hinges back to the ears) and a
+    soft contact shadow, so it reads as truly WORN, not pasted."""
     with _EYEWEAR_LOCK:
-        rgba = _EYEWEAR["rgba"]
+        rgba = _EYEWEAR["rgba"]; color = _EYEWEAR["color"]
     if rgba is None:
         return
     for f in ctx.faces:
         q = _eyewear_quad(f, rgba)
         ex, ey = _frame_axes(f)
-        # soft contact shadow: a dark, slightly-down-offset copy of the frame alpha
-        shadow = np.zeros_like(rgba)
+        _draw_temple_arms(ctx, f, q, color)                # arms behind the front
+        shadow = np.zeros_like(rgba)                       # soft contact shadow
         shadow[:, :, 3] = (rgba[:, :, 3].astype(np.float32) * 0.42).astype(np.uint8)
         off = ey * (f.eye_dist * 0.06)
         ctx.warp(shadow, [p + off for p in q])

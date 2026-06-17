@@ -159,6 +159,14 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         return JSONResponse(try_eyewear(image=b.get("image") or b.get("url") or "",
                                         label=b.get("label", "")))
 
+    @app.post("/eyewear/tint")
+    async def eyewear_tint(req: Request):
+        """Recolour the live glasses' lenses (auto/clear/named tint + opacity)."""
+        from .tools import set_lens_tint
+        b = await req.json()
+        return JSONResponse(set_lens_tint(tint=b.get("tint", "auto"),
+                                          opacity=int(b.get("opacity", 0) or 0)))
+
     @app.post("/eyewear/prefetch")
     async def eyewear_prefetch(req: Request):
         """Warm the canonical render in the background (called on hover) so the

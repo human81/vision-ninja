@@ -518,20 +518,23 @@ def _canonical_eyewear(raw: bytes, url: str):
 
 
 def _eyewear_asset(image: str):
-    """(rgba, fitted) — the realistic try-on asset for a product image: a canonical
-    front-on render (generative) refined into see-through glass (OpenCV), with a
-    graceful fallback to the raw cutout if generation is unavailable."""
+    """(rgba, fitted, color) — the realistic try-on asset for a product image: a
+    canonical front-on render (generative) → remove_arms (drop OUTER arms) →
+    clean_lenses (rebuild lens interiors so any arm crossing BEHIND the lens is
+    painted over). `color` is the frame colour for the synthesized temple arms,
+    sampled from the armless front BEFORE the lenses are tinted."""
     raw = _fetch_bytes(image)
     if not raw:
-        return None, False
-    from .face_filters import load_eyewear_rgba, clean_lenses, remove_arms
+        return None, False, None
+    from .face_filters import load_eyewear_rgba, clean_lenses, remove_arms, frame_color
     canon = _canonical_eyewear(raw, image)
     rgba = load_eyewear_rgba(canon or raw)
     if rgba is None:
-        return None, False
-    # remove_arms drops the OUTER arms; clean_lenses rebuilds each lens interior so
-    # any arm crossing BEHIND/THROUGH the lens is painted over (eye shows clean).
-    return clean_lenses(remove_arms(rgba)), bool(canon)
+        return None, False, None
+    # return the ARMLESS front; set_current_eyewear paints the lenses (clean_lenses)
+    # so they can be re-tinted live.
+    armless = remove_arms(rgba)
+    return armless, bool(canon), frame_color(armless)
 
 
 def prefetch_eyewear(image: str = "") -> dict:
@@ -551,11 +554,11 @@ def try_eyewear(image: str = "", label: str = "") -> dict:
     and refined into realistic see-through glass (so they sit like they're worn,
     not pasted), then warped live. `image` = product image URL / path / data URI.
     For a single photoreal still instead, use virtual_try_on(which='frame')."""
-    rgba, fitted = _eyewear_asset(image)
+    rgba, fitted, color = _eyewear_asset(image)
     if rgba is None:
         return {"status": "error", "error": "could not load eyewear image", "ui": "overlays"}
     from .face_filters import set_current_eyewear
-    set_current_eyewear(rgba, label or "eyewear")
+    set_current_eyewear(rgba, label or "eyewear", color=color)
     try:
         ctx().overlays.clear()
         ctx().overlays.add_builtin("eyewear")
@@ -565,6 +568,20 @@ def try_eyewear(image: str = "", label: str = "") -> dict:
     _meter("overlay", units={"overlay_frames": 1}, label="try_eyewear")
     return {"status": "success", "name": "eyewear", "label": label,
             "fitted": fitted, "ui": "overlays"}
+
+
+def set_lens_tint(tint: str = "auto", opacity: int = 0) -> dict:
+    """Recolour the live glasses' LENSES (the lenses are fully rebuilt, so any original
+    arm/reflection is gone). tint: 'auto' (match the original frame's lenses), 'clear'
+    (see-through), or one of: smoke, grey, dark, black, brown, amber, blue, green,
+    rose, purple, gold, mirror, silver. opacity: 0=auto, else 1-255 (lower = more
+    see-through). Use when the user asks to change their lens colour/tint."""
+    from .face_filters import set_lens_tint as _apply
+    t = None if (tint or "auto").lower() in ("auto", "") else tint
+    ok = _apply(t, int(opacity) or None)
+    return {"status": "success" if ok else "error", "tint": tint or "auto",
+            "opacity": opacity, "ui": "overlays",
+            "error": "" if ok else "put some glasses on first"}
 
 
 # ---------- perception / the agent's eyes ----------
@@ -1391,7 +1408,7 @@ ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render, set_detection,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays,
-    apply_face_filter, try_eyewear, shop_search, try_product,
+    apply_face_filter, try_eyewear, set_lens_tint, shop_search, try_product,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, extend_video, narrate, generate_music,
