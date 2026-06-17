@@ -269,6 +269,20 @@ def remove_overlay(name: str) -> dict:
     return {"status": "success" if ok else "error", "name": name, "ui": "overlays"}
 
 
+def go_live() -> dict:
+    """RESET the canvas back to the LIVE video and remove everything tried on — any
+    glasses, clothes, mask, filter or overlay. Use when the user says 'reset', 'clear
+    the canvas', 'go back to live', 'take it/them off', 'remove the glasses / jacket /
+    filter', or wants a clean live feed again."""
+    n = ctx().overlays.clear()
+    try:
+        from .face_filters import set_current_eyewear
+        set_current_eyewear(None)                  # drop the eyewear asset
+    except Exception:
+        pass
+    return {"status": "success", "cleared": n, "mode": "live", "ui": "overlays"}
+
+
 FACE_FILTERS_LIST = ["ninja_mask", "sunglasses", "glasses", "dog", "cat",
                      "mustache", "crown", "clown_nose", "heart_eyes",
                      "face_mesh", "anonymize"]
@@ -1407,7 +1421,7 @@ def direct_story(brief: str, scenes: int = 3, mode: str = "fast",
 ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render, set_detection,
     draw_zone, draw_line, clear_annotations,
-    list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays,
+    list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays, go_live,
     apply_face_filter, try_eyewear, set_lens_tint, shop_search, try_product,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,

@@ -451,7 +451,12 @@ def load_eyewear_rgba(raw: bytes):
 
 def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None):
     """`rgba` is the ARMLESS front (remove_arms output). We store it so the lenses
-    can be re-tinted live, and paint the lenses now via clean_lenses(tint, opacity)."""
+    can be re-tinted live, and paint the lenses now via clean_lenses(tint, opacity).
+    Pass None to clear the current eyewear."""
+    if rgba is None:
+        with _EYEWEAR_LOCK:
+            _EYEWEAR.update({"rgba": None, "armless": None, "label": ""})
+        return
     with _EYEWEAR_LOCK:
         _EYEWEAR["armless"] = rgba
         _EYEWEAR["tint"] = tint

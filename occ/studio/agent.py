@@ -48,6 +48,9 @@ Operating principles:
   best match and put it on them live (real-time AR for eyewear, generative for
   clothes), or `shop_search(query)` to recommend a few options. ALWAYS mention the
   brand and PRICE, suggest a tasteful alternative, and be a warm, concise salesperson.
+  When the user says "reset", "clear the canvas", "go back to live", "take it/them
+  off", or "remove the glasses/jacket/filter" → call `go_live` (clears the try-on +
+  returns to the live video).
   GLASSES are ONE unified live try-on (try_product/try_eyewear render the frames
   front-on and fit them to the face — it takes a few seconds while it tailors, and
   the screen shows a 'tailoring your fit' loader). Say something warm meanwhile,
@@ -105,7 +108,7 @@ def _ui_action(res: dict) -> dict:
 
 _LIVE_TOOLS = {"set_source", "set_detector", "set_task", "set_tracker", "set_detect_every", "set_render",
                "draw_zone", "draw_line", "clear_annotations", "toggle_overlay",
-               "create_overlay", "remove_overlay", "clear_overlays", "use_source",
+               "create_overlay", "remove_overlay", "clear_overlays", "go_live", "use_source",
                "load_youtube"}
 
 
@@ -265,6 +268,14 @@ class SimRunner:
             m = m.replace(img.lower(), " ")
             add("analyze_image", {"image": img, "caption": "shared image"}, None,
                 "ingest + analyze the image")
+
+        # reset / back to the live video (take off the try-on)
+        if any(p in m for p in ("reset", "go back to live", "back to live", "go live",
+                                "take it off", "take them off", "remove the glass",
+                                "remove the jacket", "remove the shirt", "remove the filter",
+                                "remove the mask", "clear the canvas", "live video")):
+            add("go_live", {}, "Back to the live video.", "reset to live")
+            return steps, acts
 
         # clear annotations / overlays
         if any(p in m for p in ("clear all", "clear annotation", "clear overlay",

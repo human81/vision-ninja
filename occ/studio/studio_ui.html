@@ -101,23 +101,40 @@
   .gcard .gt{font-size:8.5px;color:var(--fg);padding:4px 5px 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .gcard .gp{font-size:8.5px;color:#e7b24a;padding:0 5px 4px}
   .gcard.warming{outline:1px solid var(--cyan);outline-offset:-1px}
-  /* courteous "tailoring your fit" loader on the canvas */
+  /* premium "processing" loader on the main canvas */
   #fitloader{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
-    z-index:7;background:radial-gradient(closest-side,rgba(6,10,16,.55),rgba(6,10,16,.78))}
-  #fitloader.on{display:flex;animation:fitfade .25s ease}
+    z-index:7;background:radial-gradient(130% 120% at 50% 38%,rgba(10,16,26,.45),rgba(3,6,11,.88));
+    -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+  #fitloader.on{display:flex;animation:fitfade .3s ease}
   @keyframes fitfade{from{opacity:0}to{opacity:1}}
-  .fitcard{display:flex;flex-direction:column;align-items:center;gap:13px;padding:26px 30px;
-    border-radius:16px;background:rgba(14,21,33,.72);border:1px solid var(--line);
-    backdrop-filter:blur(9px);box-shadow:0 12px 40px #000a;min-width:230px}
-  .fitring{width:46px;height:46px;border-radius:50%;border:3px solid rgba(54,215,224,.18);
-    border-top-color:var(--cyan);animation:fitspin .9s linear infinite}
+  .fitcard{position:relative;display:flex;flex-direction:column;align-items:center;gap:16px;
+    padding:30px 38px;border-radius:20px;
+    background:linear-gradient(165deg,rgba(22,30,46,.82),rgba(11,17,27,.82));
+    border:1px solid rgba(130,150,180,.16);
+    box-shadow:0 24px 70px #000c, inset 0 1px 0 rgba(255,255,255,.05);
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);min-width:264px;
+    animation:fitrise .4s cubic-bezier(.2,.8,.2,1)}
+  @keyframes fitrise{from{transform:translateY(10px) scale(.97);opacity:0}to{transform:none;opacity:1}}
+  .fitring{position:relative;width:62px;height:62px;border-radius:50%;
+    background:conic-gradient(from 0deg,transparent 8%,var(--accent) 55%,var(--cyan) 92%,transparent);
+    -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 0);
+    mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 0);
+    animation:fitspin .95s linear infinite;filter:drop-shadow(0 0 9px rgba(54,215,224,.45))}
+  .fitring::after{content:'✦';position:absolute;inset:0;display:flex;align-items:center;
+    justify-content:center;font-size:18px;color:#bfe9ff;
+    animation:fitpulse 1.6s ease-in-out infinite}
   @keyframes fitspin{to{transform:rotate(360deg)}}
-  .fittxt{text-align:center;line-height:1.5}
-  .fittxt b{display:block;font-size:14px;color:var(--fg);letter-spacing:.01em}
-  .fittxt span{font-size:11.5px;color:var(--mut)}
-  .fitbar{width:200px;height:4px;border-radius:9px;background:#0a1018;overflow:hidden}
-  .fitbar i{display:block;height:100%;width:40%;border-radius:9px;
-    background:linear-gradient(90deg,transparent,var(--cyan),transparent);animation:fitslide 1.3s ease-in-out infinite}
+  @keyframes fitpulse{0%,100%{opacity:.5;transform:scale(.9)}50%{opacity:1;transform:scale(1.12)}}
+  .fittxt{text-align:center;line-height:1.55}
+  .fittxt b{display:block;font-size:15px;letter-spacing:.015em;font-weight:600;
+    background:linear-gradient(92deg,#ffffff,#bfe9ff,#9fd8ff);-webkit-background-clip:text;
+    background-clip:text;color:transparent}
+  .fittxt span{font-size:12px;color:var(--mut);transition:opacity .3s}
+  .fitbar{width:218px;height:4px;border-radius:9px;background:rgba(255,255,255,.06);overflow:hidden}
+  .fitbar i{display:block;height:100%;width:38%;border-radius:9px;
+    background:linear-gradient(90deg,transparent,var(--cyan),var(--accent),transparent);
+    box-shadow:0 0 10px rgba(54,215,224,.6);animation:fitslide 1.25s ease-in-out infinite}
+  @keyframes fitslide{0%{margin-left:-40%}100%{margin-left:100%}}
   @keyframes fitslide{0%{margin-left:-40%}100%{margin-left:100%}}
   .filterbar .storebtn.on{border-color:var(--accent);color:var(--accent);background:rgba(63,185,80,.12);font-weight:600}
   #eyemode{display:inline-flex;gap:6px;align-items:center}
@@ -519,7 +536,7 @@ function handleFrame(f){
   else if(f.type==='sources'){renderSources(d.items);switchTab('sources');}
   else if(f.type==='ui_action'){driveUI(d);}
   else if(f.type==='catalog'){showCatalog(d);}
-  else if(f.type==='fitting'){if(d.on){if(NLE.mode!=='voice')setCanvas('live');vShowFitting(d.title,d.sub);}else vHideFitting();}
+  else if(f.type==='fitting'){if(d.on){vShowFitting(d.title,null);}else vHideFitting();}
   else if(f.type==='refresh'){refreshPanel(d.panel);}
   else if(f.type==='final'){if(curText.trim()==='')cur._text.textContent=d.text||'';}
   else if(f.type==='error'){ensureActs().innerHTML='<div class="act err">▸ <b>error</b> '+(d.text||'')+'</div>';}
@@ -947,10 +964,22 @@ async function vTryItem(i){
   const g=CATALOG[STORE]&&CATALOG[STORE].items[i];if(!g)return;$('garmenturl').value=g.img;
   if(STORE==='eyewear')vTryEyewear(g.img,g.title); else vTryOnWith(g.img,g.title);
 }
-/* courteous fitting loader (shared by tap + agent) */
-function vShowFitting(title,sub){$('fittitle').textContent=title||'Tailoring your fit';
-  $('fitsub').textContent=sub||'crafting your frames to your face…';$('fitloader').classList.add('on');}
-function vHideFitting(){$('fitloader').classList.remove('on');}
+/* premium processing loader on the main canvas (shared by tap + agent), with a
+   rotating status so it always feels like the app/agent is working */
+const _FIT_STEPS=['Analyzing your photo…','Composing the look…','Draping the fabric…',
+  'Matching the lighting…','Refining the details…','Almost ready…'];
+let _fitRot=null;
+function vShowFitting(title,sub){
+  $('fittitle').textContent=title||'Working on it';
+  $('fitloader').classList.add('on');
+  clearInterval(_fitRot);
+  if(sub){$('fitsub').textContent=sub;}
+  else{ let i=0; $('fitsub').textContent=_FIT_STEPS[0];
+    _fitRot=setInterval(()=>{i=(i+1)%_FIT_STEPS.length;
+      const s=$('fitsub');s.style.opacity=0;
+      setTimeout(()=>{s.textContent=_FIT_STEPS[i];s.style.opacity=1;},220);},2100); }
+}
+function vHideFitting(){$('fitloader').classList.remove('on');clearInterval(_fitRot);}
 const _PREFETCHED=new Set();
 function vPrefetch(url){ if(!url||_PREFETCHED.has(url))return; _PREFETCHED.add(url);
   fetch('/eyewear/prefetch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:url})}).catch(()=>{}); }
@@ -998,14 +1027,21 @@ async function vTryOn(){const u=$('garmenturl').value.trim();
   if(!u){toast('paste an image URL, pick one below, or upload');return;}
   if(STORE==='eyewear')vTryEyewear(u,''); else vTryOnWith(u,u);}
 async function vTryOnWith(garment,label){
-  $('tryonstatus').textContent='generating try-on…';toast('👕 trying it on you…');
+  // premium loader on the main canvas while Gemini styles the look (~several sec)
+  vShowFitting('Styling your look', null);
+  $('tryonstatus').textContent='styling…';
   try{
     const r=await fetch('/tryon',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({garment})}).then(r=>r.json());
-    if(r.status==='success'&&r.url){setCanvas('image',r.url,'virtual try-on — '+(label||'').slice(0,40));
-      $('tryonstatus').textContent='done ✓';pollUsage();}
-    else{$('tryonstatus').textContent='';toast('try-on: '+(r.error||'failed'));}
-  }catch(e){$('tryonstatus').textContent='';toast('try-on failed');}
+    if(r.status==='success'&&r.url){
+      // preload the result, THEN swap + hide the loader (no black flash)
+      const im=new Image();
+      im.onload=()=>{setCanvas('image',r.url,'virtual try-on — '+(label||'').slice(0,40));
+        $('tryonstatus').textContent='done ✓';vHideFitting();pollUsage();};
+      im.onerror=()=>{setCanvas('image',r.url);vHideFitting();};
+      im.src=r.url;
+    }else{$('tryonstatus').textContent='';vHideFitting();toast('try-on: '+(r.error||'failed'));}
+  }catch(e){$('tryonstatus').textContent='';vHideFitting();toast('try-on failed');}
 }
 
 /* ---------------- NLE editor (timeline + synced playback) ---------------- */
