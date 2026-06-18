@@ -556,8 +556,13 @@ def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None):
     Pass None to clear the current eyewear."""
     if rgba is None:
         with _EYEWEAR_LOCK:
-            _EYEWEAR.update({"rgba": None, "armless": None, "label": ""})
+            _EYEWEAR.update({"rgba": None, "armless": None, "label": "",
+                             "reflection": None, "refl_layer": None})
         return
+    regions, _ = _lens_regions(rgba)
+    lm = np.zeros(rgba.shape[:2], np.uint8)
+    for it, _c in regions:
+        lm[it] = 1
     with _EYEWEAR_LOCK:
         _EYEWEAR["armless"] = rgba
         _EYEWEAR["tint"] = tint
@@ -566,6 +571,70 @@ def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None):
         _EYEWEAR["label"] = label
         _EYEWEAR["color"] = color or frame_color(rgba)
         _EYEWEAR["lens_centers"] = lens_centers_norm(rgba)   # for pupil registration
+        _EYEWEAR["lensmask"] = lm                            # exact glass region (asset space)
+        _EYEWEAR["refl_n"] = 0                               # reflection animation phase
+
+
+def set_lens_reflection(scene_bgr) -> bool:
+    """Set (or clear with None) a STATIC scene that REALLY reflects in the see-through
+    lenses of the current glasses — eyes still show through. Computational photography,
+    not a video paste. The reflection LAYER is built ONCE here (it's static) and cached,
+    so the live loop just warps it (fast)."""
+    with _EYEWEAR_LOCK:
+        if _EYEWEAR.get("armless") is None:
+            return False
+        _EYEWEAR["reflection"] = scene_bgr
+        lm = _EYEWEAR.get("lensmask")
+        _EYEWEAR["refl_layer"] = (_build_reflection(_EYEWEAR["armless"].shape, lm, scene_bgr)
+                                  if (scene_bgr is not None and lm is not None) else None)
+        return True
+
+
+def _build_reflection(shape, lensmask, scene, strength=0.78):
+    """Compose a photoreal glass REFLECTION layer (RGBA, asset space) of `scene` inside
+    the lens region — 2026 computational-photography pass:
+      • the scene is mapped per-lens with a slight BARREL warp (curved-glass refraction),
+      • a FRESNEL gradient (brighter toward the top/sky) and a RIM glow,
+      • the centre stays dim so the EYE shows through (real transparency),
+      • a luminous diagonal SPECULAR streak (the classic glass glint),
+      • a faint chromatic rim fringe. Eyes remain visible; nothing reads as opaque."""
+    h, w = shape[:2]
+    s = cv2.resize(scene, (w, h)).astype(np.float32)
+    s = np.clip(s * 1.16 + 14, 0, 255)                          # glassy luminance lift
+    refl = np.zeros((h, w, 4), np.uint8)
+    m = lensmask.astype(np.float32)
+    if not m.any():
+        return refl
+    # per-lens barrel warp: pull the scene toward each lens centre a touch (refraction)
+    regs = cv2.connectedComponents(lensmask.astype(np.uint8))[1]
+    mapx, mapy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    for li in range(1, regs.max() + 1):
+        ys, xs = np.where(regs == li)
+        if len(xs) < 30:
+            continue
+        cx, cy = xs.mean(), ys.mean(); rad = max(np.ptp(xs), np.ptp(ys)) / 2 + 1
+        dxm = (mapx - cx) / rad; dym = (mapy - cy) / rad
+        r2 = dxm * dxm + dym * dym
+        k = 0.14                                                # barrel strength
+        sel = regs == li
+        mapx[sel] = (cx + (mapx - cx) * (1 - k * r2))[sel]
+        mapy[sel] = (cy + (mapy - cy) * (1 - k * r2))[sel]
+    s = cv2.remap(s, mapx, mapy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    # specular diagonal streak (bright glass glint)
+    diag = (mapx + mapy); diag = diag / (diag.max() or 1.0)
+    streak = np.exp(-((diag - 0.46) ** 2) / (2 * 0.018 ** 2)) * 150.0
+    s = np.clip(s + streak[..., None], 0, 255)
+    refl[:, :, :3] = s.astype(np.uint8)
+    # alpha shaping: fresnel (top) × rim glow × strength, centre kept see-through
+    ys = np.where(m.any(1))[0]; y0, y1 = int(ys.min()), int(ys.max())
+    vg = np.clip(1.0 - (np.arange(h) - y0) / max(1, (y1 - y0)), 0.30, 1.0)[:, None]
+    dist = cv2.distanceTransform(lensmask.astype(np.uint8), cv2.DIST_L2, 5)
+    dist = dist / (dist.max() or 1.0)                           # 0 rim → 1 centre
+    edge = 1.0 - 0.62 * dist
+    a = m * vg * edge * strength * 255.0
+    a = np.maximum(a, m * (streak * 0.6))                       # the glint stays bright
+    refl[:, :, 3] = np.clip(a, 0, 235).astype(np.uint8)
+    return refl
 
 
 def set_lens_tint(tint=None, opacity=None) -> bool:
@@ -617,6 +686,7 @@ def filter_eyewear(ctx):
     with _EYEWEAR_LOCK:
         rgba = _EYEWEAR["rgba"]; color = _EYEWEAR["color"]
         lc = _EYEWEAR.get("lens_centers")
+        refl = _EYEWEAR.get("refl_layer")          # prebuilt once (static) → fast warp
     if rgba is None:
         return
     for f in ctx.faces:
@@ -633,6 +703,8 @@ def filter_eyewear(ctx):
         off = ey * (f.eye_dist * 0.03)
         ctx.warp(shadow, [p + off for p in q])
         ctx.warp(rgba, q)
+        if refl is not None:                              # REAL scene reflection in the glass
+            ctx.warp(refl, q)
 
 
 # ================================ the filters =================================

@@ -143,6 +143,22 @@ def image(prompt: str, model: str = IMAGE_MODEL):
     return edit_image([], prompt, model=model)
 
 
+def imagen(prompt: str, model: str = "imagen-4.0-generate-001", aspect: str = "16:9"):
+    """Text -> image via IMAGEN (photoreal). Returns (png_bytes | None, error)."""
+    from google.genai import types
+    try:
+        r = _client().models.generate_images(
+            model=model, prompt=prompt,
+            config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio=aspect))
+        imgs = getattr(r, "generated_images", None) or []
+        if not imgs:
+            return None, "imagen returned no image"
+        data = getattr(imgs[0].image, "image_bytes", None)
+        return (data, "") if data else (None, "imagen gave no bytes")
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
 def plan_story(brief: str, n: int = 3, model: str = VISION_MODEL):
     """Co-Director scene planning: return ([{prompt, narration}], response). Gemini
     writes a short cinematic storyline as strict JSON."""

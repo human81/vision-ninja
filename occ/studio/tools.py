@@ -878,6 +878,47 @@ def generate_video(prompt: str, from_frame: bool = True) -> dict:
                 source="generated")
 
 
+def lens_reflection(scene: str = "", narrate_with: str = "gemini") -> dict:
+    """REFLECT a static IMAGEN scene REALLY in the user's see-through lenses (the open
+    road / horizon AHEAD) — real reflection + transparency on the LIVE try-on, eyes still
+    show through (computational photography, not a video). Same glasses they're wearing.
+    Speaks a branded TTS tagline (narrate_with: 'gemini' or 'chatgpt'). Use for 'show me
+    the horizon in my lenses', 'reflect the road ahead', 'the road ahead with me'.
+    `scene` overrides the reflected view."""
+    from .face_filters import _EYEWEAR, set_lens_reflection
+    if _EYEWEAR.get("armless") is None:
+        return {"status": "error", "error": "put some glasses on first", "ui": "overlays"}
+    if not _has_key():
+        return {"status": "error", "error": "needs a Gemini key"}
+    from . import genmedia
+    sp = scene or ("the open road and a breathtaking golden-hour ocean horizon ahead, "
+                   "dramatic clouds, cinematic wide panorama, photoreal")
+    png, err = genmedia.imagen(sp + ", no text, no people",
+                               model=ctx().settings.model_for("image_gen"))
+    if not png:
+        return {"status": "error", "error": err or "imagen failed", "ui": "overlays"}
+    bgr = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+    if not set_lens_reflection(bgr):
+        return {"status": "error", "error": "no glasses to reflect on", "ui": "overlays"}
+    os.makedirs("out/studio/exports", exist_ok=True)
+    out = f"out/studio/exports/reflection_{time.strftime('%H%M%S')}.png"
+    open(out, "wb").write(png)
+    brand = " ".join((_EYEWEAR.get("label") or "these frames").split()[:3])
+    tagline = f"{brand}. The road ahead — reflected in your lenses. Ralba Optical."
+    nw = (narrate_with or "gemini").lower()
+    tts_model = "gpt-4o-mini-tts" if any(k in nw for k in ("chat", "gpt", "openai")) else ""
+    audio = ""
+    try:
+        nar = narrate(tagline, model=tts_model)
+        if nar.get("status") == "success":
+            audio = "/download/" + os.path.basename(nar["output"])
+    except Exception:
+        pass
+    _meter("overlay", units={"overlay_frames": 1}, label="lens_reflection")
+    return {"status": "success", "kind": "reflection", "mode": "live", "ui": "overlays",
+            "scene": out, "tagline": tagline, "brand": brand, "audio": audio}
+
+
 def eyewear_film(brand: str = "", tagline: str = "") -> dict:
     """Generate a BRANDED cinematic film of the eyewear the user is wearing, with Veo —
     the BRAND appears in the visuals AND in a spoken voiceover tagline, sponsored by
@@ -1517,7 +1558,7 @@ ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render, set_detection,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays, go_live,
-    apply_face_filter, try_eyewear, set_lens_tint, shop_search, try_product, gesture_browse, live_control,
+    apply_face_filter, try_eyewear, set_lens_tint, lens_reflection, shop_search, try_product, gesture_browse, live_control,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, eyewear_film, extend_video, narrate, generate_music,

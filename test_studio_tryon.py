@@ -168,6 +168,18 @@ def offline():
     width = float(np.linalg.norm(np.array(q[1]) - np.array(q[0])))                  # TL→TR
     check("geometry: absurd detection can't blow up the frame (clamped to IPD)",
           1.7 * 60 <= width <= 3.6 * 60, f"width={width:.0f}px ({width/60:.1f}× IPD)")
+    # LENS REFLECTION (real reflection + transparency): the reflection layer must be
+    # SEE-THROUGH (moderate alpha, eyes still show) and confined to the lens region.
+    from occ.studio.face_filters import _build_reflection
+    lensmask = np.zeros((160, 320), np.uint8)
+    cv2.circle(lensmask, (90, 80), 50, 1, -1); cv2.circle(lensmask, (230, 80), 50, 1, -1)
+    scene = np.tile(np.linspace(40, 220, 320, dtype=np.uint8)[None, :, None], (160, 1, 3))
+    rl = _build_reflection((160, 320, 4), lensmask, scene)
+    ra = rl[:, :, 3]
+    inside = ra[lensmask > 0].mean(); outside = int((ra[lensmask == 0] > 8).sum())
+    check("reflection: confined to the lens region", outside < 30, f"{outside}px outside")
+    check("reflection: see-through (eyes still show)", 20 < inside < 180, f"mean α={inside:.0f}")
+    check("reflection: not fully opaque anywhere", int((ra > 240).sum()) == 0, f"{int((ra>240).sum())}px")
 
     det = sv.Detections.empty()
     set_current_eyewear(get_asset("sunglasses"), "test")   # so 'eyewear' has a product

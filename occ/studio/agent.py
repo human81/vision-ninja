@@ -57,6 +57,25 @@ Operating principles:
   like "let me tailor these to you". To change the LENS colour/tint on the glasses
   they're wearing ("make them clear / darker / blue / mirror / gold sunglasses")
   call `set_lens_tint(tint, opacity)`.
+- BRANDED FILM (agentic). While the user is wearing a pair, you can direct a cinematic
+  branded film of THAT SAME try-on with `eyewear_film()` — it seeds from the live frame
+  and uses the current glasses' brand, generating a Veo clip where the brand appears in
+  the visuals AND a spoken tagline, sponsored by Ralba Optical (the horizon / road-ahead
+  reveal through the clear lenses). Call it when the user says "make a film / ad / promo
+  of these", "show me the horizon", "regenerate the video", "do it again". It takes ~a
+  minute — a cinematic 'composing your film' loader plays meanwhile, so say something warm
+  ("rolling cameras — this one's for you"). Pass `brand`/`tagline` only to override; by
+  default it films the SAME lenses they're trying on. The clip lands on the canvas with
+  audio control and in the library (so co_direct/Izumi can cut it into a longer edit).
+  TWO ROUTES, SAME MAGIC — for 'show me the horizon / the road ahead' on the glasses
+  they're wearing, choose:
+    • IMAGE (fast, live): `lens_reflection(scene, narrate_with)` — generates a static
+      IMAGEN scene and REALLY reflects it in their see-through lenses (real reflection +
+      transparency, eyes still show) on the LIVE try-on, plus a spoken TTS tagline
+      (narrate_with 'gemini' or 'chatgpt'). Use this when they want it instant/live.
+    • VIDEO (cinematic, ~1 min): `eyewear_film()` — the Veo branded film.
+  Both work on the SAME frame they're wearing and can be re-run ("do it again" / "make it
+  a video instead"). Pick image for live/instant, video for a finished cinematic ad.
 - TOUCHLESS SHOPPING (be its co-pilot). In live voice with the camera on, the user's
   SELF-VIEW shows on-screen icon buttons — Prev, Next, Try on, Store, Clear — that
   they press by pointing their hand and holding. It is the SAME engine you drive with
@@ -109,8 +128,8 @@ _FITTING_TOOLS = {
 }
 
 
-# Veo film generation (~60s) → a cinematic, kind film loader on the canvas
-_FILMING_TOOLS = {"eyewear_film", "generate_video", "extend_video"}
+# slow generative reveals (Veo ~60s film, Imagen ~10s reflection) → cinematic loader
+_FILMING_TOOLS = {"eyewear_film", "generate_video", "extend_video", "lens_reflection"}
 
 
 def fitting_on(name: str):
@@ -198,6 +217,9 @@ def frames_for(name: str, res) -> list[dict]:
     if name in _FILMING_TOOLS:                  # close the film loader
         out.append({"type": "filming", "data": {"on": False, "ok": ok,
                                                 "brand": res.get("brand", "")}})
+    if res.get("audio"):                        # play the branded TTS tagline
+        out.append({"type": "play_audio", "data": {"src": res["audio"],
+                                                   "caption": res.get("tagline", "")}})
     out.append({"type": "tool", "data": {"name": name, "ok": ok,
                                          "detail": res.get("error", "")}})
     if res.get("ui"):
@@ -313,6 +335,21 @@ class SimRunner:
         if any(p in m for p in ("try this on", "try that on", "try these on", "try it on me",
                                 "put this on me", "fit this", "try the current", "strike a pose")):
             add("live_control", {"action": "try"}, "Okay — strike a pose!", "try it on")
+            return steps, acts
+
+        # IMAGE route — reflect a static Imagen horizon in the live lenses (+ TTS)
+        if any(p in m for p in ("reflect", "in my lens", "in the lens", "horizon in",
+                                "road ahead in", "show the road ahead", "reflection")):
+            nw = "chatgpt" if any(k in m for k in ("chatgpt", "gpt", "openai")) else "gemini"
+            add("lens_reflection", {"narrate_with": nw},
+                "Reflecting the road ahead in your lenses…", "lens reflection")
+            return steps, acts
+        # VIDEO route — branded Veo film of the CURRENT try-on
+        if any(p in m for p in ("make a film", "make an ad", "branded film", "make a video",
+                                "make a promo", "show me the horizon", "regenerate the video",
+                                "regenerate the film", "film these", "cinematic", "do it again",
+                                "the road ahead", "animate these")):
+            add("eyewear_film", {}, "Rolling cameras — this one's for you.", "branded film")
             return steps, acts
 
         if any(p in m for p in ("reset", "go back to live", "back to live", "go live",

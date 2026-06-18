@@ -745,6 +745,8 @@ function handleFrame(f){
   else if(f.type==='catalog'){showCatalog(d);}
   else if(f.type==='fitting'){if(d.on){vShowFitting(d.title,null);}else vHideFitting();}
   else if(f.type==='filming'){if(d.on){vShowFilm(d.brand);}else vHideFilm();}
+  else if(f.type==='play_audio'){if(d.src){try{const a=new Audio(d.src);a.volume=1;a.play().catch(()=>{});}catch(e){}}
+    if(d.caption)toast('🔊 '+d.caption);}
   else if(f.type==='refresh'){refreshPanel(d.panel);}
   else if(f.type==='final'){if(curText.trim()==='')cur._text.textContent=d.text||'';}
   else if(f.type==='error'){ensureActs().innerHTML='<div class="act err">▸ <b>error</b> '+(d.text||'')+'</div>';}
@@ -1051,7 +1053,7 @@ function vOnLive(m){const t=m.type;
   if(t==='tool'){const d=m.data||{};vStatus('▸ '+(d.name||'tool'),'live');
     if(d.name==='create_overlay'&&d.ok){switchTab('code');pollOverlays();}return;}
   // fitting loader + shopped catalog must work over the BIDI voice path too
-  if(['fitting','filming','catalog','refresh','canvas','ui_action','library','sources','export','timeline','scene'].includes(t)){handleFrame(m);}
+  if(['fitting','filming','play_audio','catalog','refresh','canvas','ui_action','library','sources','export','timeline','scene'].includes(t)){handleFrame(m);}
 }
 function vTranscript(role,text){if(!text)return;
   // transcripts stream as deltas — accumulate each side into ONE bubble per turn
