@@ -324,13 +324,18 @@ def clean_lenses(rgba, tint=None, opacity=None):
             a[idx] = int(opacity) if opacity else _SUN_A
         lens_union |= interior
 
-    # ---- HARD SAFETY NET: no opaque white blob may survive in the lens area ----
-    # (recompute on the painted image; lower the ALPHA of any near-white enclosed pixel
-    #  so it can never read as a white lens — preserving its pixels, just transparent.)
+    # ---- HARD SAFETY NET: no opaque white may survive ANYWHERE inside the frame ----
+    # (lens area + enclosed gaps like the nose-bridge cutout). We lower the ALPHA of any
+    # near-white pixel in the DEEP interior — protecting thin frame rims (incl. white
+    # acetate, which sits on the silhouette boundary and is eroded away here).
+    binm = (a > 40).astype(np.uint8)
+    ff = binm.copy(); cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)
+    filled = (binm | (ff == 0)).astype(np.uint8)
+    deep = cv2.erode(filled, _ellipse(max(4, int(0.05 * h)))) > 0     # interior, not the rim
     hsv1 = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     near_white = (hsv1[:, :, 2] > 224) & (hsv1[:, :, 1] < 36) & (a > 110)
-    enclosed = (holes > 0) | lens_union                          # lens area ONLY (not the rim)
-    enclosed = cv2.dilate(enclosed.astype(np.uint8), _ellipse(max(3, int(0.05 * h)))) > 0
+    enclosed = (holes > 0) | lens_union | deep                       # lens + enclosed gaps
+    enclosed = cv2.dilate(enclosed.astype(np.uint8), _ellipse(max(3, int(0.03 * h)))) > 0
     kill = near_white & enclosed
     if kill.any():
         a[kill] = int(opacity) if (opacity and clear_force) else _CLEAR_A
