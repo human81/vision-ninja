@@ -31,6 +31,10 @@ _MODEL_PATH = os.path.join(_MODEL_DIR, "gesture_recognizer.task")
 # (frames) between discrete actions so one gesture fires exactly once.
 _HOLD_FRAMES = 10
 _COOLDOWN = 18
+# browsing must be driven by a REAL, confident HAND — never by the face. We raise
+# MediaPipe's detection/tracking thresholds AND require a high handedness score, so a
+# face is never mistaken for a hand (the palm detector otherwise false-fires on faces).
+_HAND_MIN_SCORE = 0.8
 
 
 def _ensure_model():
@@ -59,7 +63,6 @@ class GestureBrowser:
         self._fired_hold = False  # latched until the fist releases
         self._cool = 0           # frames until the next discrete action may fire
         self._last_gesture = "—"
-        self._cursor = None      # (x,y) px of the index fingertip
         self._lock = threading.Lock()
 
     # ---------------- lifecycle ----------------
@@ -106,7 +109,10 @@ class GestureBrowser:
             self._mp = mp
             opts = vision.GestureRecognizerOptions(
                 base_options=mp_python.BaseOptions(model_asset_path=_ensure_model()),
-                running_mode=vision.RunningMode.VIDEO, num_hands=1)
+                running_mode=vision.RunningMode.VIDEO, num_hands=1,
+                min_hand_detection_confidence=0.7,
+                min_hand_presence_confidence=0.6,
+                min_tracking_confidence=0.6)
             self._rec = vision.GestureRecognizer.create_from_options(opts)
         except Exception as e:
             self.err = f"gesture recogniser unavailable: {type(e).__name__}: {e}"
@@ -114,19 +120,22 @@ class GestureBrowser:
 
     # ---------------- per-frame ----------------
     def process(self, vis: np.ndarray, clean: np.ndarray):
-        """Recognise the hand on `clean`, act, and draw the UI onto `vis`."""
+        """Recognise the HAND on `clean` and act. Nothing is drawn on the video — all
+        browse feedback lives in the browser side-rails, so the user's face is never
+        touched and there is no pointer on the face."""
         if not self.active:
             return
         if self._rec is None:
             self._ensure_recognizer()
         gesture, hand = self._recognize(clean)
-        self._last_gesture = gesture or "—"
+        self._last_gesture = gesture if hand is not None else "—"
         if self._cool > 0:
             self._cool -= 1
         self._drive(gesture, hand, vis.shape[1], vis.shape[0])
-        self._draw(vis)
 
     def _recognize(self, clean):
+        """Return (gesture, hand) ONLY for a confident, real hand — else (None, None).
+        A face (or anything that isn't clearly a hand) never drives browsing."""
         if self._rec is None:
             return None, None
         try:
@@ -136,8 +145,13 @@ class GestureBrowser:
             res = self._rec.recognize_for_video(image, self._ts)
         except Exception:
             return None, None
-        if not res.hand_landmarks:
-            self._cursor = None
+        if not res.hand_landmarks or not res.handedness:
+            return None, None
+        try:
+            score = res.handedness[0][0].score
+        except Exception:
+            score = 0.0
+        if score < _HAND_MIN_SCORE:          # not confidently a hand → ignore (e.g. a face)
             return None, None
         lm = res.hand_landmarks[0]
         name = ""
@@ -150,9 +164,8 @@ class GestureBrowser:
             self._hold = 0
             self._fired_hold = False
             return
-        # cursor = index fingertip (landmark 8); browse by its x position
+        # browse by the HAND's index-fingertip x position (landmark 8). No on-video cursor.
         tip = hand[8]
-        self._cursor = (int(tip.x * W), int(tip.y * H))
         if self.items and not self.busy:
             x = min(max((tip.x - 0.18) / 0.64, 0.0), 1.0)    # deadzones at the edges
             self.idx = int(round(x * (len(self.items) - 1)))
@@ -221,22 +234,6 @@ class GestureBrowser:
         self.banner = "Cleared — back to live"
         threading.Timer(1.4, self._clear_banner).start()
 
-    # ---------------- drawing ----------------
-    # The video stays CLEAN — only the AR try-on + a subtle hand cursor live on the
-    # frame, so your face and the glasses are never covered. All product chrome (the
-    # carousel, the now-trying card, the hints) renders in the browser side-rails
-    # from state()/`window`. So you SEE what you're trying on.
-    def _draw(self, vis):
-        if not self._cursor:
-            return
-        x, y = self._cursor
-        cv2.circle(vis, (x, y), 18, (90, 240, 200), 2)
-        cv2.circle(vis, (x, y), 4, (255, 255, 255), -1)
-        if self._hold > 0:                       # hold-to-try progress ring at the hand
-            frac = self._hold / _HOLD_FRAMES
-            cv2.ellipse(vis, (x, y), (26, 26), -90, 0, int(360 * frac), (90, 240, 190), 4)
-        g = {"Closed_Fist": "GRAB", "Victory": "SWITCH", "Thumb_Down": "CLEAR",
-             "Open_Palm": "BROWSE", "Pointing_Up": "BROWSE"}.get(self._last_gesture, "")
-        if g:
-            cv2.putText(vis, g, (x + 24, y - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                        (90, 240, 200), 2, cv2.LINE_AA)
+    # NOTE: deliberately NOTHING is drawn on the video frame. The face stays
+    # untouched; every browse cue (current frame, filmstrip, hold progress, status)
+    # lives in the browser side-rails, driven by state().

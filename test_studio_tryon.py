@@ -250,6 +250,13 @@ def offline():
     gb._drive("Thumb_Down", _hand(0.5), 1000, 1000)
     check("gesture: V switches store, thumbs-down clears",
           calls == ["select", "switch", "clear"], calls)
+    # the FACE must never drive browsing: no confident hand → idx frozen, video untouched
+    gb.idx = 5; gb._rec = object()           # skip mediapipe init
+    gb._recognize = lambda clean: (None, None)
+    frame = np.zeros((120, 160, 3), np.uint8); before = frame.copy()
+    gb.process(frame, frame)
+    check("gesture: no confident hand → catalog frozen & video untouched",
+          gb.idx == 5 and np.array_equal(frame, before))
     check("gesture_browse tool registered", "gesture_browse" in
           {f.__name__ for f in T.ALL_TOOLS})
 

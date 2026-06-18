@@ -212,10 +212,16 @@
     background:linear-gradient(90deg,var(--cyan),var(--accent));transition:width .08s linear;
     box-shadow:0 0 12px rgba(54,215,224,.7)}
   #ghint-status{font-size:13px;color:#bfe9ff;min-height:18px;font-weight:500}
-  .glegend{margin-top:auto;display:flex;flex-direction:column;gap:7px;font-size:11.5px;color:#90a6c0;
-    border-top:1px solid rgba(255,255,255,.07);padding-top:12px}
-  .glegend>div{display:flex;gap:9px;align-items:center}
-  .glegend b{color:#e6eeff;font-weight:600;min-width:58px}
+  .glegend{margin-top:auto;display:flex;flex-direction:column;gap:0;
+    border:1px solid rgba(255,255,255,.08);border-radius:14px;overflow:hidden;
+    background:rgba(255,255,255,.025)}
+  .glegend .ghead{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+    color:#7f93ab;padding:11px 14px 7px}
+  .gleg{display:flex;align-items:center;gap:13px;padding:10px 14px;
+    border-top:1px solid rgba(255,255,255,.05)}
+  .glic{font-size:22px;width:26px;text-align:center;flex:none;line-height:1}
+  .gleg b{color:#eef4ff;font-weight:600;font-size:13.5px;flex:none}
+  .gleg i{color:#8ea4be;font-style:normal;font-size:12px;margin-left:auto;text-align:right}
   .grail-head{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#8ba1bb}
   #gfilm{display:flex;flex-direction:column;gap:9px;overflow:hidden;flex:1;justify-content:center}
   .gcardf{display:flex;align-items:center;gap:11px;padding:7px 9px;border-radius:12px;
@@ -417,10 +423,13 @@
               <div id=ghero-price>—</div>
             </div>
             <div id=ghold><i id=ghold-bar></i></div>
-            <div id=ghint-status>✋ move your hand to browse</div>
+            <div id=ghint-status>✋ Raise your hand — move ◀ ▶ to browse</div>
             <div class=glegend>
-              <div><b>✋ move</b> browse</div><div><b>✊ fist</b> try on</div>
-              <div><b>✌ V</b> switch</div><div><b>👎</b> clear</div>
+              <div class=ghead>Hand gestures</div>
+              <div class=gleg><span class=glic>✋</span><b>Move hand</b><i>browse</i></div>
+              <div class=gleg><span class=glic>✊</span><b>Fist</b><i>try it on</i></div>
+              <div class=gleg><span class=glic>✌️</span><b>Peace</b><i>switch store</i></div>
+              <div class=gleg><span class=glic>👎</span><b>Thumbs&nbsp;down</b><i>clear</i></div>
             </div>
           </div>
           <div id=grail-right class=grail>
@@ -1126,12 +1135,15 @@ function gRenderRails(g){
   $('ghero-brand').textContent=c.brand||'';
   $('ghero-price').textContent=c.price?('$'+c.price):'';
   $('ghold-bar').style.width=Math.round((g.hold||0)*100)+'%';
-  let st=eyewear?'✋ move your hand to browse frames':'✋ move your hand to browse looks';
+  // status reflects the HAND only (no hand → prompt to raise one; never the face)
+  const handUp=g.gesture&&g.gesture!=='—';
+  let st=handUp?(eyewear?'Browsing frames ◀ ▶':'Browsing looks ◀ ▶')
+               :'✋ Raise your hand — move ◀ ▶ to browse';
   if(g.busy)st='✨ '+(g.banner||'fitting…');
   else if(g.banner)st=g.banner;
-  else if(g.gesture==='Closed_Fist')st='✊ hold to try it on…';
-  else if(g.gesture==='Victory')st='✌ switching store…';
-  else if(g.gesture==='Thumb_Down')st='👎 clearing…';
+  else if(g.gesture==='Closed_Fist')st='✊ Hold to try it on…';
+  else if(g.gesture==='Victory')st='✌️ Switching store…';
+  else if(g.gesture==='Thumb_Down')st='👎 Clearing…';
   $('ghint-status').textContent=st;
   $('gfilm').innerHTML=(g.window||[]).map(it=>
     `<div class="gcardf${it.current?' cur':''}">`+
