@@ -225,54 +225,46 @@ def offline():
     check("narrate exposes a model arg (Creole TTS)",
           "model" in inspect.signature(T.narrate).parameters)
 
-    # --- gesture browsing logic (deterministic; no camera / mediapipe needed) ---
-    from occ.studio.gestures import GestureBrowser, _HOLD_FRAMES
-    from types import SimpleNamespace as NS
-    def _hand(x, y=0.5):                       # 21 landmarks; only [8]=index tip matters
-        return [NS(x=x, y=y, z=0) for _ in range(21)]
+    # --- touchless on-screen BUTTONS (deterministic; fingertip dwell, no camera) ---
+    from occ.studio.gestures import GestureBrowser, _DWELL, _BTN
+    BCTR = {b[0]: (b[2], b[3]) for b in _BTN}
     gb = GestureBrowser()
     gb.active = True; gb.store = "eyewear"
-    gb.items = [{"title": f"g{i}", "img": ""} for i in range(40)]
-    gb.idx = 20; gb._pos = 20.0; gb._hx = None
-    # JOG-WHEEL: a centred / barely-moving open hand HOLDS the catalog (no jitter scroll)
-    for _ in range(20): gb._drive("Open_Palm", _hand(0.52), 1000, 1000)
-    check("jog: centred / tiny motion holds the catalog", gb.idx == 20, f"->{gb.idx}")
-    # a deliberate offset scrolls gradually (rate-based, not a jump)
-    for _ in range(30): gb._drive("Open_Palm", _hand(0.92), 1000, 1000)
-    fwd = gb.idx
-    check("jog: open hand scrolls forward gradually", 20 < fwd, f"20->{fwd}")
-    # EACH GESTURE INDEPENDENT — moving the hand during non-browse gestures never scrolls
-    gb._cool = 99
-    gb._drive("Victory", _hand(0.95), 1000, 1000)
-    gb._drive("Thumb_Down", _hand(0.05), 1000, 1000)
-    check("jog: non-browse gestures never scroll the catalog", gb.idx == fwd, f"{fwd}->{gb.idx}")
-    for _ in range(60): gb._drive("Open_Palm", _hand(0.06), 1000, 1000)
-    check("jog: open hand the other way rewinds", gb.idx < fwd, f"{fwd}->{gb.idx}")
-    # fist HOLDS then fires the try-on exactly once
-    calls = []; gb.busy = False; gb._select = lambda: calls.append("select")
-    for _ in range(_HOLD_FRAMES + 3):
-        gb._drive("Closed_Fist", _hand(0.5), 1000, 1000)
-    check("gesture: fist holds then fires try-on exactly once", calls == ["select"], calls)
-    gb._drive("Open_Palm", _hand(0.5), 1000, 1000)  # release
-    gb._cool = 0; gb._switch_store = lambda: calls.append("switch")
-    gb._drive("Victory", _hand(0.5), 1000, 1000)
-    gb._cool = 0; gb._clear = lambda: calls.append("clear")
-    gb._drive("Thumb_Down", _hand(0.5), 1000, 1000)
-    check("gesture: V switches store, thumbs-down clears",
-          calls == ["select", "switch", "clear"], calls)
-    # thumbs-down must DROP any VTO result so the canvas returns to live (was stuck on apparel)
+    gb.items = [{"title": f"g{i}", "img": ""} for i in range(30)]
+    def _hover(bid, frames):
+        cx, cy = BCTR[bid]
+        for _ in range(frames): gb._update_buttons((cx, cy))
+    def _leave(): gb._update_buttons(None)
+    # a brief graze (< dwell) must NEVER fire — you have to hold to press
+    gb.idx = 15; _hover("next", _DWELL - 3); _leave()
+    check("buttons: brief hover never fires (must dwell)", gb.idx == 15, gb.idx)
+    # dwell on NEXT / PREV steps the catalog by exactly one
+    _hover("next", _DWELL); n1 = gb.idx; _leave()
+    _hover("prev", _DWELL); p1 = gb.idx; _leave()
+    check("buttons: NEXT / PREV step by one", n1 == 16 and p1 == 15, f"{n1}/{p1}")
+    # holding NEXT repeats (steps several, accelerating)
+    gb.idx = 15; _hover("next", _DWELL + 25); _leave()
+    check("buttons: holding NEXT repeats (steps several)", gb.idx > 17, gb.idx)
+    # TRY / STORE / CLEAR each fire ONCE per dwell, independently
+    calls = []
+    gb._select = lambda: calls.append("try")
+    gb._switch_store = lambda: calls.append("switch")
+    gb._clear = lambda: calls.append("clear")
+    _hover("try", _DWELL + 5); _leave()
+    _hover("store", _DWELL + 5); _leave()
+    _hover("clear", _DWELL + 5); _leave()
+    check("buttons: try / store / clear each fire once", calls == ["try", "switch", "clear"], calls)
+    # only a CONFIDENT hand makes a cursor — no hand → no press (catalog frozen)
+    gb.idx = 7; gb._rec = object(); gb._fingertip = lambda clean: None
+    frame = np.zeros((140, 220, 3), np.uint8)
+    gb.process(frame, frame)
+    check("buttons: no hand → no press (catalog frozen)", gb.idx == 7, gb.idx)
+    # CLEAR drops any VTO result so the canvas returns to live (was stuck on apparel)
     gc = GestureBrowser()
     gc.result = {"kind": "image", "src": "/download/x.png"}; gc.busy = True
     gc._clear()
-    check("gesture: thumbs-down drops the VTO result → canvas returns to live",
+    check("buttons: clear drops the VTO result → canvas returns to live",
           gc.result is None and not gc.busy)
-    # the FACE must never drive browsing: no confident hand → idx frozen, video untouched
-    gb.idx = 5; gb._rec = object()           # skip mediapipe init
-    gb._recognize = lambda clean: (None, None)
-    frame = np.zeros((120, 160, 3), np.uint8); before = frame.copy()
-    gb.process(frame, frame)
-    check("gesture: no confident hand → catalog frozen & video untouched",
-          gb.idx == 5 and np.array_equal(frame, before))
     check("gesture_browse tool registered", "gesture_browse" in
           {f.__name__ for f in T.ALL_TOOLS})
 

@@ -192,7 +192,8 @@
     background:linear-gradient(180deg,rgba(9,13,20,.92),rgba(9,13,20,.74));
     backdrop-filter:blur(18px) saturate(1.2);-webkit-backdrop-filter:blur(18px) saturate(1.2);
     pointer-events:none}
-  #wrap.gestures #grail-left,#wrap.gestures #grail-right{display:flex;animation:railin .4s cubic-bezier(.2,.7,.2,1)}
+  /* only the LEFT hero rail shows — the right side of the video holds the touchless buttons */
+  #wrap.gestures #grail-left{display:flex;animation:railin .4s cubic-bezier(.2,.7,.2,1)}
   @keyframes railin{from{opacity:0}to{opacity:1}}
   #grail-left{left:0;box-shadow:24px 0 60px -30px rgba(0,0,0,.9),inset -1px 0 0 rgba(120,240,200,.12)}
   #grail-right{right:0;box-shadow:-24px 0 60px -30px rgba(0,0,0,.9),inset 1px 0 0 rgba(120,240,200,.12)}
@@ -423,13 +424,13 @@
               <div id=ghero-price>—</div>
             </div>
             <div id=ghold><i id=ghold-bar></i></div>
-            <div id=ghint-status>✋ Open hand · move ◀ ▶ to scroll · center to stop</div>
+            <div id=ghint-status>👆 Point at a button → hold to press</div>
             <div class=glegend>
-              <div class=ghead>Hand gestures</div>
-              <div class=gleg><span class=glic>✋</span><b>Open hand</b><i>scroll · center = stop</i></div>
-              <div class=gleg><span class=glic>✊</span><b>Fist</b><i>try it on</i></div>
-              <div class=gleg><span class=glic>✌️</span><b>Peace</b><i>switch store</i></div>
-              <div class=gleg><span class=glic>👎</span><b>Thumbs&nbsp;down</b><i>clear</i></div>
+              <div class=ghead>Touchless buttons →</div>
+              <div class=gleg><span class=glic>◀▶</span><b>Prev / Next</b><i>browse</i></div>
+              <div class=gleg><span class=glic>✓</span><b>Try on</b><i>fit current</i></div>
+              <div class=gleg><span class=glic>⇄</span><b>Store</b><i>eyewear ⇄ apparel</i></div>
+              <div class=gleg><span class=glic>✕</span><b>Clear</b><i>back to live</i></div>
             </div>
           </div>
           <div id=grail-right class=grail>
@@ -445,7 +446,7 @@
               <button id=vscr class=vbtn onclick="vToggle('screen')" title="Share your screen">🖥</button>
               <button id=vfilters class=vbtn onclick="vTogglePanel('filterbar',this)" title="Face filters">😎</button>
               <button id=vshop class=vbtn onclick="vTogglePanel('tryonbar',this)" title="Shop · try on">🛍</button>
-              <button id=vgest class=vbtn onclick="vToggleGestures()" title="Gesture browsing — hands-free try-on">🖐</button>
+              <button id=vgest class=vbtn onclick="vToggleGestures()" title="Touchless controls — on-screen buttons you press with your hand">🖐</button>
               <button id=vdetect class=vbtn onclick="vToggleDetect()" title="Detection · tracking · occupancy">🔎</button>
               <button id=vinfo class=vbtn onclick="vTogglePanel('ovpanel',this)" title="Overlays & settings">⚙</button>
               <span class=vsep></span>
@@ -1107,7 +1108,7 @@ async function vToggleGestures(){
   const on=!$('vgest').classList.contains('on');
   $('vgest').classList.toggle('on',on);
   try{await fetch('/gestures',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on})});}catch(e){}
-  toast(on?'🖐 Gesture browsing ON — move your hand to scroll, fist to try on':'Gesture browsing off');
+  toast(on?'🖐 Touchless controls ON — point your hand at the on-screen buttons & hold to press':'Touchless controls off');
   if(on&&NLE.mode!=='voice'){toast('tip: turn on 📷 Camera so it can see your hand');}
   if(on)gStartRails(); else gStopRails();
   pollStats();
@@ -1122,7 +1123,6 @@ async function gRailLoop(){
   if(g&&!g.active){GRAIL=null;return;}
   GRAIL=setTimeout(gRailLoop,140);
 }
-const _BROWSE_G=['Open_Palm','Pointing_Up'];
 let GFIT=false, GLAST_RESULT=null;
 function gRenderRails(g){
   const wrap=$('wrap');
@@ -1136,16 +1136,13 @@ function gRenderRails(g){
   $('ghero-title').textContent=c.title||'—';
   $('ghero-brand').textContent=c.brand||'';
   $('ghero-price').textContent=c.price?('$'+c.price):'';
-  $('ghold-bar').style.width=Math.round((g.hold||0)*100)+'%';
-  // status — each gesture is independent; browsing only on an OPEN hand
-  const browsing=_BROWSE_G.includes(g.gesture);
-  let st=browsing?(eyewear?'Browsing frames ◀ ▶':'Browsing looks ◀ ▶')
-                 :'✋ Open hand · move ◀ ▶ to scroll · center to stop';
+  $('ghold-bar').style.width=Math.round((g.dwell||0)*100)+'%';   // current button dwell
+  // status — driven by which on-screen button the finger is over
+  const LBL={prev:'◀ Prev',next:'Next ▶',try:'✓ Try on',store:'⇄ Switch store',clear:'✕ Clear'};
+  let st=g.hand?'👆 Point at a button → hold to press':'✋ Raise a hand to control';
+  if(g.hover&&LBL[g.hover])st='👆 Hold to '+LBL[g.hover];
   if(g.busy)st='✨ '+(g.banner||'fitting…');
   else if(g.banner)st=g.banner;
-  else if(g.gesture==='Closed_Fist')st='✊ Hold to try it on…';
-  else if(g.gesture==='Victory')st='✌️ Switching store…';
-  else if(g.gesture==='Thumb_Down')st='👎 Clearing…';
   $('ghint-status').textContent=st;
   $('gfilm').innerHTML=(g.window||[]).map(it=>
     `<div class="gcardf${it.current?' cur':''}">`+
