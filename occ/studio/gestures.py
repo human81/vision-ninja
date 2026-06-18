@@ -34,13 +34,13 @@ _HAND_MIN_SCORE = 0.5
 # Virtual buttons rendered by the browser ON THE SELF-VIEW PiP (compact icons). We
 # only own the geometry + hit-test + dwell here (in mirrored-display coords, since the
 # PiP is mirrored). (id, centre-x, centre-y) normalised. A vertical column on the right.
-_BTN_W, _BTN_H = 0.26, 0.15
+_BTN_W, _BTN_H = 0.25, 0.135
 _BTN = [
-    ("prev",  0.80, 0.13),
-    ("next",  0.80, 0.30),
+    ("prev",  0.80, 0.11),
+    ("next",  0.80, 0.29),
     ("try",   0.80, 0.50),
-    ("store", 0.80, 0.70),
-    ("clear", 0.80, 0.87),
+    ("store", 0.80, 0.71),
+    ("clear", 0.80, 0.89),
 ]
 _ACTIONS = ("prev", "next", "try", "store", "clear")
 _DWELL = 11          # frames to hover before a press fires (~0.7s @15fps)

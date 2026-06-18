@@ -282,6 +282,14 @@ def offline():
           "gesture_browse" in names and "live_control" in names)
     check("agent system prompt teaches touchless + live_control",
           "live_control" in _agent.SYSTEM_PROMPT and "strike a pose" in _agent.SYSTEM_PROMPT.lower())
+    # UNIFIED: the no-key SimRunner routes shopping to the SAME live_control engine
+    sim = _agent.SimRunner()
+    routed = {}
+    for phrase, want in [("show me the next one", "next"), ("go back one", "prev"),
+                         ("try this on me", "try"), ("switch store", "store")]:
+        steps, acts = sim._route(phrase, phrase)
+        routed[want] = any(a[0] == "live_control" and a[1].get("action") == want for a in acts)
+    check("agent (no-key) routes next/prev/try/store via live_control", all(routed.values()), routed)
 
 
 # ----------------------------- ONLINE -----------------------------

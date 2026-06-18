@@ -283,6 +283,25 @@ class SimRunner:
                 "ingest + analyze the image")
 
         # reset / back to the live video (take off the try-on)
+        # touchless live-shopping — the SAME engine the on-screen buttons drive
+        if any(p in m for p in ("next item", "next one", "next pair", "next look",
+                                "show me the next", "go next", "scroll right")):
+            add("live_control", {"action": "next"}, "Here's the next one.", "next item")
+            return steps, acts
+        if any(p in m for p in ("previous item", "previous one", "go back one", "last one",
+                                "previous pair", "go prev", "scroll left", "the one before")):
+            add("live_control", {"action": "prev"}, "Back one.", "previous item")
+            return steps, acts
+        if any(p in m for p in ("switch store", "switch the store", "other store",
+                                "show me glasses instead", "show me clothes instead",
+                                "switch to eyewear", "switch to apparel", "change store")):
+            add("live_control", {"action": "store"}, "Switched the store.", "switch store")
+            return steps, acts
+        if any(p in m for p in ("try this on", "try that on", "try these on", "try it on me",
+                                "put this on me", "fit this", "try the current", "strike a pose")):
+            add("live_control", {"action": "try"}, "Okay — strike a pose!", "try it on")
+            return steps, acts
+
         if any(p in m for p in ("reset", "go back to live", "back to live", "go live",
                                 "take it off", "take them off", "remove the glass",
                                 "remove the jacket", "remove the shirt", "remove the filter",
