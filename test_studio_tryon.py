@@ -129,6 +129,19 @@ def offline():
     cv2.rectangle(gl, (160, 80), (200, 100), (40, 40, 220, 255), -1)   # red bridge
     cen = lens_centers_norm(gl)
     check("eyewear: 2 lens centres detected (registration)", cen is not None and len(cen) == 2)
+    # COLOURED / PATTERNED lenses (e.g. a flag novelty) must NOT fool the centre detection:
+    # geometric (bridge + per-half centroid) → symmetric & mid-height, not stuck on a colour.
+    flag = np.zeros((180, 360, 4), np.uint8)
+    for cx in (96, 264):                                  # two SATURATED blue lenses
+        cv2.circle(flag, (cx, 90), 60, (220, 120, 30, 255), -1)
+    for cx in (96, 264):                                  # dark frame rims
+        cv2.circle(flag, (cx, 90), 60, (30, 30, 30, 255), 12)
+    cv2.rectangle(flag, (156, 80), (204, 100), (30, 30, 30, 255), -1)  # bridge
+    fc = lens_centers_norm(flag)
+    sym = abs((fc[0][0] + fc[1][0]) / 2 - 0.5) if fc else 1.0
+    midy = (fc[0][1] + fc[1][1]) / 2 if fc else 0.0
+    check("eyewear: coloured/flag lenses → symmetric, mid-height centres (not colour-fooled)",
+          fc is not None and sym < 0.08 and 0.4 < midy < 0.6, f"{fc} sym={sym:.2f}")
     cl = clean_lenses(gl)
     regions, _ = _lens_regions(gl)
     lensmask = np.zeros(gl.shape[:2], bool)

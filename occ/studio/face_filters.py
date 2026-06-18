@@ -265,24 +265,37 @@ def _lens_regions(rgba):
 
 
 def lens_centers_norm(rgba):
-    """The two lens centres in normalised (x,y) ∈ [0,1], left-then-right — used to
-    REGISTER the asset's lenses onto the user's pupils. Returns None (→ symmetric
-    fallback) unless the detection is PLAUSIBLE: two centres, clearly separated in x,
-    roughly level in y, and within sane bounds. This guards against the wild scale/
-    rotation that bad detections caused (the 'horrible' frames)."""
-    regions, _ = _lens_regions(rgba)
-    if len(regions) < 2:
+    """The two lens centres in normalised (x,y) ∈ [0,1], left→right, for REGISTRATION
+    onto the pupils. GEOMETRIC + colour-independent (works on clear, sun, AND patterned
+    novelty lenses, where colour-based detection fails): find the nose BRIDGE as the
+    narrowest silhouette column near centre, then take the CENTROID of the glasses
+    silhouette on each side of it = the two lens centres. Validated for plausibility;
+    None → symmetric fallback."""
+    a = rgba[:, :, 3]; h, w = a.shape
+    binm = (a > 40).astype(np.uint8)
+    ff = binm.copy(); cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)
+    silh = ((binm | (ff == 0)) > 0)
+    cols = silh.sum(0).astype(np.float32)
+    if cols.max() < 10:
         return None
-    h, w = rgba.shape[:2]
-    cs = sorted([c for _, c in regions], key=lambda p: p[0])[:2]
-    lx, ly = cs[0][0] / w, cs[0][1] / h
-    rx, ry = cs[1][0] / w, cs[1][1] / h
-    dx = rx - lx
-    ok = (0.22 < dx < 0.85                       # lenses sensibly apart (not too close/wide)
-          and abs(ry - ly) < 0.14                # roughly level (else rotation goes wild)
-          and 0.04 < lx < 0.5 and 0.5 < rx < 0.96
-          and 0.18 < ly < 0.82 and 0.18 < ry < 0.82)
-    return [(lx, ly), (rx, ry)] if ok else None
+    c0, c1 = int(0.34 * w), int(0.66 * w)                 # the bridge is in the central third
+    mid = c0 + int(np.argmin(cols[c0:c1])) if c1 > c0 else w // 2
+
+    def centroid(x0, x1):
+        sub = silh[:, x0:x1]
+        ys, xs = np.where(sub)
+        if len(xs) < max(50, 0.002 * h * w):
+            return None
+        return ((xs.mean() + x0) / w, ys.mean() / h)
+
+    L = centroid(0, mid); R = centroid(mid, w)
+    if not (L and R):
+        return None
+    dx = R[0] - L[0]
+    ok = (0.20 < dx < 0.78 and abs(R[1] - L[1]) < 0.12
+          and 0.06 < L[0] < 0.46 and 0.54 < R[0] < 0.94
+          and 0.22 < L[1] < 0.78 and 0.22 < R[1] < 0.78)
+    return [L, R] if ok else None
 
 
 def clean_lenses(rgba, tint=None, opacity=None):
