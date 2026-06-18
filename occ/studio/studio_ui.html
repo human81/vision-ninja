@@ -71,8 +71,7 @@
         overflow:hidden;display:flex;align-items:center;justify-content:center;
         background:radial-gradient(120% 90% at 50% 35%,#11161f 0%,#0a0d13 55%,#06080c 100%);
         box-shadow:inset 0 0 120px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.04)}
-  #img,#media,#video{border-radius:8px;box-shadow:0 16px 50px -12px rgba(0,0,0,.7)}
-  #wrap.fill #img{width:100%;height:100%;max-width:none;max-height:none;object-fit:cover;border-radius:14px}
+  #wrap.fill #img{object-fit:cover;border-radius:14px}
   /* self-view PiP — raw camera, mirrored, floating in the corner like a video call */
   #selfview{position:absolute;right:16px;bottom:90px;width:clamp(140px,15%,210px);aspect-ratio:4/3;
     object-fit:cover;border-radius:14px;transform:scaleX(-1);display:none;z-index:8;background:#0b111c;
@@ -83,7 +82,10 @@
     background:#0e1521cc;border:1px solid var(--line);color:var(--mut);backdrop-filter:blur(8px)}
   .cornicon:hover{color:#cfe6ff;border-color:#2c3c5a}
   .cornicon.on{color:var(--cyan);border-color:var(--cyan)}
-  #img,#media,#video{max-width:100%;max-height:100%;width:auto;height:auto;display:block;background:#000}
+  /* the video SCALES UP to fill the stage (big, like Meet); contain = full frame +
+     letterbox showing the stage gradient. #wrap.fill switches to cover (edge-to-edge). */
+  #img,#media,#video{width:100%;height:100%;object-fit:contain;display:block;
+    background:transparent;border-radius:10px}
   #drawcv{position:absolute;left:0;top:0;pointer-events:none;z-index:4}
   .drawbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
   .drawbar button{background:#141c29;border:1px solid var(--line);color:var(--fg);
@@ -1011,7 +1013,7 @@ function vStopMic(){
 async function vStartVideo(which){
   const stream=which==='screen'
     ? await navigator.mediaDevices.getDisplayMedia({video:{frameRate:15}})
-    : await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
+    : await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}}});
   VOICE.vidStream=stream;
   if(which==='cam'){const sv=$('selfview');sv.srcObject=stream;sv.play().catch(()=>{});$('wrap').classList.add('selfon');}
   const v=document.createElement('video');v.srcObject=stream;v.muted=true;v.playsInline=true;await v.play();
@@ -1021,7 +1023,7 @@ async function vStartVideo(which){
   const cv=document.createElement('canvas'),cx=cv.getContext('2d');let i=0;
   VOICE.vidTimer=setInterval(()=>{
     const vw=v.videoWidth||640,vh=v.videoHeight||360;if(!vw)return;
-    const sc=Math.min(1,640/Math.max(vw,vh));cv.width=Math.round(vw*sc);cv.height=Math.round(vh*sc);
+    const sc=Math.min(1,1080/Math.max(vw,vh));cv.width=Math.round(vw*sc);cv.height=Math.round(vh*sc);
     cx.drawImage(v,0,0,cv.width,cv.height);
     const c=VOICE.cam;   // use the CURRENT socket (the restart-watchdog may have replaced it)
     cv.toBlob(b=>{if(b&&c&&c.readyState===1)b.arrayBuffer().then(ab=>c.send(ab));},'image/jpeg',0.72);
@@ -1287,6 +1289,10 @@ function nleSetMode(m){const prev=NLE.mode;NLE.mode=m;
   ['vfilters','vshop','vinfo'].forEach(b=>$(b)&&$(b).classList.remove('on'));
   document.querySelectorAll('#modeswitch button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
   if(prev==='voice'&&m!=='voice'){try{vStop();}catch(e){}}
+  // Meet-style: Live Voice collapses BOTH side panels so the canvas is the hero
+  // (chat/analytics one tap away via ◧ ◨ or [ ]). Restored when you leave voice.
+  $('grid').classList.toggle('cl',m==='voice');$('grid').classList.toggle('cr',m==='voice');
+  if(typeof vSyncTog==='function')vSyncTog();
   if(m==='voice'){setCanvas('live');loadGarments();}   // canvas stays on the live stream (= annotated you when cam on)
   if(m!=='edit'){NLE.playing=false;Object.values(NLE._a).forEach(a=>a.pause());try{$('preview').pause();}catch(e){}}
   else{drawTimeline();updateInspector();}}

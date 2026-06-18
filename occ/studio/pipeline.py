@@ -317,7 +317,8 @@ class StudioPipeline:
                         self.gestures.process(vis, frame)
                     except Exception:
                         pass
-                vis = renderer.draw_counts(vis, geo)
+                if detect_on:                            # no count overlay on a clean live/voice feed
+                    vis = renderer.draw_counts(vis, geo)
                 self._record_frame(vis, fps)
                 ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 72])
                 now = time.perf_counter()

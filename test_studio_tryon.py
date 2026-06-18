@@ -384,16 +384,20 @@ def ui():
         pg.wait_for_timeout(300)
         check("showCatalog renders stylist results",
               pg.eval_on_selector_all("#garments .gcard", "e=>e.length") == 2)
-        # collapsible panels → maximize collapses both side columns so the canvas grows
-        cw0 = pg.eval_on_selector("#col-center", "e=>e.getBoundingClientRect().width")
+        # Live Voice auto-collapses both side panels → the canvas is the hero (Meet)
+        collapsed = lambda: "cl" in (pg.get_attribute("#grid", "class") or "").split() \
+            and "cr" in (pg.get_attribute("#grid", "class") or "").split()
+        check("Live Voice maximizes the canvas (both panels collapsed)", collapsed())
+        # the header ⤢ toggle flips that state
+        before = collapsed()
         pg.click("#tgl-max"); pg.wait_for_timeout(450)
-        cls = pg.get_attribute("#grid", "class") or ""
-        cw1 = pg.eval_on_selector("#col-center", "e=>e.getBoundingClientRect().width")
-        check("maximize collapses both panels", "cl" in cls.split() and "cr" in cls.split())
-        check("canvas column grows when maximized", cw1 > cw0 + 100, f"{cw0:.0f}→{cw1:.0f}px")
-        pg.click("#tgl-max"); pg.wait_for_timeout(450)  # restore
-        check("un-maximize restores panels",
-              (lambda c: "cl" not in c.split() and "cr" not in c.split())(pg.get_attribute("#grid", "class") or ""))
+        check("⤢ toggles the side panels", collapsed() != before)
+        if not collapsed():                                   # leave it big for the rest
+            pg.click("#tgl-max"); pg.wait_for_timeout(300)
+        # the video scales UP to fill the stage (not its small intrinsic size)
+        iw = pg.eval_on_selector("#img", "e=>Math.round(e.getBoundingClientRect().width)")
+        ww = pg.eval_on_selector("#wrap", "e=>Math.round(e.getBoundingClientRect().width)")
+        check("video fills the canvas width", iw >= ww - 2, f"img {iw}px / wrap {ww}px")
         # Live Voice backend selector (Gemini ↔ OpenAI Realtime for Creole)
         check("voice backend selector present",
               pg.eval_on_selector_all("#vbackend option", "e=>e.map(o=>o.value).join(',')")
