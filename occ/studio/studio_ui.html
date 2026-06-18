@@ -73,10 +73,33 @@
         box-shadow:inset 0 0 120px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.04)}
   #wrap.fill #img{object-fit:cover;border-radius:14px}
   /* self-view PiP — raw camera, mirrored, floating in the corner like a video call */
-  #selfview{position:absolute;right:16px;bottom:90px;width:clamp(140px,15%,210px);aspect-ratio:4/3;
-    object-fit:cover;border-radius:14px;transform:scaleX(-1);display:none;z-index:8;background:#0b111c;
-    border:1.5px solid rgba(255,255,255,.18);box-shadow:0 14px 40px rgba(0,0,0,.6)}
-  #wrap.selfon #selfview{display:block;animation:railin .4s ease}
+  /* self-view PiP container — holds the mirrored video + the touchless buttons */
+  #selfwrap{position:absolute;right:16px;bottom:92px;width:clamp(150px,16%,220px);aspect-ratio:4/3;
+    border-radius:14px;display:none;z-index:8;background:#0b111c;overflow:hidden;
+    border:1.5px solid rgba(255,255,255,.18);box-shadow:0 14px 40px rgba(0,0,0,.6);
+    transition:width .3s ease}
+  #wrap.selfon #selfwrap{display:block;animation:railin .4s ease}
+  #wrap.gestures #selfwrap{width:clamp(300px,30%,440px)}   /* enlarge while controlling */
+  #selfview{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  /* touchless icon buttons drawn over the PiP (NOT mirrored — readable) */
+  #selfbtns{position:absolute;inset:0;pointer-events:none}
+  .sbtn{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;
+    justify-content:center;border-radius:11px;font-size:clamp(15px,2.4vw,22px);font-weight:700;
+    color:#cfe0f0;background:rgba(12,18,28,.62);border:1.5px solid rgba(255,255,255,.16);
+    backdrop-filter:blur(4px);overflow:hidden;transition:all .12s}
+  .sbtn.hov{color:#08130c;background:rgba(120,240,190,.92);border-color:#7CFFB2;
+    box-shadow:0 0 18px rgba(120,240,190,.6);transform:translate(-50%,-50%) scale(1.08)}
+  .sbtn i{position:absolute;left:0;bottom:0;height:4px;background:#08130c;transition:width .08s linear}
+  #selfcursor{position:absolute;width:18px;height:18px;margin:-9px;border-radius:50%;
+    border:2px solid #7CFFB2;box-shadow:0 0 10px rgba(120,240,190,.8);pointer-events:none;
+    display:none;z-index:2}
+  #selfcursor::after{content:'';position:absolute;inset:6px;border-radius:50%;background:#fff}
+  /* big "strike a pose" countdown */
+  #countdown{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    z-index:9;pointer-events:none;font-size:clamp(90px,18vw,220px);font-weight:800;color:#fff;
+    text-shadow:0 6px 40px rgba(0,0,0,.7),0 0 60px rgba(120,240,190,.5)}
+  #countdown.on{display:flex;animation:cdpop .9s ease}
+  @keyframes cdpop{0%{transform:scale(.4);opacity:0}30%{transform:scale(1);opacity:1}100%{transform:scale(1.15);opacity:.85}}
   .cornicon{position:absolute;top:10px;right:54px;z-index:8;width:34px;height:34px;border-radius:50%;
     display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;
     background:#0e1521cc;border:1px solid var(--line);color:var(--mut);backdrop-filter:blur(8px)}
@@ -424,14 +447,16 @@
               <div id=ghero-price>—</div>
             </div>
             <div id=ghold><i id=ghold-bar></i></div>
-            <div id=ghint-status>👆 Point at a button → hold to press</div>
+            <div id=ghint-status>👆 Point at a button on your self-view & hold</div>
             <div class=glegend>
-              <div class=ghead>Touchless buttons →</div>
+              <div class=ghead>Buttons on your self-view ↘</div>
               <div class=gleg><span class=glic>◀▶</span><b>Prev / Next</b><i>browse</i></div>
-              <div class=gleg><span class=glic>✓</span><b>Try on</b><i>fit current</i></div>
+              <div class=gleg><span class=glic>✓</span><b>Try on</b><i>3·2·1 pose</i></div>
               <div class=gleg><span class=glic>⇄</span><b>Store</b><i>eyewear ⇄ apparel</i></div>
               <div class=gleg><span class=glic>✕</span><b>Clear</b><i>back to live</i></div>
             </div>
+            <div class=gleg style="margin-top:10px;color:#8ea4be;font-size:12px">
+              <span class=glic>🎙</span><span>…or just ask the ninja to do it</span></div>
           </div>
           <div id=grail-right class=grail>
             <div class=grail-head>Browsing</div>
@@ -457,8 +482,14 @@
               <button id=vstop class="vbtn end" onclick="vStop()" title="End session">⏹</button>
             </div>
           </div>
-          <!-- self-view PiP: raw you, no overlay — a two-way call with the agent's canvas -->
-          <video id=selfview muted playsinline></video>
+          <!-- self-view PiP: raw you + touchless icon buttons you press with your hand -->
+          <div id=selfwrap>
+            <video id=selfview muted playsinline></video>
+            <div id=selfbtns></div>
+            <div id=selfcursor></div>
+          </div>
+          <!-- 3-2-1 "strike a pose" countdown over the main canvas -->
+          <div id=countdown></div>
           <button id=fillbtn class=cornicon onclick="toggleFill()" title="Fill / fit the canvas">⤢</button>
         </div>
         <div class=canvascap id=canvascap></div>
@@ -1115,13 +1146,15 @@ async function vToggleGestures(){
 }
 let GRAIL=null;
 function gStartRails(){if(!GRAIL)gRailLoop();}
-function gStopRails(){if(GRAIL){clearTimeout(GRAIL);GRAIL=null;}$('wrap').classList.remove('gestures');}
+function gStopRails(){if(GRAIL){clearTimeout(GRAIL);GRAIL=null;}
+  $('wrap').classList.remove('gestures');$('selfbtns').innerHTML='';
+  $('selfcursor').style.display='none';gCountdown(0);}
 async function gRailLoop(){
   let g=null;
   try{g=await(await fetch('/gesture')).json();}catch(e){}
   gRenderRails(g);
   if(g&&!g.active){GRAIL=null;return;}
-  GRAIL=setTimeout(gRailLoop,140);
+  GRAIL=setTimeout(gRailLoop,90);                  // ~11fps — smooth cursor + dwell
 }
 let GFIT=false, GLAST_RESULT=null;
 function gRenderRails(g){
@@ -1141,9 +1174,12 @@ function gRenderRails(g){
   const LBL={prev:'◀ Prev',next:'Next ▶',try:'✓ Try on',store:'⇄ Switch store',clear:'✕ Clear'};
   let st=g.hand?'👆 Point at a button → hold to press':'✋ Raise a hand to control';
   if(g.hover&&LBL[g.hover])st='👆 Hold to '+LBL[g.hover];
-  if(g.busy)st='✨ '+(g.banner||'fitting…');
+  if(g.countdown>0)st='📸 Strike a pose… '+g.countdown;
+  else if(g.busy)st='✨ '+(g.banner||'fitting…');
   else if(g.banner)st=g.banner;
   $('ghint-status').textContent=st;
+  gRenderPiP(g);                                   // icon buttons + cursor on the self-view
+  gCountdown(g.countdown||0);                      // big 3-2-1 over the canvas
   $('gfilm').innerHTML=(g.window||[]).map(it=>
     `<div class="gcardf${it.current?' cur':''}">`+
     (it.img?`<img src="${it.img}" loading=lazy onerror="this.style.visibility='hidden'">`
@@ -1166,6 +1202,23 @@ function gRenderRails(g){
 function gGestFit(on,eyewear,title){
   if(on&&!GFIT){GFIT=true;vShowFitting(eyewear?'Fitting your frames':'Styling your look',title);}
   else if(!on&&GFIT){GFIT=false;vHideFitting();}
+}
+const _SICON={prev:'◀',next:'▶',try:'✓',store:'⇄',clear:'✕'};
+function gRenderPiP(g){
+  const bc=$('selfbtns'),cur=$('selfcursor'); if(!bc)return;
+  bc.innerHTML=(g.buttons||[]).map(b=>{
+    const hov=(g.hover===b.id), dw=hov?Math.round((g.dwell||0)*100):0;
+    return `<div class="sbtn${hov?' hov':''}" title="${b.id}" style="left:${b.x*100}%;top:${b.y*100}%;width:${b.w*100}%;height:${b.h*100}%">`+
+      `<span>${_SICON[b.id]||''}</span><i style="width:${dw}%"></i></div>`;
+  }).join('');
+  if(g.finger){cur.style.display='block';cur.style.left=(g.finger.x*100)+'%';cur.style.top=(g.finger.y*100)+'%';}
+  else cur.style.display='none';
+}
+let _CDNUM=0;
+function gCountdown(n){
+  const el=$('countdown'); if(!el)return;
+  if(n>0){ if(n!==_CDNUM){el.textContent=n;el.classList.remove('on');void el.offsetWidth;el.classList.add('on');_CDNUM=n;} }
+  else { el.classList.remove('on'); _CDNUM=0; }
 }
 
 /* ---- AR face filters (one-tap) ---- */

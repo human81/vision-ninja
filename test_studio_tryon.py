@@ -225,12 +225,12 @@ def offline():
     check("narrate exposes a model arg (Creole TTS)",
           "model" in inspect.signature(T.narrate).parameters)
 
-    # --- touchless on-screen BUTTONS (deterministic; fingertip dwell, no camera) ---
-    from occ.studio.gestures import GestureBrowser, _DWELL, _BTN
-    BCTR = {b[0]: (b[2], b[3]) for b in _BTN}
+    # --- ONE touchless engine: same buttons for the hand AND the agent (no parallel) ---
+    from occ.studio.gestures import GestureBrowser, _DWELL, _REPEAT, _BTN
+    BCTR = {b[0]: (b[1], b[2]) for b in _BTN}
     gb = GestureBrowser()
     gb.active = True; gb.store = "eyewear"
-    gb.items = [{"title": f"g{i}", "img": ""} for i in range(30)]
+    gb.items = [{"title": f"g{i}", "img": ""} for i in range(40)]
     def _hover(bid, frames):
         cx, cy = BCTR[bid]
         for _ in range(frames): gb._update_buttons((cx, cy))
@@ -238,35 +238,50 @@ def offline():
     # a brief graze (< dwell) must NEVER fire — you have to hold to press
     gb.idx = 15; _hover("next", _DWELL - 3); _leave()
     check("buttons: brief hover never fires (must dwell)", gb.idx == 15, gb.idx)
-    # dwell on NEXT / PREV steps the catalog by exactly one
+    # dwell on NEXT / PREV steps the catalogue by exactly one
     _hover("next", _DWELL); n1 = gb.idx; _leave()
     _hover("prev", _DWELL); p1 = gb.idx; _leave()
     check("buttons: NEXT / PREV step by one", n1 == 16 and p1 == 15, f"{n1}/{p1}")
-    # holding NEXT repeats (steps several, accelerating)
-    gb.idx = 15; _hover("next", _DWELL + 25); _leave()
-    check("buttons: holding NEXT repeats (steps several)", gb.idx > 17, gb.idx)
-    # TRY / STORE / CLEAR each fire ONCE per dwell, independently
+    # holding NEXT auto-repeats but SLOWLY (you see each item) — far fewer steps than frames
+    gb.idx = 15; _hover("next", _DWELL + _REPEAT * 3 + 1); _leave()
+    held = gb.idx - 15
+    check("buttons: holding NEXT repeats SLOWLY", 3 <= held <= 6, f"{held} steps in {_DWELL + _REPEAT*3+1} frames")
+    # TRY starts a 3-2-1 COUNTDOWN (not an instant try-on); STORE/CLEAR fire once
+    _hover("try", _DWELL); _leave()
+    check("buttons: TRY starts the pose countdown", gb.counting and not gb.busy and gb.state()["countdown"] >= 1)
+    gb.counting = False                                   # cancel for the next checks
     calls = []
-    gb._select = lambda: calls.append("try")
     gb._switch_store = lambda: calls.append("switch")
     gb._clear = lambda: calls.append("clear")
-    _hover("try", _DWELL + 5); _leave()
-    _hover("store", _DWELL + 5); _leave()
-    _hover("clear", _DWELL + 5); _leave()
-    check("buttons: try / store / clear each fire once", calls == ["try", "switch", "clear"], calls)
-    # only a CONFIDENT hand makes a cursor — no hand → no press (catalog frozen)
-    gb.idx = 7; gb._rec = object(); gb._fingertip = lambda clean: None
+    _hover("store", _DWELL); _leave(); _hover("clear", _DWELL); _leave()
+    check("buttons: store / clear each fire once", calls == ["switch", "clear"], calls)
+    # AGENT drives the SAME engine via act() — one unified path
+    gb.idx = 10; gb.counting = False
+    gb.act("next"); gb.act("next"); gb.act("prev")
+    check("agent: act() steps the same engine", gb.idx == 11, gb.idx)
+    gb.act("try")
+    check("agent: act('try') runs the same pose countdown", gb.counting)
+    # state exposes the button geometry + finger + countdown for the PiP renderer
+    s = gb.state()
+    check("state: buttons + finger + countdown exposed",
+          len(s["buttons"]) == 5 and "finger" in s and s["countdown"] >= 1)
+    # only a CONFIDENT hand makes a cursor — no hand → no press
+    gb.idx = 7; gb.counting = False; gb._rec = object(); gb._fingertip = lambda clean: None
     frame = np.zeros((140, 220, 3), np.uint8)
     gb.process(frame, frame)
-    check("buttons: no hand → no press (catalog frozen)", gb.idx == 7, gb.idx)
-    # CLEAR drops any VTO result so the canvas returns to live (was stuck on apparel)
+    check("buttons: no hand → no press (catalogue frozen)", gb.idx == 7, gb.idx)
+    # CLEAR drops any VTO result AND cancels a countdown → clean live
     gc = GestureBrowser()
-    gc.result = {"kind": "image", "src": "/download/x.png"}; gc.busy = True
+    gc.result = {"kind": "image", "src": "/download/x.png"}; gc.busy = True; gc.counting = True
     gc._clear()
-    check("buttons: clear drops the VTO result → canvas returns to live",
-          gc.result is None and not gc.busy)
-    check("gesture_browse tool registered", "gesture_browse" in
-          {f.__name__ for f in T.ALL_TOOLS})
+    check("buttons: clear → clean live (drops result, cancels countdown)",
+          gc.result is None and not gc.busy and not gc.counting)
+    from occ.studio import agent as _agent
+    names = {f.__name__ for f in T.ALL_TOOLS}
+    check("gesture_browse + live_control tools registered",
+          "gesture_browse" in names and "live_control" in names)
+    check("agent system prompt teaches touchless + live_control",
+          "live_control" in _agent.SYSTEM_PROMPT and "strike a pose" in _agent.SYSTEM_PROMPT.lower())
 
 
 # ----------------------------- ONLINE -----------------------------
@@ -423,6 +438,17 @@ def ui():
         check("fill toggle fills the canvas", "fill" in (pg.get_attribute("#wrap", "class") or ""))
         pg.click("#fillbtn"); pg.wait_for_timeout(100)
         check("self-view PiP element present", pg.query_selector("#selfview") is not None)
+        # touchless icon buttons render on the PiP from gesture state; countdown overlays
+        pg.evaluate("""()=>gRenderPiP({active:true,buttons:[
+          {id:'prev',x:.8,y:.13,w:.26,h:.15},{id:'next',x:.8,y:.30,w:.26,h:.15},
+          {id:'try',x:.8,y:.50,w:.26,h:.15},{id:'store',x:.8,y:.70,w:.26,h:.15},
+          {id:'clear',x:.8,y:.87,w:.26,h:.15}],hover:'try',dwell:0.5,finger:{x:.8,y:.5}})""")
+        pg.wait_for_timeout(120)
+        check("PiP shows 5 touchless icon buttons", pg.eval_on_selector_all("#selfbtns .sbtn", "e=>e.length") == 5)
+        check("PiP finger cursor visible", pg.eval_on_selector("#selfcursor", "e=>getComputedStyle(e).display") != "none")
+        pg.evaluate("()=>gCountdown(3)"); pg.wait_for_timeout(120)
+        check("pose countdown overlay shows", "on" in (pg.get_attribute("#countdown", "class") or "")
+              and pg.text_content("#countdown") == "3")
         # overlays/config tucked behind the ⚙ icon → canvas is 100% clean by default
         check("overlays/settings hidden in voice by default", not pg.is_visible("#ovpanel"))
         pg.click("#vinfo"); pg.wait_for_timeout(250)

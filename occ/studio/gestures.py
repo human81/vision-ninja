@@ -31,19 +31,21 @@ _MODEL_PATH = os.path.join(_MODEL_DIR, "gesture_recognizer.task")
 # discriminator; the handedness score is a light secondary gate.
 _HAND_MIN_SCORE = 0.5
 
-# Virtual buttons: (id, label, centre-x, centre-y) in NORMALISED mirrored-display
-# coords. A vertical column down the right edge so it never covers the face.
-_BTN_W, _BTN_H = 0.165, 0.12
+# Virtual buttons rendered by the browser ON THE SELF-VIEW PiP (compact icons). We
+# only own the geometry + hit-test + dwell here (in mirrored-display coords, since the
+# PiP is mirrored). (id, centre-x, centre-y) normalised. A vertical column on the right.
+_BTN_W, _BTN_H = 0.26, 0.15
 _BTN = [
-    ("prev",  "< PREV",  0.885, 0.15),
-    ("next",  "NEXT >",  0.885, 0.30),
-    ("try",   "TRY ON",  0.885, 0.50),
-    ("store", "STORE",   0.885, 0.70),
-    ("clear", "CLEAR",   0.885, 0.85),
+    ("prev",  0.80, 0.13),
+    ("next",  0.80, 0.30),
+    ("try",   0.80, 0.50),
+    ("store", 0.80, 0.70),
+    ("clear", 0.80, 0.87),
 ]
-_DWELL = 11          # frames to hover before a press fires (~0.7s)
-_REPEAT = 5          # PREV/NEXT re-fire interval while held (frames; accelerates)
-_REPEAT_MIN = 2
+_ACTIONS = ("prev", "next", "try", "store", "clear")
+_DWELL = 11          # frames to hover before a press fires (~0.7s @15fps)
+_REPEAT = 16         # PREV/NEXT auto-repeat while HELD — SLOW (~1.1s/item) so you see each
+_COUNTDOWN = 3.0     # seconds to "strike a pose" after TRY ON, before the capture
 
 
 def _ensure_model():
@@ -71,11 +73,14 @@ class GestureBrowser:
         self._hand_score = 0.0
         self._present = False
         self.result = None        # last try-on result to surface (apparel image)
-        self.hover = None         # button id the cursor is over (for the rail status)
+        self.hover = None         # button id the cursor is over
+        self.finger = None        # (x,y) mirrored display coords of the fingertip, or None
         self._dwell = 0           # frames the cursor has hovered the current button
         self._fired = False       # latched after a press until the cursor leaves
-        self._reps = 0            # consecutive PREV/NEXT repeats (for acceleration)
-        self._rep = 0             # countdown to the next repeat
+        self._rep = 0             # countdown to the next PREV/NEXT repeat (slow)
+        self.counting = False     # 3-2-1 "strike a pose" countdown before a try-on
+        self._count_until = 0.0
+        self._pending = None      # the item to try on when the countdown ends
         self._lock = threading.Lock()
 
     # ---------------- lifecycle ----------------
@@ -87,6 +92,7 @@ class GestureBrowser:
             self._load()
             self.idx = min(self.idx, max(0, len(self.items) - 1))
             self.hover = None; self._dwell = 0; self._fired = False
+            self.counting = False; self._pending = None
             self._ensure_recognizer()
         return self.state()
 
@@ -103,10 +109,17 @@ class GestureBrowser:
         cur = self._slim(self.idx) if (n and 0 <= self.idx < n) else {}
         window = [self._slim(j) for j in range(max(0, self.idx - radius),
                                                min(n, self.idx + radius + 1))]
+        import math
+        countdown = (int(math.ceil(max(0.0, self._count_until - time.time())))
+                     if self.counting else 0)
         return {"active": self.active, "store": self.store, "idx": self.idx,
                 "total": n, "busy": self.busy, "banner": self.banner,
-                "hover": self.hover, "hand": self._present,
+                "hover": self.hover, "hand": self._present, "countdown": countdown,
                 "dwell": (1.0 if self._fired else round(min(self._dwell / _DWELL, 1.0), 2)),
+                "finger": ({"x": round(self.finger[0], 3), "y": round(self.finger[1], 3)}
+                           if self.finger else None),
+                "buttons": [{"id": b[0], "x": b[1], "y": b[2], "w": _BTN_W, "h": _BTN_H}
+                            for b in _BTN],
                 "result": self.result, "current": cur, "window": window}
 
     def _load(self):
@@ -135,17 +148,24 @@ class GestureBrowser:
 
     # ---------------- per-frame ----------------
     def process(self, vis: np.ndarray, clean: np.ndarray):
-        """Detect the index fingertip, mirror the frame, then run the touchless
-        buttons: hover-to-highlight, dwell-to-press. Drawn right on `vis`."""
+        """Detect the index fingertip and run the touchless buttons (hover → dwell →
+        press). NOTHING is drawn on the main canvas — the buttons, finger cursor and
+        the 3-2-1 pose countdown are rendered by the browser ON THE SELF-VIEW PiP /
+        canvas from state(). The main view stays a clean, un-mirrored try-on."""
         if not self.active:
             return
         if self._rec is None:
             self._ensure_recognizer()
-        tip = self._fingertip(clean)               # (x, y) in clean coords, or None
-        cv2.flip(vis, 1, vis)                       # mirror: hand-right = screen-right
-        cur = (1.0 - tip[0], tip[1]) if tip is not None else None   # cursor in display coords
-        self._update_buttons(cur)
-        self._draw_buttons(vis, cur)
+        tip = self._fingertip(clean)
+        self.finger = (1.0 - tip[0], tip[1]) if tip is not None else None   # mirror x for the PiP
+        if self.counting:                          # "strike a pose" — freeze input, then fire
+            if time.time() >= self._count_until:
+                self.counting = False
+                pending, self._pending = self._pending, None
+                if pending is not None:
+                    self._begin_tryon(pending)
+            return
+        self._update_buttons(self.finger)
 
     def _fingertip(self, clean):
         """Index fingertip (landmark 8) of a CONFIDENT hand, else None. The palm
@@ -178,7 +198,7 @@ class GestureBrowser:
     def _hit(self, cur):
         if cur is None:
             return None
-        for bid, _label, cx, cy in _BTN:
+        for bid, cx, cy in _BTN:
             if abs(cur[0] - cx) <= _BTN_W / 2 and abs(cur[1] - cy) <= _BTN_H / 2:
                 return bid
         return None
@@ -189,90 +209,71 @@ class GestureBrowser:
             self.hover = hov
             self._dwell = 0
             self._fired = False
-            self._reps = 0
             self._rep = 0
         if hov is None or self.busy:
             return
         self._dwell += 1
-        nav = hov in ("prev", "next")
         if not self._fired:
-            if self._dwell >= _DWELL:               # dwell complete → press
-                self._fire(hov)
+            if self._dwell >= _DWELL:               # dwell complete → one press
+                self.act(hov)
                 self._fired = True
-                self._reps = 0
                 self._rep = _REPEAT
-        elif nav:                                   # hold PREV/NEXT to repeat (accelerating)
+        elif hov in ("prev", "next"):              # hold PREV/NEXT → SLOW repeat (see each item)
             self._rep -= 1
             if self._rep <= 0:
-                self._fire(hov)
-                self._reps += 1
-                self._rep = max(_REPEAT_MIN, _REPEAT - self._reps // 3)
+                self.act(hov)
+                self._rep = _REPEAT
 
-    def _fire(self, bid):
-        if bid == "prev":
+    # ---------------- the ONE engine: same actions for buttons AND the agent ----------------
+    def act(self, action: str) -> dict:
+        """Drive the live shopping engine. Called by the touchless buttons (dwell) AND
+        by the agent's live_control tool over voice — there is no parallel path."""
+        a = (action or "").lower().strip()
+        if a in ("prev", "previous", "back", "<"):
             self.step(-1)
-        elif bid == "next":
+        elif a in ("next", "forward", ">"):
             self.step(1)
-        elif bid == "try":
+        elif a in ("try", "try_on", "tryon", "fit", "wear"):
             self._select()
-        elif bid == "store":
+        elif a in ("store", "switch", "switch_store", "toggle"):
             self._switch_store()
-        elif bid == "clear":
+        elif a in ("clear", "reset", "live", "go_live", "off"):
             self._clear()
+        return self.state()
+
+    def goto(self, query: str) -> dict:
+        """Jump the selection to the best-matching item by name (for the agent)."""
+        from . import tools as T
+        hits = T._search_catalog(query, store=self.store)
+        if hits:
+            title = (hits[0].get("title") or "").lower()
+            for i, it in enumerate(self.items):
+                if (it.get("title") or "").lower() == title:
+                    self.idx = i
+                    break
+        return self.state()
 
     def step(self, d: int):
         if not self.items:
             return
         self.idx = min(max(self.idx + d, 0), len(self.items) - 1)
 
-    # ---------------- drawing ----------------
-    def _draw_buttons(self, vis, cur):
-        H, W = vis.shape[:2]
-        for bid, label, cx, cy in _BTN:
-            x0 = int((cx - _BTN_W / 2) * W); x1 = int((cx + _BTN_W / 2) * W)
-            y0 = int((cy - _BTN_H / 2) * H); y1 = int((cy + _BTN_H / 2) * H)
-            hov = (bid == self.hover)
-            self._panel(vis, x0, y0, x1, y1,
-                        (60, 120, 90) if hov else (22, 26, 34), 0.6 if hov else 0.42)
-            col = (130, 245, 200) if hov else (190, 205, 222)
-            cv2.rectangle(vis, (x0, y0), (x1, y1), col, 3 if hov else 1)
-            self._ctext(vis, label, (x0 + x1) // 2, (y0 + y1) // 2, 0.62, col, 2)
-            if hov and not self._fired and self._dwell > 0:     # dwell fill (bottom edge)
-                frac = min(self._dwell / _DWELL, 1.0)
-                cv2.rectangle(vis, (x0, y1 - 6), (x0 + int((x1 - x0) * frac), y1),
-                              (120, 240, 190), -1)
-            elif hov and self._fired:
-                cv2.rectangle(vis, (x0, y1 - 6), (x1, y1), (120, 240, 190), -1)
-        if cur is not None:                          # finger cursor
-            px, py = int(cur[0] * W), int(cur[1] * H)
-            cv2.circle(vis, (px, py), 15, (90, 240, 200), 2)
-            cv2.circle(vis, (px, py), 4, (255, 255, 255), -1)
-
-    @staticmethod
-    def _panel(vis, x0, y0, x1, y1, color, alpha):
-        x0, y0 = max(0, x0), max(0, y0)
-        x1, y1 = min(vis.shape[1], x1), min(vis.shape[0], y1)
-        if x1 <= x0 or y1 <= y0:
-            return
-        sub = vis[y0:y1, x0:x1]
-        cv2.addWeighted(np.full_like(sub, color, np.uint8), alpha, sub, 1 - alpha, 0, sub)
-
-    @staticmethod
-    def _ctext(vis, text, cx, cy, scale, color, th):
-        (tw, t_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, th)
-        cv2.putText(vis, text, (int(cx - tw / 2), int(cy + t_h / 2)),
-                    cv2.FONT_HERSHEY_SIMPLEX, scale, color, th, cv2.LINE_AA)
-
     # ---------------- actions ----------------
     def _select(self):
-        if not self.items:
+        """TRY ON → start a 3-2-1 'strike a pose' countdown, then capture/fit."""
+        if not self.items or self.busy or self.counting:
             return
-        it = self.items[self.idx]
+        self._pending = dict(self.items[self.idx])
+        self._count_until = time.time() + _COUNTDOWN
+        self.counting = True
+        self.banner = "Strike a pose…"
+
+    def _begin_tryon(self, it):
         title = it.get("title", "item")
         self.busy = True                      # → the browser shows the canvas loader
         self.result = None
         self.banner = ("Fitting " if self.store == "eyewear" else "Styling ") + title + "…"
-        threading.Thread(target=self._try_on, args=(dict(it),), daemon=True).start()
+        threading.Thread(target=self._try_on, args=(it,), daemon=True).start()
 
     def _try_on(self, it):
         from . import tools as T
@@ -315,5 +316,6 @@ class GestureBrowser:
             pass
         self.result = None             # drop the VTO result so the canvas returns to live
         self.busy = False
+        self.counting = False; self._pending = None   # cancel any pending countdown
         self.banner = "Cleared — back to live"
         threading.Timer(1.4, self._clear_banner).start()

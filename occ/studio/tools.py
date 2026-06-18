@@ -284,15 +284,33 @@ def go_live() -> dict:
 
 
 def gesture_browse(on: bool = True, store: str = "") -> dict:
-    """HANDS-FREE gesture browsing: turn the live video into a shoppable, gesture-
-    controlled store. The user moves their HAND to scroll a product carousel drawn on
-    the video, makes a FIST to try the centred item on (live AR for eyewear), a ✌ V
-    to switch eyewear↔apparel, and 👎 thumbs-down to clear. Use when the user says
-    'let me browse with my hands', 'gesture mode', 'shop with gestures'. store:
-    'eyewear' | 'apparel' (optional)."""
+    """Turn the live TOUCHLESS SHOPPING mode on/off: on-screen icon buttons (Prev,
+    Next, Try on, Store, Clear) appear on the user's self-view that they press by
+    pointing their hand. Use when the user says 'let me shop with my hand', 'touchless
+    mode', 'shop hands-free'. store: 'eyewear' | 'apparel' (optional)."""
     st = ctx().pipe.set_gesture_browse(on=bool(on), store=store or None)
-    return {"status": "success", "gesture": st, "mode": "live", "ui": "overlays",
-            "action": "spotlight", "target": "#wrap"}
+    return {"status": "success", "gesture": st, "mode": "live", "ui": "overlays"}
+
+
+def live_control(action: str = "", query: str = "") -> dict:
+    """DRIVE the live shopping engine yourself — the SAME engine the user's touchless
+    buttons drive (one unified path, no parallel system). Use this to help the user
+    hands-free. `action`: 'next' / 'prev' (step the catalogue one item), 'try' (try the
+    current item on the user — this runs a 3-2-1 'strike a pose' countdown first),
+    'store' (switch eyewear ⇄ apparel), 'clear' (remove everything, back to clean live).
+    OR pass `query` to jump straight to a named product ('hugo aviator', 'navy polo')
+    and then you can 'try' it. Always tell the user what you see / are about to do.
+    Turns touchless mode on automatically."""
+    pipe = ctx().pipe
+    if not pipe.gestures.active:
+        pipe.set_gesture_browse(on=True)
+    gb = pipe.gestures
+    st = gb.goto(query) if query else gb.act(action)
+    cur = (st.get("current") or {})
+    return {"status": "success", "store": st.get("store"),
+            "current": cur.get("title", ""), "price": cur.get("price", ""),
+            "idx": st.get("idx"), "total": st.get("total"),
+            "countdown": st.get("countdown", 0), "mode": "live", "ui": "overlays"}
 
 
 FACE_FILTERS_LIST = ["ninja_mask", "sunglasses", "glasses", "dog", "cat",
@@ -1446,7 +1464,7 @@ ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render, set_detection,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays, go_live,
-    apply_face_filter, try_eyewear, set_lens_tint, shop_search, try_product, gesture_browse,
+    apply_face_filter, try_eyewear, set_lens_tint, shop_search, try_product, gesture_browse, live_control,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, extend_video, narrate, generate_music,
