@@ -271,6 +271,8 @@ class GestureBrowser:
             T.go_live()
         except Exception:
             pass
+        self.result = None             # drop the VTO result so the canvas returns to live
+        self.busy = False
         self.banner = "Cleared — back to live"
         threading.Timer(1.4, self._clear_banner).start()
 

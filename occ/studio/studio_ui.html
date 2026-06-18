@@ -1154,12 +1154,17 @@ function gRenderRails(g){
     `<div class=gtt>${(it.title||'').replace(/</g,'&lt;')}</div></div>`).join('');
   // ✊ fist → premium canvas LOADER while the try-on runs (eyewear AND apparel)
   gGestFit(!!g.busy, eyewear, c.title||'your pick');
-  if(g.busy){ if(GLAST_RESULT){setCanvas('live');GLAST_RESULT=null;} }
-  else if(g.result&&g.result.kind==='image'&&g.result.src&&GLAST_RESULT!==g.result.src){
-    GLAST_RESULT=g.result.src;                       // apparel look ready → show it
-    const im=new Image();im.onload=()=>setCanvas('image',g.result.src,'gesture try-on');im.src=g.result.src;
+  const img=(g.result&&g.result.kind==='image'&&g.result.src)?g.result.src:null;
+  if(g.busy){
+    if(GLAST_RESULT){setCanvas('live');GLAST_RESULT=null;}   // a new try-on is starting
+  }else if(img){
+    if(GLAST_RESULT!==img){                                   // apparel look ready → show it
+      GLAST_RESULT=img;
+      const im=new Image();im.onload=()=>setCanvas('image',img,'gesture try-on');im.src=img;
+    }
+  }else if(GLAST_RESULT){                                     // result cleared (👎) → back to live
+    setCanvas('live');GLAST_RESULT=null;
   }
-  if(g.gesture==='Thumb_Down'&&GLAST_RESULT){setCanvas('live');GLAST_RESULT=null;}
 }
 function gGestFit(on,eyewear,title){
   if(on&&!GFIT){GFIT=true;vShowFitting(eyewear?'Fitting your frames':'Styling your look',title);}

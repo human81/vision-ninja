@@ -260,6 +260,12 @@ def offline():
     gb._drive("Thumb_Down", _hand(0.5), 1000, 1000)
     check("gesture: V switches store, thumbs-down clears",
           calls == ["select", "switch", "clear"], calls)
+    # thumbs-down must DROP any VTO result so the canvas returns to live (was stuck on apparel)
+    gc = GestureBrowser()
+    gc.result = {"kind": "image", "src": "/download/x.png"}; gc.busy = True
+    gc._clear()
+    check("gesture: thumbs-down drops the VTO result → canvas returns to live",
+          gc.result is None and not gc.busy)
     # the FACE must never drive browsing: no confident hand → idx frozen, video untouched
     gb.idx = 5; gb._rec = object()           # skip mediapipe init
     gb._recognize = lambda clean: (None, None)
