@@ -118,6 +118,30 @@ def offline():
     # mean-over-frame is dominated by background, so count notably-changed pixels.
     # heart_eyes is blendshape-reactive (only on a smile) → neutral face draws
     # nothing, which is CORRECT; for it we only require no error.
+    # --- eyewear lenses: see-through, perfect-fit, NO white blobs (the reported bug) ---
+    from occ.studio.face_filters import clean_lenses, lens_centers_norm, _lens_regions
+    # synthetic glasses: RED frame + bridge with two WHITE OPAQUE lenses (the failure case)
+    gl = np.zeros((180, 360, 4), np.uint8)
+    for cx in (96, 264):                                   # two white opaque lenses
+        cv2.circle(gl, (cx, 90), 64, (250, 250, 250, 255), -1)
+    for cx in (96, 264):                                   # red rims
+        cv2.circle(gl, (cx, 90), 64, (40, 40, 220, 255), 14)
+    cv2.rectangle(gl, (160, 80), (200, 100), (40, 40, 220, 255), -1)   # red bridge
+    cen = lens_centers_norm(gl)
+    check("eyewear: 2 lens centres detected (registration)", cen is not None and len(cen) == 2)
+    cl = clean_lenses(gl)
+    regions, _ = _lens_regions(gl)
+    lensmask = np.zeros(gl.shape[:2], bool)
+    for it, _c in regions:
+        lensmask |= it
+    a2 = cl[:, :, 3]; hsv2 = cv2.cvtColor(cl[:, :, :3], cv2.COLOR_BGR2HSV)
+    white_opaque_in_lens = int(((hsv2[:, :, 2] > 224) & (hsv2[:, :, 1] < 36) & (a2 > 110) & lensmask).sum())
+    check("eyewear: NO white blob left in the lenses", white_opaque_in_lens == 0, f"{white_opaque_in_lens}px")
+    see_through = float(a2[lensmask].mean())
+    check("eyewear: lenses are SEE-THROUGH (low alpha)", see_through < 110, f"mean α={see_through:.0f}")
+    red_rim = (cl[:, :, 2] > 150) & (cl[:, :, 1] < 90) & (a2 > 200)   # frame preserved, opaque
+    check("eyewear: frame stays opaque (not removed)", int(red_rim.sum()) > 500, f"{int(red_rim.sum())}px")
+
     det = sv.Detections.empty()
     set_current_eyewear(get_asset("sunglasses"), "test")   # so 'eyewear' has a product
     REACTIVE = {"heart_eyes"}

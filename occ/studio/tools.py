@@ -506,7 +506,7 @@ def try_product(query: str = "", image: str = "") -> dict:
 
 
 _CANON_DIR = "out/studio/cache/eyewear_canon"
-_CANON_VER = "v4-cleanlens"       # bump to invalidate cached renders when the pipeline changes
+_CANON_VER = "v5-nanopro"         # bump to invalidate cached renders when the pipeline changes
 _CANON_PROMPT = (
     "Show ONLY the FRONT of these eyeglasses — the two lens rims joined by the nose "
     "bridge (and the brow bar if it has one), matching their exact colour, pattern "
@@ -552,7 +552,9 @@ def _canonical_eyewear(raw: bytes, url: str):
         return None
     from . import genmedia
     from .face_filters import load_eyewear_rgba, remove_arms
-    model = ctx().settings.model_for("image_edit")
+    # Nano Banana PRO (gemini-3-pro-image) for this one-time, cached render — its cleaner
+    # registration + lens reconstruction is exactly what kills the artifacts at the source.
+    model = ctx().settings.model_for("image_pro")
     try:
         p1, _, _ = genmedia.edit_image([raw], _CANON_PROMPT, model=model)   # 1) front-on
     except Exception:

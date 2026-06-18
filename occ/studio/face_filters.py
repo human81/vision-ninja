@@ -209,28 +209,87 @@ _LENS_TINTS = {
 }
 
 
-def clean_lenses(rgba, tint=None, opacity=None):
-    """FULLY remove the original lenses and PAINT new clean ones — so ANY temple arm
-    / hinge that was inside the lens in the source is completely gone from the
-    reconstruction. By default the new lens MATCHES the original (sampled colour &
-    clarity): clear frames → see-through glass (eye shows through), tinted/sun frames
-    → the original lens colour. Controllable:
-      tint    — None=match original; 'clear'; a name in _LENS_TINTS; or a BGR tuple.
-      opacity — None=auto (clear≈58, tinted≈222); else 1-255 (low = more see-through).
-    Preserves the rim, adds a glassy sheen. Falls back to glassify() if the two
-    lenses can't be isolated."""
-    rgba = rgba.copy(); a = rgba[:, :, 3]; bgr = rgba[:, :, :3]; h, w = a.shape
+_GLASS_TINT = (60, 46, 36)          # faint cool glass (BGR) for see-through lenses
+_CLEAR_A = 46                       # see-through alpha (low → the live eye shows through)
+_SUN_A = 200                        # tinted/sun lens alpha (slightly translucent)
+
+
+def _ellipse(k):
+    k = max(1, int(k))
+    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+
+
+def _lens_regions(rgba):
+    """Heavy-duty COLOUR-AWARE lens isolation → ([(interior_mask, (cx,cy)), …≤2], holes).
+    The lens is the smooth low-detail area INSIDE the frame; the frame/bridge is the
+    coloured or dark material. We treat the frame as separator — which naturally SPLITS
+    the two lenses (the coloured bridge between them) even when the whole front is one
+    opaque silhouette (the case morphology alone can't split). `holes` = enclosed
+    transparent pixels (true clear openings)."""
+    a = rgba[:, :, 3]; bgr = rgba[:, :, :3]; h, w = a.shape
     binm = (a > 40).astype(np.uint8)
     ff = binm.copy()
-    cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)
-    filled = (binm | (ff == 0)).astype(np.uint8)
-    k = max(9, int(0.20 * h))
-    cores = cv2.morphologyEx(filled, cv2.MORPH_OPEN,
-                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
-    n, lbl, stats, _ = cv2.connectedComponentsWithStats(cores, 8)
-    if n < 3:
-        return glassify(rgba)
-    # resolve the control override
+    cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)   # outer bg → 1
+    filled = (binm | (ff == 0)).astype(np.uint8)                       # silhouette
+    holes = ((ff != 1) & (binm == 0)).astype(np.uint8)                # enclosed transparent
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    sat, val = hsv[:, :, 1], hsv[:, :, 2]
+    # FRAME material = coloured (saturated) OR dark, where opaque. Everything else
+    # inside the silhouette is lens (clear/white) or a transparent opening.
+    frame = ((sat > 55) | (val < 105)) & (binm > 0)
+    inside = cv2.erode(filled, _ellipse(max(3, int(0.02 * h)))) > 0     # drop the outer rim
+    lens_mask = ((inside & ~frame) | (holes > 0)).astype(np.uint8)
+    lens_mask = cv2.morphologyEx(lens_mask, cv2.MORPH_OPEN,             # de-speckle only
+                                 _ellipse(max(4, int(0.04 * h))))
+    n, lbl, stats, cent = cv2.connectedComponentsWithStats(lens_mask, 8)
+    cand = [i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] > 0.012 * h * w]
+    cand = sorted(cand, key=lambda i: -stats[i, cv2.CC_STAT_AREA])[:2]
+    # tuck a couple px UNDER the inner rim so the lens meets the frame with NO gap ring
+    tuck = _ellipse(max(2, int(0.018 * h)))
+    smooth = _ellipse(max(3, int(0.02 * h)))
+    out = []
+    for i in cand:
+        comp = (lbl == i).astype(np.uint8)
+        cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            continue
+        sol = np.zeros((h, w), np.uint8)                               # EXACT lens shape (not a hull)
+        cv2.drawContours(sol, [max(cnts, key=cv2.contourArea)], -1, 1, -1)
+        sol = cv2.morphologyEx(sol, cv2.MORPH_CLOSE, smooth)           # smooth, continuous edge
+        sol = cv2.dilate(sol, tuck) & filled                          # meet the rim, no gap
+        interior = sol > 0
+        if interior.any():
+            out.append((interior, (float(cent[i][0]), float(cent[i][1]))))
+    out.sort(key=lambda r: r[1][0])                                    # left → right
+    return out, holes
+
+
+def lens_centers_norm(rgba):
+    """The two lens centres in normalised (x,y) ∈ [0,1], left-then-right — used to
+    REGISTER the asset's lenses onto the user's pupils. None if not 2 found."""
+    regions, _ = _lens_regions(rgba)
+    if len(regions) < 2:
+        return None
+    h, w = rgba.shape[:2]
+    cs = sorted([c for _, c in regions], key=lambda p: p[0])[:2]
+    return [(cs[0][0] / w, cs[0][1] / h), (cs[1][0] / w, cs[1][1] / h)]
+
+
+def clean_lenses(rgba, tint=None, opacity=None):
+    """Rebuild the lenses as REAL see-through glass — and GUARANTEE no opaque white
+    blob survives anywhere in the lens area (the bug that left white marks). Each lens
+    interior is repainted: clear frames → low-alpha cool glass (the live eye shows
+    through), tinted/sun frames → their own colour, slightly translucent. A hard
+    safety net then forces ANY near-white enclosed (lens-area) pixel to see-through, so
+    studio-backdrop bleed can never read as a white lens. Frame/rim pixels (incl. white
+    acetate frames) are untouched.
+      tint    — None=match original; 'clear'; a name in _LENS_TINTS; or a BGR tuple.
+      opacity — None=auto (clear≈46, tinted≈200); else 1-255 (low = more see-through)."""
+    rgba = rgba.copy(); a = rgba[:, :, 3]; bgr = rgba[:, :, :3]; h, w = a.shape
+    regions, holes = _lens_regions(rgba)
+    if not regions:
+        return glassify(rgba, tint, opacity)        # couldn't isolate lenses → safe fallback
+    # resolve any explicit tint override
     clear_force, forced = False, None
     if isinstance(tint, str):
         t = tint.lower().strip()
@@ -240,58 +299,58 @@ def clean_lenses(rgba, tint=None, opacity=None):
             forced = _LENS_TINTS[t]
     elif tint is not None:
         forced = tuple(int(c) for c in tint)
-    # the lens OPENINGS = enclosed transparent regions inside the rims (clear lenses).
-    holes = ((ff != 1) & (binm == 0)).astype(np.uint8)
-    idx = sorted(range(1, n), key=lambda i: -stats[i, cv2.CC_STAT_AREA])[:2]
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    lens_union = np.zeros((h, w), np.uint8)
-    for i in idx:
-        core = (lbl == i).astype(np.uint8)
-        region = cv2.dilate(core, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
-        lh = (holes > 0) & (region > 0)               # this lens's opening (clear lens)
-        ys, xs = np.where(lh)
-        if len(xs) > 30:
-            # CLEAR lens: convex hull of the OPENING = the lens shape; fill it (covers
-            # any hinge/arm inside) and erode by the rim so it tucks inside the frame.
-            hull = cv2.convexHull(np.stack([xs, ys], 1))
-            diam = np.sqrt(len(xs)); rim = max(2, int(0.06 * diam))
-            fm = np.zeros((h, w), np.uint8); cv2.fillConvexPoly(fm, hull, 1)
-            im = cv2.erode(fm, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rim, rim))) > 0
-            if not im.any():
-                im = fm > 0
-            sv, ss = np.median(hsv[:, :, 2][lh]), np.median(hsv[:, :, 1][lh])
-            samp = np.median(bgr[lh].reshape(-1, 3), 0)
+
+    hsv0 = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    lens_union = np.zeros((h, w), bool)
+    for interior, _c in regions:
+        frac_hole = float((holes[interior] > 0).mean())          # was it a transparent opening?
+        med = np.median(bgr[interior].reshape(-1, 3), 0)
+        v = float(np.median(hsv0[:, :, 2][interior])); s = float(np.median(hsv0[:, :, 1][interior]))
+        is_clear = clear_force or (forced is None and (frac_hole > 0.30 or (v > 150 and s < 60)))
+        if not is_clear and forced is None and max(med) > 232 and (max(med) - min(med)) < 24:
+            is_clear = True                                      # near-white "tint" = clear lens
+        idx = interior
+        if forced is not None:                                   # explicit tint override → flat
+            a[idx] = int(opacity) if opacity else _SUN_A
+            bgr[idx] = np.array(forced, np.uint8)
+        elif is_clear:
+            # KEEP the aligned lens pixels, just make them SEE-THROUGH (low alpha). A light
+            # cool-glass blend stops a pure-white studio backdrop reading as a milky veil,
+            # while preserving the real lens texture/reflections.
+            a[idx] = int(opacity) if opacity else _CLEAR_A
+            bgr[idx] = (bgr[idx] * 0.62 + np.array(_GLASS_TINT, np.float32) * 0.38).astype(np.uint8)
         else:
-            # OPAQUE sunglass: fill the whole lens disc with one tint (covers hinges).
-            cnts, _ = cv2.findContours((region & filled).astype(np.uint8),
-                                       cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not cnts:
-                continue
-            hull = cv2.convexHull(max(cnts, key=cv2.contourArea))
-            diam = np.sqrt(max(1, stats[i, cv2.CC_STAT_AREA])); rim = max(2, int(0.05 * diam))
-            fm = np.zeros((h, w), np.uint8); cv2.fillConvexPoly(fm, hull, 1)
-            im = cv2.erode(fm, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rim, rim))) > 0
-            if not im.any():
-                continue
-            sv, ss = np.median(hsv[:, :, 2][im]), np.median(hsv[:, :, 1][im])
-            samp = np.median(bgr[im].reshape(-1, 3), 0)
-        is_clear = clear_force or (forced is None and sv > 165 and ss < 55)
-        if is_clear:                                  # transparent glass — eye shows through
-            a[im] = int(opacity) if opacity else 58
-            bgr[im] = (62, 47, 38)
-        else:                                         # match original (or forced) tint
-            col = forced if forced is not None else samp
-            a[im] = int(opacity) if opacity else 222
-            bgr[im] = np.array(col, np.uint8)
-        lens_union |= im.astype(np.uint8)
-    lm = lens_union > 0
-    if lm.any():                                     # glassy diagonal sheen
-        yy, xx = np.mgrid[0:h, 0:w]
-        diag = (xx + yy).astype(np.float32); diag /= max(1.0, diag.max())
-        sheen = ((diag > 0.40) & (diag < 0.47)).astype(np.float32)
-        sheen = cv2.GaussianBlur(sheen, (0, 0), max(2, w // 200)) * lm
-        bgr[:] = np.clip(bgr.astype(np.float32) + sheen[..., None] * 220, 0, 255).astype(np.uint8)
-        a[:] = np.clip(a.astype(np.float32) + sheen * 120, 0, 255).astype(np.uint8)
+            # tinted / sun: KEEP the real lens colour, just slightly translucent.
+            a[idx] = int(opacity) if opacity else _SUN_A
+        lens_union |= interior
+
+    # ---- HARD SAFETY NET: no opaque white blob may survive in the lens area ----
+    # (recompute on the painted image; lower the ALPHA of any near-white enclosed pixel
+    #  so it can never read as a white lens — preserving its pixels, just transparent.)
+    hsv1 = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    near_white = (hsv1[:, :, 2] > 224) & (hsv1[:, :, 1] < 36) & (a > 110)
+    enclosed = (holes > 0) | lens_union                          # lens area ONLY (not the rim)
+    enclosed = cv2.dilate(enclosed.astype(np.uint8), _ellipse(max(3, int(0.05 * h)))) > 0
+    kill = near_white & enclosed
+    if kill.any():
+        a[kill] = int(opacity) if (opacity and clear_force) else _CLEAR_A
+        bgr[kill] = (bgr[kill] * 0.62 + np.array(_GLASS_TINT, np.float32) * 0.38).astype(np.uint8)
+        lens_union |= kill
+
+    # subtle per-lens glint (small soft highlight — NOT a full-width diagonal streak)
+    for interior, c in regions:
+        ys, xs = np.where(interior)
+        if len(xs) < 30:
+            continue
+        diam = np.sqrt(len(xs))
+        gx = int(c[0] - 0.18 * diam); gy = int(c[1] - 0.22 * diam)
+        g = np.zeros((h, w), np.float32)
+        cv2.circle(g, (gx, gy), max(2, int(0.16 * diam)), 1.0, -1)
+        g = cv2.GaussianBlur(g, (0, 0), max(1.5, diam / 14)) * interior
+        if g.max() > 0:
+            g /= g.max()
+            bgr[:] = np.clip(bgr + g[..., None] * 70, 0, 255).astype(np.uint8)
+            a[:] = np.clip(a + (g * 55).astype(np.uint8), 0, 255).astype(np.uint8)
     return rgba
 
 
@@ -354,40 +413,52 @@ def trim_arms(rgba):
     return np.ascontiguousarray(rgba[:, max(0, x0 - pad):min(a.shape[1], x1 + pad + 1)])
 
 
-def _eyewear_quad(face, rgba, wscale=1.9, down=0.06):
-    """Place a front-on (ARMLESS) glasses cutout on the eyes, preserving its aspect
-    ratio so frames aren't distorted. Lenses land on the pupils; seats on the eye
-    line and follows head roll/yaw."""
+def _eyewear_quad(face, rgba, lens_centers=None, down=0.06):
+    """REGISTER the frames to the face: solve the 2-point similarity (scale+roll+
+    translation) that maps the asset's two LENS CENTRES onto the user's two PUPILS, then
+    transform the asset rectangle's corners through it. This lands each lens exactly on
+    its eye and sizes the frame to the real interpupillary distance — far more accurate
+    than a fixed box. Aspect ratio is preserved (uniform scale → no stretch). Falls back
+    to a symmetric 27/73% lens assumption if the asset's lens centres are unknown."""
     h, w = rgba.shape[:2]
-    ex, ey = _frame_axes(face)
-    c = face.eyes_center + ey * (face.eye_dist * down)
-    W = face.eye_dist * wscale
-    H = W * (h / max(1, w))
-    hw = ex * (W / 2.0); hh = ey * (H / 2.0)
-    return [c - hw - hh, c + hw - hh, c + hw + hh, c - hw + hh]
+    if lens_centers is None:
+        lens_centers = [(0.27, 0.46), (0.73, 0.46)]
+    aL = np.array([lens_centers[0][0] * w, lens_centers[0][1] * h], float)
+    aR = np.array([lens_centers[1][0] * w, lens_centers[1][1] * h], float)
+    pL = np.array(face.eye_l, float); pR = np.array(face.eye_r, float)
+    da = aR - aL; dp = pR - pL
+    na = np.linalg.norm(da) or 1.0
+    scale = (np.linalg.norm(dp) or na) / na
+    ang = np.arctan2(dp[1], dp[0]) - np.arctan2(da[1], da[0])
+    cs, sn = np.cos(ang) * scale, np.sin(ang) * scale
+    R = np.array([[cs, -sn], [sn, cs]])              # rotate+scale about aL → pL
+    def tf(p):
+        return pL + R @ (np.array(p, float) - aL)
+    _, ey = _frame_axes(face)                        # seat slightly down the nose
+    off = ey * (face.eye_dist * down)
+    return [tf((0, 0)) + off, tf((w, 0)) + off, tf((w, h)) + off, tf((0, h)) + off]
 
 
-def glassify(rgba):
-    """OpenCV realism pass for eyewear: turn an enclosed 'clear lens' (white on the
-    studio backdrop) into SEE-THROUGH glass — eyes show through — with a cool tint
-    and a diagonal sheen. Dark/tinted (sun) lenses are detected and left opaque."""
+def glassify(rgba, tint=None, opacity=None):
+    """Safe fallback when the two lenses can't be isolated: turn any enclosed near-white
+    lens pixels into SEE-THROUGH glass (eye shows through) and force ANY enclosed white
+    blob transparent — so no white mark is left. Tinted/sun lenses stay as-is. NO
+    diagonal sheen (that was the source of the white streak)."""
     rgba = rgba.copy()
-    bgr = rgba[:, :, :3]; a = rgba[:, :, 3]
+    bgr = rgba[:, :, :3]; a = rgba[:, :, 3]; h, w = a.shape
+    binm = (a > 40).astype(np.uint8)
+    ff = binm.copy(); cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)
+    holes = ((ff != 1) & (binm == 0))                 # enclosed transparent = clear openings
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    lens = ((hsv[:, :, 1] < 40) & (hsv[:, :, 2] > 195) & (a > 180)).astype(np.uint8) * 255
-    lens = cv2.morphologyEx(lens, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-    lm = lens > 0
-    if not lm.any():
-        return rgba                              # sunglasses / tinted → keep opaque
-    a[lm] = 64                                    # see-through
-    bgr[lm] = (bgr[lm] * 0.35 + np.array([62, 47, 38]) * 0.65).astype(np.uint8)  # cool glass
-    h, w = a.shape                               # diagonal sheen across the lens band
-    yy, xx = np.mgrid[0:h, 0:w]
-    diag = (xx + yy).astype(np.float32); diag /= max(1.0, diag.max())
-    sheen = ((diag > 0.40) & (diag < 0.47)).astype(np.float32)
-    sheen = cv2.GaussianBlur(sheen, (0, 0), max(2, w // 200)) * lm
-    bgr[:] = np.clip(bgr.astype(np.float32) + sheen[..., None] * 230, 0, 255).astype(np.uint8)
-    a[:] = np.clip(a.astype(np.float32) + sheen * 130, 0, 255).astype(np.uint8)
+    white = (hsv[:, :, 1] < 42) & (hsv[:, :, 2] > 200) & (a > 150)
+    # only treat white that is ENCLOSED (lens area), never the outer rim / white frames
+    enclosed = cv2.dilate(holes.astype(np.uint8), _ellipse(max(5, int(0.06 * h)))) > 0
+    lens = cv2.morphologyEx((white & enclosed).astype(np.uint8),
+                            cv2.MORPH_OPEN, np.ones((5, 5), np.uint8)) > 0
+    if not lens.any():
+        return rgba                                   # no white lens to fix → leave it
+    a[lens] = int(opacity) if opacity else _CLEAR_A
+    bgr[lens] = _GLASS_TINT
     return rgba
 
 
@@ -464,6 +535,7 @@ def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None):
         _EYEWEAR["rgba"] = clean_lenses(rgba, tint, opacity)
         _EYEWEAR["label"] = label
         _EYEWEAR["color"] = color or frame_color(rgba)
+        _EYEWEAR["lens_centers"] = lens_centers_norm(rgba)   # for pupil registration
 
 
 def set_lens_tint(tint=None, opacity=None) -> bool:
@@ -514,10 +586,11 @@ def filter_eyewear(ctx):
     soft contact shadow, so it reads as truly WORN, not pasted."""
     with _EYEWEAR_LOCK:
         rgba = _EYEWEAR["rgba"]; color = _EYEWEAR["color"]
+        lc = _EYEWEAR.get("lens_centers")
     if rgba is None:
         return
     for f in ctx.faces:
-        q = _eyewear_quad(f, rgba)
+        q = _eyewear_quad(f, rgba, lens_centers=lc)
         ex, ey = _frame_axes(f)
         shadow = np.zeros_like(rgba)                       # soft contact shadow
         shadow[:, :, 3] = (rgba[:, :, 3].astype(np.float32) * 0.42).astype(np.uint8)

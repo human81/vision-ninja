@@ -9,6 +9,7 @@ SimRunner and heavy ops meter as simulated. Persisted to out/studio/settings.jso
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -29,7 +30,10 @@ _PRESET_REAL = {
 DEFAULT_MODELS = {
     "agent": "gemini-2.5-flash",          # the reasoning brain (ADK root)
     "vision": "gemini-2.5-flash",         # image understanding / describe
-    "image_edit": "gemini-2.5-flash-image",   # nano-banana edit + try-on
+    "image_edit": "gemini-2.5-flash-image",   # nano-banana edit + apparel try-on (fast/cheap)
+    # Nano Banana PRO (GA) — the highest-fidelity image model. Used for the ONE-TIME,
+    # cached eyewear canonical render where registration/cleanliness matters most.
+    "image_pro": os.environ.get("STUDIO_NANO_MODEL", "gemini-3-pro-image"),
     "image_gen": "imagen-4.0-generate-001",   # new-image generation
     "video": "veo-3.0-fast-generate-001",     # Veo video generation
 }
@@ -37,7 +41,10 @@ MODEL_OPTIONS = {
     "agent": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash",
               "gemini-2.5-flash-lite"],
     "vision": ["gemini-2.5-flash", "gemini-2.5-pro"],
-    "image_edit": ["gemini-2.5-flash-image"],
+    "image_edit": ["gemini-2.5-flash-image", "gemini-3.1-flash-image"],
+    # Nano Banana Pro (gemini-3-pro-image) + Nano Banana 2 (gemini-3.1-flash-image), both GA.
+    "image_pro": ["gemini-3-pro-image", "gemini-3-pro-image-preview",
+                  "gemini-3.1-flash-image", "gemini-2.5-flash-image"],
     "image_gen": ["imagen-4.0-generate-001", "imagen-4.0-fast-generate-001",
                   "imagen-3.0-generate-002"],
     "video": ["veo-3.0-fast-generate-001", "veo-3.0-generate-001",
