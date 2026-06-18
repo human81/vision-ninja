@@ -154,6 +154,20 @@ def offline():
     frac = bg_faint / float(cut.shape[0] * cut.shape[1])             # the bug made ~90% faint
     check("eyewear: degenerate-alpha bg knocked out (no translucent rectangle)",
           frac < 0.10, f"{frac*100:.1f}% translucent-white")
+    # GEOMETRY: even an ABSURD lens-centre detection must not blow up the frame size —
+    # the registration clamps the width to a sane multiple of the IPD (the 'horrible
+    # wrong-size' bug). A mock face with IPD=60px.
+    from occ.studio.face_filters import _eyewear_quad
+    class _MockFace:
+        eye_l = np.array([100., 100.]); eye_r = np.array([160., 100.])
+        eyes_center = np.array([130., 100.]); eye_dist = 60.0
+        def p(self, n):
+            return {"temple_l": np.array([80., 100.]), "temple_r": np.array([180., 100.])}[n]
+    asset = np.zeros((100, 300, 4), np.uint8)
+    q = _eyewear_quad(_MockFace(), asset, lens_centers=[(0.48, 0.5), (0.52, 0.5)])  # absurd: too close
+    width = float(np.linalg.norm(np.array(q[1]) - np.array(q[0])))                  # TL→TR
+    check("geometry: absurd detection can't blow up the frame (clamped to IPD)",
+          1.7 * 60 <= width <= 3.6 * 60, f"width={width:.0f}px ({width/60:.1f}× IPD)")
 
     det = sv.Detections.empty()
     set_current_eyewear(get_asset("sunglasses"), "test")   # so 'eyewear' has a product

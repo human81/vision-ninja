@@ -266,13 +266,23 @@ def _lens_regions(rgba):
 
 def lens_centers_norm(rgba):
     """The two lens centres in normalised (x,y) ∈ [0,1], left-then-right — used to
-    REGISTER the asset's lenses onto the user's pupils. None if not 2 found."""
+    REGISTER the asset's lenses onto the user's pupils. Returns None (→ symmetric
+    fallback) unless the detection is PLAUSIBLE: two centres, clearly separated in x,
+    roughly level in y, and within sane bounds. This guards against the wild scale/
+    rotation that bad detections caused (the 'horrible' frames)."""
     regions, _ = _lens_regions(rgba)
     if len(regions) < 2:
         return None
     h, w = rgba.shape[:2]
     cs = sorted([c for _, c in regions], key=lambda p: p[0])[:2]
-    return [(cs[0][0] / w, cs[0][1] / h), (cs[1][0] / w, cs[1][1] / h)]
+    lx, ly = cs[0][0] / w, cs[0][1] / h
+    rx, ry = cs[1][0] / w, cs[1][1] / h
+    dx = rx - lx
+    ok = (0.22 < dx < 0.85                       # lenses sensibly apart (not too close/wide)
+          and abs(ry - ly) < 0.14                # roughly level (else rotation goes wild)
+          and 0.04 < lx < 0.5 and 0.5 < rx < 0.96
+          and 0.18 < ly < 0.82 and 0.18 < ry < 0.82)
+    return [(lx, ly), (rx, ry)] if ok else None
 
 
 def clean_lenses(rgba, tint=None, opacity=None):
@@ -433,12 +443,21 @@ def _eyewear_quad(face, rgba, lens_centers=None, down=0.06):
     pL = np.array(face.eye_l, float); pR = np.array(face.eye_r, float)
     da = aR - aL; dp = pR - pL
     na = np.linalg.norm(da) or 1.0
-    scale = (np.linalg.norm(dp) or na) / na
-    ang = np.arctan2(dp[1], dp[0]) - np.arctan2(da[1], da[0])
+    ipd = np.linalg.norm(dp) or na
+    scale = ipd / na
+    # CLAMP: the full frame width = scale*w must stay a sane multiple of the IPD, so a
+    # mis-detected lens separation can't blow the frame up or shrink it to nothing.
+    fw = scale * w
+    scale *= float(np.clip(fw, 1.9 * ipd, 3.4 * ipd) / max(fw, 1e-6))
+    # ROTATION: follow the head roll (from the pupils), not the asset's tilt — keeps the
+    # frames level even if the detected lens centres aren't perfectly aligned.
+    ang = np.arctan2(dp[1], dp[0])
     cs, sn = np.cos(ang) * scale, np.sin(ang) * scale
-    R = np.array([[cs, -sn], [sn, cs]])              # rotate+scale about aL → pL
+    R = np.array([[cs, -sn], [sn, cs]])
+    # anchor on the asset's lens MIDPOINT → the pupils' midpoint (robust to per-lens noise)
+    aM = (aL + aR) / 2.0; pM = (pL + pR) / 2.0
     def tf(p):
-        return pL + R @ (np.array(p, float) - aL)
+        return pM + R @ (np.array(p, float) - aM)
     _, ey = _frame_axes(face)                        # seat slightly down the nose
     off = ey * (face.eye_dist * down)
     return [tf((0, 0)) + off, tf((w, 0)) + off, tf((w, h)) + off, tf((0, h)) + off]
