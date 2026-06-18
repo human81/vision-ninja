@@ -141,6 +141,19 @@ def offline():
     check("eyewear: lenses are SEE-THROUGH (low alpha)", see_through < 110, f"mean α={see_through:.0f}")
     red_rim = (cl[:, :, 2] > 150) & (cl[:, :, 1] < 90) & (a2 > 200)   # frame preserved, opaque
     check("eyewear: frame stays opaque (not removed)", int(red_rim.sum()) > 500, f"{int(red_rim.sum())}px")
+    # DEGENERATE-ALPHA cutout (Nano render with a faint global alpha) must NOT leave a
+    # translucent rectangle — load_eyewear_rgba must knock out the white background.
+    from occ.studio.face_filters import load_eyewear_rgba
+    canvas = np.full((200, 400, 3), 255, np.uint8)                    # white studio bg
+    cv2.rectangle(canvas, (120, 70), (280, 140), (40, 40, 220), -1)   # a red frame blob
+    fake = np.dstack([canvas, np.full((200, 400), 40, np.uint8)])     # faint global alpha (degenerate)
+    png = cv2.imencode(".png", fake)[1].tobytes()
+    cut = load_eyewear_rgba(png)
+    bg_faint = int(((cut[:, :, 3] > 8) & (cut[:, :, 3] < 200) &
+                    (cut[:, :, :3].min(2) > 200)).sum())              # translucent white bg pixels
+    frac = bg_faint / float(cut.shape[0] * cut.shape[1])             # the bug made ~90% faint
+    check("eyewear: degenerate-alpha bg knocked out (no translucent rectangle)",
+          frac < 0.10, f"{frac*100:.1f}% translucent-white")
 
     det = sv.Detections.empty()
     set_current_eyewear(get_asset("sunglasses"), "test")   # so 'eyewear' has a product

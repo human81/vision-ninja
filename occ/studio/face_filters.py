@@ -513,8 +513,14 @@ def load_eyewear_rgba(raw: bytes):
         return None
     if img.ndim == 3 and img.shape[2] == 4:
         bgr, a0 = img[:, :, :3], img[:, :, 3]
-        # if the alpha is effectively opaque, the "transparency" is fake → knock bg
-        alpha = a0 if int(a0.min()) < 200 else _knockout_bg(bgr, a0)
+        opaque = float((a0 > 200).mean())                  # real-alpha structure?
+        if opaque > 0.04:
+            # genuine transparency → trust it, but still cut any outer white studio bg
+            alpha = np.minimum(a0, _knockout_bg(bgr))
+        else:
+            # DEGENERATE alpha (whole image faintly transparent / fake) → ignore it and
+            # knock out the white background. (Fixes the translucent-rectangle artifact.)
+            alpha = _knockout_bg(bgr)
     else:
         bgr = img[:, :, :3] if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         alpha = _knockout_bg(bgr)
@@ -597,9 +603,15 @@ def filter_eyewear(ctx):
     for f in ctx.faces:
         q = _eyewear_quad(f, rgba, lens_centers=lc)
         ex, ey = _frame_axes(f)
-        shadow = np.zeros_like(rgba)                       # soft contact shadow
-        shadow[:, :, 3] = (rgba[:, :, 3].astype(np.float32) * 0.42).astype(np.uint8)
-        off = ey * (f.eye_dist * 0.06)
+        # SOFT contact shadow: only the FRAME casts it (lenses are see-through), heavily
+        # blurred + low alpha + a small offset, so it reads as a diffuse shadow — not a
+        # hard dark duplicate of the frame (the old 'lens shadow' artifact).
+        sa = rgba[:, :, 3].astype(np.float32)
+        sa = np.where(sa > 150, sa, sa * 0.25)            # drop the faint see-through lens
+        sa = cv2.GaussianBlur(sa, (0, 0), max(2.0, rgba.shape[0] * 0.05))
+        shadow = np.zeros_like(rgba)
+        shadow[:, :, 3] = np.clip(sa * 0.16, 0, 70).astype(np.uint8)
+        off = ey * (f.eye_dist * 0.03)
         ctx.warp(shadow, [p + off for p in q])
         ctx.warp(rgba, q)
 
