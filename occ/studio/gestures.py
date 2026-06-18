@@ -29,12 +29,13 @@ _MODEL_PATH = os.path.join(_MODEL_DIR, "gesture_recognizer.task")
 
 # how long (frames) a FIST must be held to commit a try-on, and the cool-down
 # (frames) between discrete actions so one gesture fires exactly once.
-_HOLD_FRAMES = 10
+_HOLD_FRAMES = 8
 _COOLDOWN = 18
-# browsing must be driven by a REAL, confident HAND — never by the face. We raise
-# MediaPipe's detection/tracking thresholds AND require a high handedness score, so a
-# face is never mistaken for a hand (the palm detector otherwise false-fires on faces).
-_HAND_MIN_SCORE = 0.8
+# Browsing must be driven by a REAL HAND, never the face. The discriminator is the
+# PALM DETECTOR confidence (min_hand_detection_confidence) — a face doesn't pass it.
+# Presence/tracking are kept LOW so a fist (a very different shape than an open palm)
+# stays tracked, and the handedness gate is a light secondary filter only.
+_HAND_MIN_SCORE = 0.55
 
 
 def _ensure_model():
@@ -63,6 +64,7 @@ class GestureBrowser:
         self._fired_hold = False  # latched until the fist releases
         self._cool = 0           # frames until the next discrete action may fire
         self._last_gesture = "—"
+        self._hand_score = 0.0
         self._lock = threading.Lock()
 
     # ---------------- lifecycle ----------------
@@ -92,6 +94,7 @@ class GestureBrowser:
         return {"active": self.active, "store": self.store, "idx": self.idx,
                 "total": n, "busy": self.busy, "banner": self.banner,
                 "gesture": self._last_gesture, "hold": round(self._hold / _HOLD_FRAMES, 2),
+                "hand": self._last_gesture != "—", "hand_score": round(self._hand_score, 2),
                 "current": cur, "window": window}
 
     def _load(self):
@@ -110,9 +113,9 @@ class GestureBrowser:
             opts = vision.GestureRecognizerOptions(
                 base_options=mp_python.BaseOptions(model_asset_path=_ensure_model()),
                 running_mode=vision.RunningMode.VIDEO, num_hands=1,
-                min_hand_detection_confidence=0.7,
-                min_hand_presence_confidence=0.6,
-                min_tracking_confidence=0.6)
+                min_hand_detection_confidence=0.7,   # rejects the face (palm detector)
+                min_hand_presence_confidence=0.4,    # keep the fist tracked
+                min_tracking_confidence=0.4)
             self._rec = vision.GestureRecognizer.create_from_options(opts)
         except Exception as e:
             self.err = f"gesture recogniser unavailable: {type(e).__name__}: {e}"
@@ -151,6 +154,7 @@ class GestureBrowser:
             score = res.handedness[0][0].score
         except Exception:
             score = 0.0
+        self._hand_score = score
         if score < _HAND_MIN_SCORE:          # not confidently a hand → ignore (e.g. a face)
             return None, None
         lm = res.hand_landmarks[0]
@@ -160,25 +164,26 @@ class GestureBrowser:
         return name, lm
 
     def _drive(self, gesture, hand, W, H):
-        if hand is None:
-            self._hold = 0
+        # Hold accumulates while a FIST is seen and DECAYS otherwise (so a single
+        # dropped/misread frame doesn't reset the try-on) — robust to recogniser jitter.
+        if gesture == "Closed_Fist" and hand is not None:
+            self._hold = min(self._hold + 1, _HOLD_FRAMES)
+        else:
+            self._hold = max(0, self._hold - 2)
+        if self._hold == 0:
             self._fired_hold = False
+        if self._hold >= _HOLD_FRAMES and not self._fired_hold and not self.busy:
+            self._fired_hold = True
+            self._select()
+
+        if hand is None:
             return
         # browse by the HAND's index-fingertip x position (landmark 8). No on-video cursor.
+        # Hold the index steady while fisting (don't let the closing hand scrub away).
         tip = hand[8]
-        if self.items and not self.busy:
+        if self.items and not self.busy and gesture != "Closed_Fist":
             x = min(max((tip.x - 0.18) / 0.64, 0.0), 1.0)    # deadzones at the edges
             self.idx = int(round(x * (len(self.items) - 1)))
-
-        # FIST → hold to try on (latched until released)
-        if gesture == "Closed_Fist":
-            self._hold = min(self._hold + 1, _HOLD_FRAMES)
-            if self._hold >= _HOLD_FRAMES and not self._fired_hold and not self.busy:
-                self._fired_hold = True
-                self._select()
-        else:
-            self._hold = 0
-            self._fired_hold = False
 
         # discrete one-shot actions (cool-down gated)
         if self._cool == 0 and not self.busy:
