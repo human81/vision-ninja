@@ -57,6 +57,12 @@ studio = [
 face = [
     "mediapipe>=0.10.18",
 ]
+# rembg (U2Net) segmentation matte for the eyewear cutout — clean isolation from any
+# studio background. Optional: load_eyewear_rgba falls back to classical CV if absent.
+seg = [
+    "rembg>=2.0.76",
+    "onnxruntime>=1.20",
+]
 # Build-time only (proto compilation).
 build = [
     "grpcio-tools>=1.66",
