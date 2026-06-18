@@ -361,8 +361,13 @@ def ui():
         pg.on("pageerror", lambda e: errs.append(str(e)))
         pg.goto(STUDIO_URL + "/", wait_until="domcontentloaded"); pg.wait_for_timeout(1800)
         pg.click("#modeswitch button[data-m=voice]"); pg.wait_for_timeout(800)
-        check("voice mode shows filter strip", pg.is_visible("#filterbar"))
+        # pure canvas: panels are icon-driven now — the canvas stays clean until tapped
+        check("filter panel hidden until its icon is tapped", not pg.is_visible("#filterbar"))
+        pg.click("#vfilters"); pg.wait_for_timeout(300)
+        check("face-filter panel opens on icon", pg.is_visible("#filterbar"))
         check("12 face-filter chips", pg.eval_on_selector_all("#filterbar button", "e=>e.length") == 12)
+        pg.click("#vshop"); pg.wait_for_timeout(400)          # open the shop panel
+        check("shop panel opens on icon", pg.is_visible("#tryonbar"))
         pg.click("#store-eyewear"); pg.wait_for_timeout(1200)
         check("store switch → Ralba sponsor", "Ralba Optical" in (pg.text_content("#sponsor") or ""))
         # one unified glasses try-on with a courteous fitting loader
@@ -394,6 +399,11 @@ def ui():
               pg.eval_on_selector_all("#vbackend option", "e=>e.map(o=>o.value).join(',')")
               == "gemini,openai")
         check("gesture-browse button present", pg.is_visible("#vgest"))
+        # Meet-style extras: fill-the-canvas toggle + self-view PiP
+        pg.click("#fillbtn"); pg.wait_for_timeout(150)
+        check("fill toggle fills the canvas", "fill" in (pg.get_attribute("#wrap", "class") or ""))
+        pg.click("#fillbtn"); pg.wait_for_timeout(100)
+        check("self-view PiP element present", pg.query_selector("#selfview") is not None)
         b.close()
     check("no uncaught JS errors", not errs, "; ".join(errs[:3]))
 

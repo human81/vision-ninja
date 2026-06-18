@@ -72,6 +72,17 @@
         background:radial-gradient(120% 90% at 50% 35%,#11161f 0%,#0a0d13 55%,#06080c 100%);
         box-shadow:inset 0 0 120px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.04)}
   #img,#media,#video{border-radius:8px;box-shadow:0 16px 50px -12px rgba(0,0,0,.7)}
+  #wrap.fill #img{width:100%;height:100%;max-width:none;max-height:none;object-fit:cover;border-radius:14px}
+  /* self-view PiP — raw camera, mirrored, floating in the corner like a video call */
+  #selfview{position:absolute;right:16px;bottom:90px;width:clamp(140px,15%,210px);aspect-ratio:4/3;
+    object-fit:cover;border-radius:14px;transform:scaleX(-1);display:none;z-index:8;background:#0b111c;
+    border:1.5px solid rgba(255,255,255,.18);box-shadow:0 14px 40px rgba(0,0,0,.6)}
+  #wrap.selfon #selfview{display:block;animation:railin .4s ease}
+  .cornicon{position:absolute;top:10px;right:54px;z-index:8;width:34px;height:34px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;
+    background:#0e1521cc;border:1px solid var(--line);color:var(--mut);backdrop-filter:blur(8px)}
+  .cornicon:hover{color:#cfe6ff;border-color:#2c3c5a}
+  .cornicon.on{color:var(--cyan);border-color:var(--cyan)}
   #img,#media,#video{max-width:100%;max-height:100%;width:auto;height:auto;display:block;background:#000}
   #drawcv{position:absolute;left:0;top:0;pointer-events:none;z-index:4}
   .drawbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
@@ -421,6 +432,8 @@
               <button id=vmic class=vbtn onclick="vToggle('mic')" title="Mic — talk to the ninja">🎤</button>
               <button id=vcam class=vbtn onclick="vToggle('cam')" title="Camera — run overlays on you">📷</button>
               <button id=vscr class=vbtn onclick="vToggle('screen')" title="Share your screen">🖥</button>
+              <button id=vfilters class=vbtn onclick="vTogglePanel('filterbar',this)" title="Face filters">😎</button>
+              <button id=vshop class=vbtn onclick="vTogglePanel('tryonbar',this)" title="Shop · try on">🛍</button>
               <button id=vgest class=vbtn onclick="vToggleGestures()" title="Gesture browsing — hands-free try-on">🖐</button>
               <button id=vdetect class=vbtn onclick="vToggleDetect()" title="Detection · tracking · occupancy">🔎</button>
               <span class=vsep></span>
@@ -431,6 +444,9 @@
               <button id=vstop class="vbtn end" onclick="vStop()" title="End session">⏹</button>
             </div>
           </div>
+          <!-- self-view PiP: raw you, no overlay — a two-way call with the agent's canvas -->
+          <video id=selfview muted playsinline></video>
+          <button id=fillbtn class=cornicon onclick="toggleFill()" title="Fill / fit the canvas">⤢</button>
         </div>
         <div class=canvascap id=canvascap></div>
         <div class=drawbar id=drawbar>
@@ -445,28 +461,28 @@
           <span class=muted style=font-size:10px>click to add points · click 1st point closes a zone · drag a vertex · ⏎ finish · Esc cancel</span>
         </div>
         <div class=filterbar id=filterbar style=display:none>
-          <span class=fbl>FACE TRY-ON</span>
-          <button onclick="vFilter('ninja_mask')">🥷 Ninja</button>
-          <button onclick="vFilter('sunglasses')">🕶 Shades</button>
-          <button onclick="vFilter('glasses')">👓 Glasses</button>
-          <button onclick="vFilter('dog')">🐶 Dog</button>
-          <button onclick="vFilter('cat')">🐱 Cat</button>
-          <button onclick="vFilter('mustache')">〰 Stache</button>
-          <button onclick="vFilter('crown')">👑 Crown</button>
-          <button onclick="vFilter('clown_nose')">🤡 Nose</button>
-          <button onclick="vFilter('heart_eyes')">❤️ Hearts</button>
-          <button onclick="vFilter('face_mesh')">🕸 Mesh</button>
-          <button onclick="vFilter('anonymize')">🔒 Blur</button>
-          <button onclick="vFilter('clear')">✖ Clear</button>
+          <span class=fbl title="Face try-on">😎</span>
+          <button onclick="vFilter('ninja_mask')" title="Ninja mask">🥷</button>
+          <button onclick="vFilter('sunglasses')" title="Shades">🕶</button>
+          <button onclick="vFilter('glasses')" title="Glasses">👓</button>
+          <button onclick="vFilter('dog')" title="Dog">🐶</button>
+          <button onclick="vFilter('cat')" title="Cat">🐱</button>
+          <button onclick="vFilter('mustache')" title="Moustache">〰</button>
+          <button onclick="vFilter('crown')" title="Crown">👑</button>
+          <button onclick="vFilter('clown_nose')" title="Clown nose">🤡</button>
+          <button onclick="vFilter('heart_eyes')" title="Heart eyes">❤️</button>
+          <button onclick="vFilter('face_mesh')" title="Face mesh">🕸</button>
+          <button onclick="vFilter('anonymize')" title="Blur / privacy">🔒</button>
+          <button onclick="vFilter('clear')" title="Clear">✖</button>
         </div>
         <div class=tryonwrap id=tryonbar style=display:none>
           <div class=filterbar>
-            <span class=fbl>TRY-ON</span>
-            <button id=store-apparel class="storebtn on" onclick="vStore('apparel')">👕 Apparel</button>
-            <button id=store-eyewear class=storebtn onclick="vStore('eyewear')">👓 Eyewear</button>
-            <input id=garmenturl placeholder="paste an image URL…">
-            <button onclick="vUpload()">📎 Upload</button>
-            <button onclick="vTryOn()" class=accentbtn id=tryonbtn>👕 Try on me</button>
+            <span class=fbl title="Try-on store">🛍</span>
+            <button id=store-apparel class="storebtn on" onclick="vStore('apparel')" title="Apparel · Mode Marco">👕</button>
+            <button id=store-eyewear class=storebtn onclick="vStore('eyewear')" title="Eyewear · Ralba Optical">👓</button>
+            <input id=garmenturl placeholder="image URL…">
+            <button onclick="vUpload()" title="Upload an image">📎</button>
+            <button onclick="vTryOn()" class=accentbtn id=tryonbtn title="Try it on me">✨</button>
             <input type=file id=garmentfile accept="image/*" style=display:none>
             <span id=tryonstatus class=muted style=font-size:10px></span>
             <span style=flex:1></span>
@@ -994,6 +1010,7 @@ async function vStartVideo(which){
     ? await navigator.mediaDevices.getDisplayMedia({video:{frameRate:15}})
     : await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
   VOICE.vidStream=stream;
+  if(which==='cam'){const sv=$('selfview');sv.srcObject=stream;sv.play().catch(()=>{});$('wrap').classList.add('selfon');}
   const v=document.createElement('video');v.srcObject=stream;v.muted=true;v.playsInline=true;await v.play();
   const proto=location.protocol==='https:'?'wss:':'ws:';
   const cam=new WebSocket(proto+'//'+location.host+'/ws/cam');cam.binaryType='arraybuffer';VOICE.cam=cam;
@@ -1017,7 +1034,19 @@ function vStopVideo(){
   try{VOICE.cam&&VOICE.cam.close();}catch(e){}VOICE.cam=null;
   try{VOICE.vidStream&&VOICE.vidStream.getTracks().forEach(t=>t.stop());}catch(e){}
   VOICE.vidStream=null;
+  $('wrap').classList.remove('selfon');try{$('selfview').srcObject=null;}catch(e){}
 }
+function toggleFill(){const on=$('wrap').classList.toggle('fill');$('fillbtn').classList.toggle('on',on);
+  toast(on?'canvas: fill (edge to edge)':'canvas: fit');}
+/* icon-driven slide-in panels — keep the canvas pure until you ask for one */
+function vTogglePanel(id,btn){const el=$(id);
+  const show=(el.style.display==='none'||!el.style.display);
+  // only one of filters/shop open at a time
+  if(show&&id!=='filterbar'){$('filterbar').style.display='none';$('vfilters')&&$('vfilters').classList.remove('on');}
+  if(show&&id!=='tryonbar'){$('tryonbar').style.display='none';$('vshop')&&$('vshop').classList.remove('on');}
+  el.style.display=show?(id==='tryonbar'?'block':'flex'):'none';
+  if(btn)btn.classList.toggle('on',show);
+  if(id==='tryonbar'&&show)loadGarments();}
 const VBTN={mic:'vmic',cam:'vcam',screen:'vscr'};
 async function vToggle(which){
   try{
@@ -1247,8 +1276,9 @@ function nleSetMode(m){const prev=NLE.mode;NLE.mode=m;
   $('editwrap').style.display=m==='edit'?'flex':'none';
   $('drawbar').style.display=(m==='voice')?'none':'';
   $('voicebar').style.display=(m==='voice')?'flex':'none';
-  $('filterbar').style.display=(m==='voice')?'flex':'none';
-  $('tryonbar').style.display=(m==='voice')?'block':'none';
+  // pure canvas: try-on / filter panels stay hidden until their icon is tapped
+  $('filterbar').style.display='none';$('tryonbar').style.display='none';
+  ['vfilters','vshop'].forEach(b=>$(b)&&$(b).classList.remove('on'));
   document.querySelectorAll('#modeswitch button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
   if(prev==='voice'&&m!=='voice'){try{vStop();}catch(e){}}
   if(m==='voice'){setCanvas('live');loadGarments();}   // canvas stays on the live stream (= annotated you when cam on)
