@@ -505,23 +505,62 @@ def frame_color(rgba):
 
 
 def _knockout_bg(bgr, existing_alpha=None):
-    """Remove the studio background by flood-filling near-white from the borders —
-    so only the OUTER background is cut (interior white, e.g. white frames or lens
-    glare, is preserved). Combined with any real alpha already present."""
+    """Remove the studio background = the LIGHT region connected to the image border.
+    Robust to off-white / gradient / vignetted backgrounds (the wide Nano-Pro renders
+    whose corners weren't pure white, which left an opaque rectangle): we flood-fill the
+    light-and-low-saturation mask from MANY border seeds, so the whole outer background
+    is cut while interior light (white frames / lens glare) stays. Then floor faint
+    alpha to fully kill any translucent halo."""
     h, w = bgr.shape[:2]
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    white = ((hsv[:, :, 1] < 45) & (hsv[:, :, 2] > 185)).astype(np.uint8)
-    ff = white.copy()
+    light = ((hsv[:, :, 1] < 62) & (hsv[:, :, 2] > 165)).astype(np.uint8)
+    ff = light.copy()
     mask = np.zeros((h + 2, w + 2), np.uint8)
-    for sx, sy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1),
-                   (w // 2, 0), (w // 2, h - 1)):
-        if ff[sy, sx]:
-            cv2.floodFill(ff, mask, (sx, sy), 2)
+    sx = max(1, w // 60); sy = max(1, h // 60)
+    seeds = ([(x, 0) for x in range(0, w, sx)] + [(x, h - 1) for x in range(0, w, sx)] +
+             [(0, y) for y in range(0, h, sy)] + [(w - 1, y) for y in range(0, h, sy)])
+    for px, py in seeds:
+        if ff[py, px] == 1:
+            cv2.floodFill(ff, mask, (px, py), 2)
     alpha = np.where(ff == 2, 0, 255).astype(np.uint8)
     if existing_alpha is not None:
         alpha = np.minimum(alpha, existing_alpha)
     alpha = cv2.GaussianBlur(alpha, (0, 0), 1.2)        # feather for clean compositing
+    alpha[alpha < 30] = 0                               # floor: no translucent halo rectangle
     return alpha
+
+
+def _keep_glasses(bgr, alpha):
+    """SEGMENTATION safety net — guarantee NOTHING outside the actual frame survives
+    (no stray rectangle / blob, ever). Full arsenal:
+      1) foreground = the cutout alpha, FUSED with Canny EDGES (catches thin metal rims
+         the colour cut can miss) and morphologically closed,
+      2) keep only the GLASSES connected component(s): the largest blob plus any other
+         blob ≥18% of it (the second lens of a rimless/semi-rimless pair),
+      3) zero alpha everywhere else.
+    This is true silhouette segmentation, not just a background flood-fill."""
+    h, w = alpha.shape
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 45, 130)
+    edges = cv2.dilate(edges, _ellipse(max(2, int(0.012 * h))))
+    fg = (((alpha > 45).astype(np.uint8) | (edges > 0)).astype(np.uint8))
+    fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, _ellipse(max(3, int(0.02 * h))))
+    n, lbl, stats, _ = cv2.connectedComponentsWithStats(fg, 8)
+    if n <= 1:
+        return alpha
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    order = np.argsort(-areas)
+    big = order[0]; a0 = areas[big]
+    ty0 = stats[big + 1, cv2.CC_STAT_TOP]; th0 = stats[big + 1, cv2.CC_STAT_HEIGHT]
+    keep = np.zeros((h, w), np.uint8); keep[lbl == (big + 1)] = 1     # the frame
+    for i in order[1:4]:
+        ty = stats[i + 1, cv2.CC_STAT_TOP]; th = stats[i + 1, cv2.CC_STAT_HEIGHT]
+        ov = max(0, min(ty0 + th0, ty + th) - max(ty0, ty))          # vertical overlap
+        # a 2nd glasses part (lens) shares the frame's vertical band; a stray bg blob doesn't
+        if areas[i] >= 0.12 * a0 and ov > 0.35 * min(th0, th):
+            keep[lbl == (i + 1)] = 1
+    keep = cv2.dilate(keep, _ellipse(max(2, int(0.012 * h))))        # don't clip the frame edge
+    return np.where(keep > 0, alpha, 0).astype(np.uint8)
 
 
 def load_eyewear_rgba(raw: bytes):
@@ -543,6 +582,7 @@ def load_eyewear_rgba(raw: bytes):
     else:
         bgr = img[:, :, :3] if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         alpha = _knockout_bg(bgr)
+    alpha = _keep_glasses(bgr, alpha)                  # segmentation: only the frame survives
     rgba = np.dstack([bgr, alpha])
     ys, xs = np.where(alpha > 12)                       # tight-crop to the frame
     if len(xs):
@@ -572,7 +612,8 @@ def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None):
         _EYEWEAR["color"] = color or frame_color(rgba)
         _EYEWEAR["lens_centers"] = lens_centers_norm(rgba)   # for pupil registration
         _EYEWEAR["lensmask"] = lm                            # exact glass region (asset space)
-        _EYEWEAR["refl_n"] = 0                               # reflection animation phase
+        _EYEWEAR["reflection"] = None                        # a new pair starts with NO reflection
+        _EYEWEAR["refl_layer"] = None
 
 
 def set_lens_reflection(scene_bgr) -> bool:

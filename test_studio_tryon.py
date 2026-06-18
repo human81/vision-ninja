@@ -154,6 +154,19 @@ def offline():
     frac = bg_faint / float(cut.shape[0] * cut.shape[1])             # the bug made ~90% faint
     check("eyewear: degenerate-alpha bg knocked out (no translucent rectangle)",
           frac < 0.10, f"{frac*100:.1f}% translucent-white")
+    # SEGMENTATION arsenal: a stray blob OUTSIDE the glasses (a bg remnant in a corner,
+    # NOT in the frame's vertical band) must be removed — only the frame survives.
+    from occ.studio.face_filters import _keep_glasses
+    bgr2 = np.full((220, 440, 3), 30, np.uint8)
+    cv2.rectangle(bgr2, (150, 80), (290, 150), (60, 60, 60), 10)     # the glasses (centre band)
+    a2 = np.zeros((220, 440), np.uint8)
+    cv2.rectangle(a2, (150, 80), (290, 150), 255, 12)               # frame alpha
+    cv2.rectangle(a2, (10, 10), (70, 55), 255, -1)                  # STRAY blob (top-left corner)
+    kept = _keep_glasses(bgr2, a2)
+    blob_gone = int((kept[5:60, 5:75] > 40).sum())                  # the corner blob area
+    frame_kept = int((kept[80:152, 150:292] > 40).sum())           # the glasses
+    check("eyewear: stray corner blob segmented out (frame kept)",
+          blob_gone < 60 and frame_kept > 800, f"blob={blob_gone}px frame={frame_kept}px")
     # GEOMETRY: even an ABSURD lens-centre detection must not blow up the frame size —
     # the registration clamps the width to a sane multiple of the IPD (the 'horrible
     # wrong-size' bug). A mock face with IPD=60px.
