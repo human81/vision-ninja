@@ -37,6 +37,17 @@ _COOLDOWN = 18
 # stays tracked, and the handedness gate is a light secondary filter only.
 _HAND_MIN_SCORE = 0.55
 
+# --- browse feel: a JOG-WHEEL, not absolute pointing. The hand's horizontal offset
+# from centre sets the SCROLL RATE (eased), so small motions barely move and you stop
+# on an item by re-centring your hand. Smoothing kills jitter/snap. Tune here. ---
+_BROWSE_SMOOTH = 0.22       # EMA on hand x (lower = smoother / more lag)
+_BROWSE_DEADZONE = 0.11     # |x-0.5| within this → HOLD (no scroll) — generous, calm
+_BROWSE_MAX_RATE = 3.2      # items / frame at full deflection (eased toward centre)
+_BROWSE_EASE = 2.8          # >1 ⇒ very fine control near centre, fast only at the edges
+# ONLY an open hand browses. Fist=try-on, Peace=switch, Thumbs-down=clear are
+# independent — moving the hand during them must NEVER scroll the catalogue.
+_BROWSE_GESTURES = ("Open_Palm", "Pointing_Up")
+
 
 def _ensure_model():
     if not os.path.exists(_MODEL_PATH):
@@ -65,6 +76,9 @@ class GestureBrowser:
         self._cool = 0           # frames until the next discrete action may fire
         self._last_gesture = "—"
         self._hand_score = 0.0
+        self._hx = None           # smoothed hand x (EMA) for the jog-wheel
+        self._pos = 0.0           # fractional catalog position; idx = round(_pos)
+        self.result = None        # last try-on result to surface (apparel image)
         self._lock = threading.Lock()
 
     # ---------------- lifecycle ----------------
@@ -75,6 +89,8 @@ class GestureBrowser:
         if self.active:
             self._load()
             self.idx = min(self.idx, max(0, len(self.items) - 1))
+            self._pos = float(self.idx)
+            self._hx = None
             self._ensure_recognizer()
         return self.state()
 
@@ -95,7 +111,7 @@ class GestureBrowser:
                 "total": n, "busy": self.busy, "banner": self.banner,
                 "gesture": self._last_gesture, "hold": round(self._hold / _HOLD_FRAMES, 2),
                 "hand": self._last_gesture != "—", "hand_score": round(self._hand_score, 2),
-                "current": cur, "window": window}
+                "result": self.result, "current": cur, "window": window}
 
     def _load(self):
         from . import tools as T
@@ -177,13 +193,24 @@ class GestureBrowser:
             self._select()
 
         if hand is None:
+            self._hx = None
             return
-        # browse by the HAND's index-fingertip x position (landmark 8). No on-video cursor.
-        # Hold the index steady while fisting (don't let the closing hand scrub away).
-        tip = hand[8]
-        if self.items and not self.busy and gesture != "Closed_Fist":
-            x = min(max((tip.x - 0.18) / 0.64, 0.0), 1.0)    # deadzones at the edges
-            self.idx = int(round(x * (len(self.items) - 1)))
+        # JOG-WHEEL browse, ONLY on an open-hand gesture (so Fist/Peace/Thumbs-down
+        # never scroll). The hand's offset from centre sets the SCROLL RATE (eased), so
+        # barely moving / a centred hand HOLDS the catalog and you settle on an item;
+        # only a deliberate left/right offset scrolls. Smoothed to kill jitter.
+        if self.items and not self.busy and gesture in _BROWSE_GESTURES:
+            x = hand[8].x
+            self._hx = x if self._hx is None else \
+                (1 - _BROWSE_SMOOTH) * self._hx + _BROWSE_SMOOTH * x
+            off = self._hx - 0.5
+            if abs(off) > _BROWSE_DEADZONE:
+                mag = min((abs(off) - _BROWSE_DEADZONE) / (0.42 - _BROWSE_DEADZONE), 1.0)
+                rate = (1.0 if off > 0 else -1.0) * (mag ** _BROWSE_EASE) * _BROWSE_MAX_RATE
+                self._pos = min(max(self._pos + rate, 0.0), len(self.items) - 1)
+                self.idx = int(round(self._pos))
+        else:
+            self._hx = None          # not browsing → re-anchor on the next open hand
 
         # discrete one-shot actions (cool-down gated)
         if self._cool == 0 and not self.busy:
@@ -198,7 +225,8 @@ class GestureBrowser:
             return
         it = self.items[self.idx]
         title = it.get("title", "item")
-        self.busy = True
+        self.busy = True                      # → the browser shows the canvas loader
+        self.result = None
         self.banner = ("Fitting " if self.store == "eyewear" else "Styling ") + title + "…"
         threading.Thread(target=self._try_on, args=(dict(it),), daemon=True).start()
 
@@ -207,8 +235,13 @@ class GestureBrowser:
         try:
             if self.store == "eyewear":
                 T.try_eyewear(image=it.get("img", ""), label=it.get("title", ""))
+                self.result = {"kind": "eyewear"}          # live AR — no canvas swap
             else:
-                T.try_product(query=it.get("title", ""))
+                res = T.try_product(query=it.get("title", ""))
+                out = (res or {}).get("output", "")
+                self.result = ({"kind": "image",
+                                "src": "/download/" + os.path.basename(out)} if out
+                               else {"kind": "apparel"})
             self.banner = ("Wearing " if self.store == "eyewear" else "Look ready: ") \
                 + it.get("title", "")
         except Exception as e:
@@ -225,6 +258,8 @@ class GestureBrowser:
     def _switch_store(self):
         self.store = "apparel" if self.store == "eyewear" else "eyewear"
         self.idx = 0
+        self._pos = 0.0
+        self._hx = None
         self._load()
         self.banner = "Browsing " + ("eyewear · Ralba Optical" if self.store == "eyewear"
                                      else "apparel · Mode Marco")

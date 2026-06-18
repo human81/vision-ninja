@@ -423,10 +423,10 @@
               <div id=ghero-price>—</div>
             </div>
             <div id=ghold><i id=ghold-bar></i></div>
-            <div id=ghint-status>✋ Raise your hand — move ◀ ▶ to browse</div>
+            <div id=ghint-status>✋ Open hand · move ◀ ▶ to scroll · center to stop</div>
             <div class=glegend>
               <div class=ghead>Hand gestures</div>
-              <div class=gleg><span class=glic>✋</span><b>Move hand</b><i>browse</i></div>
+              <div class=gleg><span class=glic>✋</span><b>Open hand</b><i>scroll · center = stop</i></div>
               <div class=gleg><span class=glic>✊</span><b>Fist</b><i>try it on</i></div>
               <div class=gleg><span class=glic>✌️</span><b>Peace</b><i>switch store</i></div>
               <div class=gleg><span class=glic>👎</span><b>Thumbs&nbsp;down</b><i>clear</i></div>
@@ -1122,9 +1122,11 @@ async function gRailLoop(){
   if(g&&!g.active){GRAIL=null;return;}
   GRAIL=setTimeout(gRailLoop,140);
 }
+const _BROWSE_G=['Open_Palm','Pointing_Up'];
+let GFIT=false, GLAST_RESULT=null;
 function gRenderRails(g){
   const wrap=$('wrap');
-  if(!g||!g.active){wrap.classList.remove('gestures');return;}
+  if(!g||!g.active){wrap.classList.remove('gestures');gGestFit(false);return;}
   wrap.classList.add('gestures');
   const eyewear=g.store==='eyewear';
   $('gstore-name').textContent=eyewear?'Ralba Optical':'Mode Marco';
@@ -1135,10 +1137,10 @@ function gRenderRails(g){
   $('ghero-brand').textContent=c.brand||'';
   $('ghero-price').textContent=c.price?('$'+c.price):'';
   $('ghold-bar').style.width=Math.round((g.hold||0)*100)+'%';
-  // status reflects the HAND only (no hand → prompt to raise one; never the face)
-  const handUp=g.gesture&&g.gesture!=='—';
-  let st=handUp?(eyewear?'Browsing frames ◀ ▶':'Browsing looks ◀ ▶')
-               :'✋ Raise your hand — move ◀ ▶ to browse';
+  // status — each gesture is independent; browsing only on an OPEN hand
+  const browsing=_BROWSE_G.includes(g.gesture);
+  let st=browsing?(eyewear?'Browsing frames ◀ ▶':'Browsing looks ◀ ▶')
+                 :'✋ Open hand · move ◀ ▶ to scroll · center to stop';
   if(g.busy)st='✨ '+(g.banner||'fitting…');
   else if(g.banner)st=g.banner;
   else if(g.gesture==='Closed_Fist')st='✊ Hold to try it on…';
@@ -1150,6 +1152,18 @@ function gRenderRails(g){
     (it.img?`<img src="${it.img}" loading=lazy onerror="this.style.visibility='hidden'">`
            :'<div style="width:54px;height:34px;flex:none"></div>')+
     `<div class=gtt>${(it.title||'').replace(/</g,'&lt;')}</div></div>`).join('');
+  // ✊ fist → premium canvas LOADER while the try-on runs (eyewear AND apparel)
+  gGestFit(!!g.busy, eyewear, c.title||'your pick');
+  if(g.busy){ if(GLAST_RESULT){setCanvas('live');GLAST_RESULT=null;} }
+  else if(g.result&&g.result.kind==='image'&&g.result.src&&GLAST_RESULT!==g.result.src){
+    GLAST_RESULT=g.result.src;                       // apparel look ready → show it
+    const im=new Image();im.onload=()=>setCanvas('image',g.result.src,'gesture try-on');im.src=g.result.src;
+  }
+  if(g.gesture==='Thumb_Down'&&GLAST_RESULT){setCanvas('live');GLAST_RESULT=null;}
+}
+function gGestFit(on,eyewear,title){
+  if(on&&!GFIT){GFIT=true;vShowFitting(eyewear?'Fitting your frames':'Styling your look',title);}
+  else if(!on&&GFIT){GFIT=false;vHideFitting();}
 }
 
 /* ---- AR face filters (one-tap) ---- */

@@ -232,15 +232,25 @@ def offline():
         return [NS(x=x, y=y, z=0) for _ in range(21)]
     gb = GestureBrowser()
     gb.active = True; gb.store = "eyewear"
-    gb.items = [{"title": f"g{i}", "img": ""} for i in range(10)]
-    gb._drive("Open_Palm", _hand(0.82), 1000, 1000)
-    far_right = gb.idx
-    gb._drive("Open_Palm", _hand(0.18), 1000, 1000)
-    check("gesture: hand position scrubs the carousel", far_right == 9 and gb.idx == 0,
-          f"right={far_right} left={gb.idx}")
-    calls = []
-    gb._select = lambda: calls.append("select")
-    for _ in range(_HOLD_FRAMES + 3):          # fist must HOLD to fire, then latch
+    gb.items = [{"title": f"g{i}", "img": ""} for i in range(40)]
+    gb.idx = 20; gb._pos = 20.0; gb._hx = None
+    # JOG-WHEEL: a centred / barely-moving open hand HOLDS the catalog (no jitter scroll)
+    for _ in range(20): gb._drive("Open_Palm", _hand(0.52), 1000, 1000)
+    check("jog: centred / tiny motion holds the catalog", gb.idx == 20, f"->{gb.idx}")
+    # a deliberate offset scrolls gradually (rate-based, not a jump)
+    for _ in range(30): gb._drive("Open_Palm", _hand(0.92), 1000, 1000)
+    fwd = gb.idx
+    check("jog: open hand scrolls forward gradually", 20 < fwd, f"20->{fwd}")
+    # EACH GESTURE INDEPENDENT — moving the hand during non-browse gestures never scrolls
+    gb._cool = 99
+    gb._drive("Victory", _hand(0.95), 1000, 1000)
+    gb._drive("Thumb_Down", _hand(0.05), 1000, 1000)
+    check("jog: non-browse gestures never scroll the catalog", gb.idx == fwd, f"{fwd}->{gb.idx}")
+    for _ in range(60): gb._drive("Open_Palm", _hand(0.06), 1000, 1000)
+    check("jog: open hand the other way rewinds", gb.idx < fwd, f"{fwd}->{gb.idx}")
+    # fist HOLDS then fires the try-on exactly once
+    calls = []; gb.busy = False; gb._select = lambda: calls.append("select")
+    for _ in range(_HOLD_FRAMES + 3):
         gb._drive("Closed_Fist", _hand(0.5), 1000, 1000)
     check("gesture: fist holds then fires try-on exactly once", calls == ["select"], calls)
     gb._drive("Open_Palm", _hand(0.5), 1000, 1000)  # release
