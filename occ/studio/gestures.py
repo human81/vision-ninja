@@ -21,7 +21,6 @@ import time
 import urllib.request
 
 import cv2
-import numpy as np
 
 _MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/gesture_recognizer/"
               "gesture_recognizer/float16/1/gesture_recognizer.task")
@@ -32,7 +31,6 @@ _MODEL_PATH = os.path.join(_MODEL_DIR, "gesture_recognizer.task")
 # (frames) between discrete actions so one gesture fires exactly once.
 _HOLD_FRAMES = 10
 _COOLDOWN = 18
-_VISIBLE = 5            # carousel items shown (centred on current index)
 
 
 def _ensure_model():
@@ -40,48 +38,6 @@ def _ensure_model():
         os.makedirs(_MODEL_DIR, exist_ok=True)
         urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
     return _MODEL_PATH
-
-
-class _ThumbCache:
-    """Lazily fetch + decode product thumbnails (background thread; never blocks the
-    render loop). Keyed by image URL."""
-
-    def __init__(self, height: int = 150):
-        self.h = height
-        self._cache: dict[str, np.ndarray] = {}
-        self._pending: set[str] = set()
-        self._lock = threading.Lock()
-
-    def get(self, url: str):
-        if not url:
-            return None
-        with self._lock:
-            if url in self._cache:
-                return self._cache[url]
-            if url in self._pending:
-                return None
-            self._pending.add(url)
-        threading.Thread(target=self._fetch, args=(url,), daemon=True).start()
-        return None
-
-    def _fetch(self, url: str):
-        img = None
-        try:
-            if url.startswith(("http://", "https://")):
-                req = urllib.request.Request(url, headers={"User-Agent": "occ-studio"})
-                data = urllib.request.urlopen(req, timeout=8).read()
-                arr = np.frombuffer(data, np.uint8)
-                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            elif os.path.exists(url):
-                img = cv2.imread(url)
-        except Exception:
-            img = None
-        if img is not None:
-            scale = self.h / img.shape[0]
-            img = cv2.resize(img, (max(1, int(img.shape[1] * scale)), self.h))
-        with self._lock:
-            self._cache[url] = img        # cache None too → don't refetch a 404
-            self._pending.discard(url)
 
 
 class GestureBrowser:
@@ -104,7 +60,6 @@ class GestureBrowser:
         self._cool = 0           # frames until the next discrete action may fire
         self._last_gesture = "—"
         self._cursor = None      # (x,y) px of the index fingertip
-        self._thumbs = _ThumbCache()
         self._lock = threading.Lock()
 
     # ---------------- lifecycle ----------------
@@ -118,12 +73,23 @@ class GestureBrowser:
             self._ensure_recognizer()
         return self.state()
 
-    def state(self) -> dict:
-        it = self.items[self.idx] if (self.items and 0 <= self.idx < len(self.items)) else {}
+    def _slim(self, j):
+        it = self.items[j]
+        return {"idx": j, "title": it.get("title", ""), "price": it.get("price", ""),
+                "brand": it.get("brand", ""), "img": it.get("img", ""),
+                "current": j == self.idx}
+
+    def state(self, radius: int = 4) -> dict:
+        """Full browse state for the browser side-rails. `window` is the slice of
+        items around the cursor so the UI renders a filmstrip without re-fetching."""
+        n = len(self.items)
+        cur = self._slim(self.idx) if (n and 0 <= self.idx < n) else {}
+        window = [self._slim(j) for j in range(max(0, self.idx - radius),
+                                               min(n, self.idx + radius + 1))]
         return {"active": self.active, "store": self.store, "idx": self.idx,
-                "total": len(self.items), "busy": self.busy,
-                "current": {"title": it.get("title", ""), "price": it.get("price", ""),
-                            "brand": it.get("brand", "")}}
+                "total": n, "busy": self.busy, "banner": self.banner,
+                "gesture": self._last_gesture, "hold": round(self._hold / _HOLD_FRAMES, 2),
+                "current": cur, "window": window}
 
     def _load(self):
         from . import tools as T
@@ -256,110 +222,21 @@ class GestureBrowser:
         threading.Timer(1.4, self._clear_banner).start()
 
     # ---------------- drawing ----------------
+    # The video stays CLEAN — only the AR try-on + a subtle hand cursor live on the
+    # frame, so your face and the glasses are never covered. All product chrome (the
+    # carousel, the now-trying card, the hints) renders in the browser side-rails
+    # from state()/`window`. So you SEE what you're trying on.
     def _draw(self, vis):
-        H, W = vis.shape[:2]
-        self._draw_carousel(vis, W, H)
-        self._draw_cursor(vis)
-        self._draw_hud(vis, W, H)
-        self._draw_hints(vis, W, H)
-        if self.banner:
-            self._draw_banner(vis, W, H)
-
-    def _draw_carousel(self, vis, W, H):
-        if not self.items:
-            return
-        cy = int(H * 0.40)
-        cx = W // 2
-        gap = int(W * 0.165)
-        for off in range(-(_VISIBLE // 2), _VISIBLE // 2 + 1):
-            j = self.idx + off
-            if not (0 <= j < len(self.items)):
-                continue
-            it = self.items[j]
-            center = (off == 0)
-            x = cx + off * gap
-            tw = int(W * (0.135 if center else 0.092))
-            thumb = self._thumbs.get(it.get("img", ""))
-            self._draw_tile(vis, x, cy, tw, thumb, it, center)
-        # count + store, just under the centre tile
-        it = self.items[self.idx]
-        label = f"{it.get('title','')[:34]}"
-        price = (f"${it.get('price','')}" if it.get("price") else "")
-        self._center_text(vis, label, cx, cy + int(W * 0.105), 0.66, (255, 255, 255), 2)
-        if price:
-            self._center_text(vis, price, cx, cy + int(W * 0.105) + 26, 0.62,
-                              (120, 240, 170), 2)
-
-    def _draw_tile(self, vis, x, cy, tw, thumb, it, center):
-        if thumb is not None:
-            th = int(thumb.shape[0] * (tw * 2) / thumb.shape[1])
-            th = min(th, int(tw * 2.4))
-            patch = cv2.resize(thumb, (tw * 2, th))
-            y0 = cy - th // 2
-            x0 = x - tw
-            y1, x1 = y0 + th, x0 + tw * 2
-            if 0 <= y0 and y1 <= vis.shape[0] and 0 <= x0 and x1 <= vis.shape[1]:
-                roi = vis[y0:y1, x0:x1]
-                a = 1.0 if center else 0.62
-                cv2.addWeighted(patch, a, roi, 1 - a, 0, roi)
-        else:                      # placeholder card with the title
-            h2 = int(tw * 1.2)
-            self._panel(vis, x - tw, cy - h2, x + tw, cy + h2,
-                        (40, 46, 60), 0.85 if center else 0.5)
-            self._center_text(vis, it.get("title", "")[:16], x, cy, 0.42,
-                              (210, 220, 235), 1)
-        if center:                 # glowing selection frame
-            h2 = int(tw * 1.25)
-            cv2.rectangle(vis, (x - tw - 4, cy - h2 - 4), (x + tw + 4, cy + h2 + 4),
-                          (80, 230, 180), 3)
-            # hold-to-try progress ring
-            if self._hold > 0:
-                frac = self._hold / _HOLD_FRAMES
-                cv2.ellipse(vis, (x, cy - h2 - 22), (16, 16), -90, 0, int(360 * frac),
-                            (90, 240, 190), 4)
-
-    def _draw_cursor(self, vis):
         if not self._cursor:
             return
-        cv2.circle(vis, self._cursor, 16, (90, 240, 200), 2)
-        cv2.circle(vis, self._cursor, 4, (255, 255, 255), -1)
+        x, y = self._cursor
+        cv2.circle(vis, (x, y), 18, (90, 240, 200), 2)
+        cv2.circle(vis, (x, y), 4, (255, 255, 255), -1)
+        if self._hold > 0:                       # hold-to-try progress ring at the hand
+            frac = self._hold / _HOLD_FRAMES
+            cv2.ellipse(vis, (x, y), (26, 26), -90, 0, int(360 * frac), (90, 240, 190), 4)
         g = {"Closed_Fist": "GRAB", "Victory": "SWITCH", "Thumb_Down": "CLEAR",
              "Open_Palm": "BROWSE", "Pointing_Up": "BROWSE"}.get(self._last_gesture, "")
         if g:
-            cv2.putText(vis, g, (self._cursor[0] + 20, self._cursor[1] - 14),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 240, 200), 2, cv2.LINE_AA)
-
-    def _draw_hud(self, vis, W, H):
-        store = "Ralba Optical · eyewear" if self.store == "eyewear" else "Mode Marco · apparel"
-        txt = f"{store}   {self.idx + 1}/{len(self.items) or 0}"
-        self._panel(vis, 14, 14, 14 + 11 * len(txt) + 20, 50, (16, 20, 30), 0.6)
-        cv2.putText(vis, txt, (26, 39), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
-                    (180, 230, 255), 2, cv2.LINE_AA)
-
-    def _draw_hints(self, vis, W, H):
-        hints = "MOVE HAND = browse      FIST = try on      V = switch store      THUMBS-DOWN = clear"
-        y = H - 22
-        self._panel(vis, 0, H - 44, W, H, (10, 12, 18), 0.55)
-        self._center_text(vis, hints, W // 2, y, 0.6, (210, 225, 240), 2)
-
-    def _draw_banner(self, vis, W, H):
-        self._panel(vis, 0, int(H * 0.5) - 30, W, int(H * 0.5) + 30, (12, 16, 24), 0.6)
-        col = (120, 240, 170) if not self.busy else (250, 210, 120)
-        self._center_text(vis, self.banner, W // 2, int(H * 0.5) + 8, 0.95, col, 2)
-
-    # ---- tiny draw helpers ----
-    @staticmethod
-    def _panel(vis, x0, y0, x1, y1, color, alpha):
-        x0, y0 = max(0, x0), max(0, y0)
-        x1, y1 = min(vis.shape[1], x1), min(vis.shape[0], y1)
-        if x1 <= x0 or y1 <= y0:
-            return
-        roi = vis[y0:y1, x0:x1]
-        block = np.full_like(roi, color, dtype=np.uint8)
-        cv2.addWeighted(block, alpha, roi, 1 - alpha, 0, roi)
-
-    @staticmethod
-    def _center_text(vis, text, cx, cy, scale, color, thick):
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)
-        cv2.putText(vis, text, (int(cx - tw / 2), int(cy + th / 2)),
-                    cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick, cv2.LINE_AA)
+            cv2.putText(vis, g, (x + 24, y - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (90, 240, 200), 2, cv2.LINE_AA)

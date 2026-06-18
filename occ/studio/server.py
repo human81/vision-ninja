@@ -128,6 +128,11 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         return JSONResponse(pipe.set_gesture_browse(
             on=None if on is None else bool(on), store=b.get("store") or None))
 
+    @app.get("/gesture")
+    async def gesture_state():
+        """Live browse state for the canvas side-rails (polled fast while active)."""
+        return JSONResponse(pipe.gestures.state())
+
     @app.post("/filter")
     async def filter_route(req: Request):
         """Apply an AR face filter directly (UI chip; the agent can also do this)."""
