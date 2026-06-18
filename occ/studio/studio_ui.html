@@ -80,15 +80,28 @@
   .drawbar button:hover{border-color:#3a4658}
   .drawbar button[data-tog].on,.drawbar button[data-frz].on{border-color:var(--cyan);color:var(--cyan)}
   .drawbar button[data-det].on{border-color:var(--danger);color:var(--danger)}
-  .voicebar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
-  .voicebar button{background:#141c29;border:1px solid var(--line);color:var(--fg);
-    border-radius:7px;padding:5px 11px;font-size:12px;cursor:pointer}
-  .voicebar button:hover{border-color:#3a4658}
-  .voicebar button.on{border-color:var(--accent);color:var(--accent);background:rgba(63,185,80,.12)}
-  .voicebar #vstop{border-color:#3a2530;color:var(--danger)}
-  .voicebar #vbackend{background:#141c29;border:1px solid var(--line);color:var(--fg);
-    border-radius:7px;padding:5px 8px;font-size:12px;cursor:pointer}
-  .voicebar #vbackend:hover{border-color:#3a4658}
+  /* Google-Meet-style floating control bar over the canvas: round icon buttons */
+  .voicebar{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:9;
+    flex-direction:column;align-items:center;gap:9px;pointer-events:none}
+  #vstatuspill{display:inline-flex;align-items:center;gap:7px;padding:5px 13px;border-radius:999px;
+    background:rgba(8,11,17,.66);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    font-size:12px;color:#d3e2f2;pointer-events:auto;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+  .vbar{display:flex;align-items:center;gap:9px;padding:10px 14px;border-radius:999px;
+    pointer-events:auto;background:rgba(16,21,30,.74);
+    backdrop-filter:blur(20px) saturate(1.3);-webkit-backdrop-filter:blur(20px) saturate(1.3);
+    box-shadow:0 16px 50px rgba(0,0,0,.55),inset 0 0 0 1px rgba(255,255,255,.07)}
+  .voicebar .vbtn{width:46px;height:46px;border-radius:50%;border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.07);color:#eef4ff;font-size:19px;line-height:1;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;transition:all .15s ease;padding:0}
+  .voicebar .vbtn:hover{background:rgba(255,255,255,.16);transform:translateY(-1px)}
+  .voicebar .vbtn.on{background:var(--accent);border-color:var(--accent);color:#08130c;
+    box-shadow:0 0 20px rgba(63,185,80,.5)}
+  .voicebar .vbtn.end{background:#e5484d;border-color:#e5484d;color:#fff}
+  .voicebar .vbtn.end:hover{background:#f15a5f}
+  .voicebar .vsep{width:1px;height:26px;background:rgba(255,255,255,.12);margin:0 1px}
+  .voicebar #vbackend{height:40px;border-radius:999px;background:rgba(255,255,255,.07);
+    border:1px solid rgba(255,255,255,.12);color:#eef4ff;font-size:12px;padding:0 12px;cursor:pointer}
+  .voicebar #vbackend:hover{background:rgba(255,255,255,.14)}
   .vdot{width:9px;height:9px;border-radius:50%;background:#3a4658;display:inline-block;margin:0 2px}
   .vdot.live{background:var(--danger);box-shadow:0 0 0 0 rgba(248,81,73,.6);animation:vpulse 1.4s infinite}
   .vdot.speaking{background:var(--cyan);box-shadow:0 0 0 0 rgba(54,215,224,.6);animation:vpulse 1s infinite}
@@ -401,6 +414,23 @@
             <div class=grail-head>Browsing</div>
             <div id=gfilm></div>
           </div>
+          <!-- Meet-style floating control bar (round icon buttons over the canvas) -->
+          <div class=voicebar id=voicebar style=display:none>
+            <span id=vstatuspill><span id=vdot class=vdot></span><span id=vstatus>tap Mic to talk</span></span>
+            <div class=vbar>
+              <button id=vmic class=vbtn onclick="vToggle('mic')" title="Mic — talk to the ninja">🎤</button>
+              <button id=vcam class=vbtn onclick="vToggle('cam')" title="Camera — run overlays on you">📷</button>
+              <button id=vscr class=vbtn onclick="vToggle('screen')" title="Share your screen">🖥</button>
+              <button id=vgest class=vbtn onclick="vToggleGestures()" title="Gesture browsing — hands-free try-on">🖐</button>
+              <button id=vdetect class=vbtn onclick="vToggleDetect()" title="Detection · tracking · occupancy">🔎</button>
+              <span class=vsep></span>
+              <select id=vbackend onchange="vSetBackend(this.value)" title="Live Voice model — OpenAI is best at Haitian Creole">
+                <option value=gemini>🜂 Gemini</option>
+                <option value=openai>🗣 Creole</option>
+              </select>
+              <button id=vstop class="vbtn end" onclick="vStop()" title="End session">⏹</button>
+            </div>
+          </div>
         </div>
         <div class=canvascap id=canvascap></div>
         <div class=drawbar id=drawbar>
@@ -413,20 +443,6 @@
           <button onclick="drawClear()">Clear</button>
           <button onclick="drawSave()">Save</button>
           <span class=muted style=font-size:10px>click to add points · click 1st point closes a zone · drag a vertex · ⏎ finish · Esc cancel</span>
-        </div>
-        <div class=voicebar id=voicebar style=display:none>
-          <button id=vmic onclick="vToggle('mic')" title="talk to the ninja">🎤 Mic</button>
-          <button id=vcam onclick="vToggle('cam')" title="run overlays on your camera">📷 Camera</button>
-          <button id=vscr onclick="vToggle('screen')" title="share + analyze your screen">🖥 Screen</button>
-          <button id=vdetect onclick="vToggleDetect()" title="object detection · tracking · occupancy (off when live)">🔎 Detection</button>
-          <button id=vgest onclick="vToggleGestures()" title="browse the store hands-free — move to scroll, fist to try on, V to switch, thumbs-down to clear">🖐 Gestures</button>
-          <select id=vbackend onchange="vSetBackend(this.value)" title="Live Voice model — OpenAI is strongest at Haitian Creole / non-English accents">
-            <option value=gemini>🜂 Gemini Live</option>
-            <option value=openai>🗣 OpenAI Realtime · Creole</option>
-          </select>
-          <span id=vdot class=vdot></span><span id=vstatus class=muted>tap Mic to talk</span>
-          <span style=flex:1></span>
-          <button id=vstop onclick="vStop()">⏹ End</button>
         </div>
         <div class=filterbar id=filterbar style=display:none>
           <span class=fbl>FACE TRY-ON</span>
