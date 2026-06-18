@@ -81,6 +81,7 @@ class GestureBrowser:
         self.counting = False     # 3-2-1 "strike a pose" countdown before a try-on
         self._count_until = 0.0
         self._pending = None      # the item to try on when the countdown ends
+        self.query = ""           # active search filter (empty = full catalogue)
         self._lock = threading.Lock()
 
     # ---------------- lifecycle ----------------
@@ -115,6 +116,7 @@ class GestureBrowser:
         return {"active": self.active, "store": self.store, "idx": self.idx,
                 "total": n, "busy": self.busy, "banner": self.banner,
                 "hover": self.hover, "hand": self._present, "countdown": countdown,
+                "query": self.query,
                 "dwell": (1.0 if self._fired else round(min(self._dwell / _DWELL, 1.0), 2)),
                 "finger": ({"x": round(self.finger[0], 3), "y": round(self.finger[1], 3)}
                            if self.finger else None),
@@ -241,17 +243,33 @@ class GestureBrowser:
             self._clear()
         return self.state()
 
-    def goto(self, query: str) -> dict:
-        """Jump the selection to the best-matching item by name (for the agent)."""
+    def search(self, query: str, store: str | None = None) -> dict:
+        """SEARCH the store and surface the matches INTO the live browser — the items
+        become Prev/Next + Try-on so the user (or the agent) browses exactly the
+        results. Auto-switches store to match the query. The filtered set is shown in
+        the rail filmstrip; `clear`/`store` restore the full catalogue."""
         from . import tools as T
+        query = (query or "").strip()
+        if not query:
+            return self.state()
+        target = store if store in ("eyewear", "apparel") else \
+            (T._guess_store(query) or self.store)
+        if target != self.store:
+            self.store = target
         hits = T._search_catalog(query, store=self.store)
         if hits:
-            title = (hits[0].get("title") or "").lower()
-            for i, it in enumerate(self.items):
-                if (it.get("title") or "").lower() == title:
-                    self.idx = i
-                    break
+            self.items = list(hits)        # filtered view: browse/try ONLY the results
+            self.idx = 0
+            self.query = query
         return self.state()
+
+    def goto(self, query: str) -> dict:    # back-compat alias
+        return self.search(query)
+
+    def step(self, d: int):
+        if not self.items:
+            return
+        self.idx = min(max(self.idx + d, 0), len(self.items) - 1)
 
     def step(self, d: int):
         if not self.items:
@@ -303,6 +321,7 @@ class GestureBrowser:
     def _switch_store(self):
         self.store = "apparel" if self.store == "eyewear" else "eyewear"
         self.idx = 0
+        self.query = ""              # leaving a search → full catalogue
         self._load()
         self.banner = "Browsing " + ("eyewear · Ralba Optical" if self.store == "eyewear"
                                      else "apparel · Mode Marco")
@@ -317,5 +336,7 @@ class GestureBrowser:
         self.result = None             # drop the VTO result so the canvas returns to live
         self.busy = False
         self.counting = False; self._pending = None   # cancel any pending countdown
+        if self.query:                 # clear a search filter → full catalogue again
+            self.query = ""; self.idx = 0; self._load()
         self.banner = "Cleared — back to live"
         threading.Timer(1.4, self._clear_banner).start()

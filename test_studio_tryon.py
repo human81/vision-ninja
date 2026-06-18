@@ -290,6 +290,23 @@ def offline():
         steps, acts = sim._route(phrase, phrase)
         routed[want] = any(a[0] == "live_control" and a[1].get("action") == want for a in acts)
     check("agent (no-key) routes next/prev/try/store via live_control", all(routed.values()), routed)
+    # INSTANT SEARCH: the ninja searches the stores and surfaces results into the SAME
+    # live browser (filtered Prev/Next/Try) AND the store strip; auto-switches store.
+    gs = GestureBrowser(); gs.active = True; gs.store = "apparel"
+    gs.items = list(T._load_catalogs()["apparel"])
+    s = gs.search("aviator sunglasses")
+    filtered = 0 < s["total"] < 100 and s["store"] == "eyewear" and \
+        all(it.get("shape") == "aviator" for it in gs.items[:5])
+    check("search: filters the live browser to results (auto-switch store)", filtered,
+          f"store={s['store']} total={s['total']}")
+    gs.act("next")
+    check("search: Prev/Next browse only the results", gs.idx == 1 and len(gs.items) == s["total"])
+    gs._clear()
+    check("search: clear restores the FULL catalogue", gs.query == "" and len(gs.items) > 300)
+    # the no-key SimRunner routes a 'show me X' request to the unified search
+    steps, acts = sim._route("show me red aviators", "show me red aviators")
+    check("agent (no-key) routes 'show me X' → live_control search",
+          any(a[0] == "live_control" and a[1].get("query") for a in acts), acts)
 
 
 # ----------------------------- ONLINE -----------------------------

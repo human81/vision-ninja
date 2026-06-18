@@ -297,20 +297,31 @@ def live_control(action: str = "", query: str = "") -> dict:
     buttons drive (one unified path, no parallel system). Use this to help the user
     hands-free. `action`: 'next' / 'prev' (step the catalogue one item), 'try' (try the
     current item on the user — this runs a 3-2-1 'strike a pose' countdown first),
-    'store' (switch eyewear ⇄ apparel), 'clear' (remove everything, back to clean live).
-    OR pass `query` to jump straight to a named product ('hugo aviator', 'navy polo')
-    and then you can 'try' it. Always tell the user what you see / are about to do.
-    Turns touchless mode on automatically."""
+    'store' (switch eyewear ⇄ apparel), 'clear' (remove everything + drop any search,
+    back to clean live + full catalogue).
+    OR pass `query` to instantly SEARCH the stores for whatever the user wants ('red
+    aviators', 'navy polo', 'haiti jersey') — the matches are surfaced into BOTH the
+    live browser (so Prev/Next/Try-on now browse exactly those results) AND the store
+    strip — then you can 'try' the top match. Auto-switches store to fit the query.
+    Always tell the user what you found. Turns touchless mode on automatically."""
     pipe = ctx().pipe
     if not pipe.gestures.active:
         pipe.set_gesture_browse(on=True)
     gb = pipe.gestures
-    st = gb.goto(query) if query else gb.act(action)
+    out = {"status": "success", "mode": "live", "ui": "overlays"}
+    if query:
+        st = gb.search(query)
+        matches = [_slim(it) for it in gb.items[:12]]
+        out["catalog"] = {"store": st.get("store"), "matches": matches}   # → frontend strip
+        out["query"] = query
+        out["found"] = len(gb.items)
+    else:
+        st = gb.act(action)
     cur = (st.get("current") or {})
-    return {"status": "success", "store": st.get("store"),
-            "current": cur.get("title", ""), "price": cur.get("price", ""),
-            "idx": st.get("idx"), "total": st.get("total"),
-            "countdown": st.get("countdown", 0), "mode": "live", "ui": "overlays"}
+    out.update({"store": st.get("store"), "current": cur.get("title", ""),
+                "price": cur.get("price", ""), "idx": st.get("idx"),
+                "total": st.get("total"), "countdown": st.get("countdown", 0)})
+    return out
 
 
 FACE_FILTERS_LIST = ["ninja_mask", "sunglasses", "glasses", "dog", "cat",

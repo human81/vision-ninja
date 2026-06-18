@@ -65,7 +65,11 @@ Operating principles:
   `live_control('try')` to try the current item on (this runs a 3-2-1 'STRIKE A POSE'
   countdown, then fits it — tell them "okay, strike a pose!"), `live_control('store')`
   to switch eyewear⇄apparel, `live_control('clear')` to wipe everything back to clean
-  live, or `live_control(query='hugo aviator')` to jump to a named product then 'try'.
+  live. INSTANT SEARCH — whenever the user asks for ANYTHING ("show me red aviators",
+  "got navy polos?", "Haiti jersey", "round tortoise frames"), call
+  `live_control(query=...)`: it searches the stores and surfaces the matches into BOTH
+  the live browser (Prev/Next/Try now browse exactly those results) AND the store strip,
+  auto-switching store to fit. Then say what you found and offer to 'try' the top one.
   Be aware of what's selected (the tool returns the current item + price) and SIMPLIFY:
   if they seem stuck, just do it for them and narrate ("I've got the next pair up —
   want to try them? strike a pose in 3…"). Prefer `live_control` for the live shopping
@@ -353,8 +357,12 @@ class SimRunner:
             "coach", "gant", "under armour", "ralba", "mode marco", "haiti"))
         if shop_trigger and prod_word:
             if any(w in m for w in ("show me", "do you have", "recommend", "options",
-                                    "what about", "looking for", "suits me", "suit me")):
-                add("shop_search", {"query": original}, None, "shop the sponsored stores")
+                                    "what about", "looking for", "browse", "any ",
+                                    "find me", "got any")):
+                # instant search → surfaced to the live browser AND the store strip
+                add("live_control", {"query": original},
+                    "Here's what I found — browse them on your self-view or say 'try it on'.",
+                    "search the stores")
             else:
                 add("try_product", {"query": original},
                     "Finding that and trying it on you…", "try it on live")
