@@ -275,27 +275,35 @@ def lens_centers_norm(rgba):
     binm = (a > 40).astype(np.uint8)
     ff = binm.copy(); cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)
     silh = ((binm | (ff == 0)) > 0)
+    if int(silh.sum()) < max(200, 0.01 * h * w):
+        return None
+    # Use the LENS BAND only — the columns where the silhouette is TALL (the lenses) —
+    # ignoring thin temple stubs, so the centre is robust and front-on-symmetric. (The
+    # old 'narrowest column' bridge search failed on solid flag-lens blocks → left shift.)
     cols = silh.sum(0).astype(np.float32)
-    if cols.max() < 10:
+    rows = silh.sum(1).astype(np.float32)
+    tall = np.where(cols > 0.5 * cols.max())[0]
+    wide = np.where(rows > 0.5 * rows.max())[0]
+    if len(tall) < 10 or len(wide) < 5:
         return None
-    c0, c1 = int(0.34 * w), int(0.66 * w)                 # the bridge is in the central third
-    mid = c0 + int(np.argmin(cols[c0:c1])) if c1 > c0 else w // 2
+    cx = 0.5 * (int(tall.min()) + int(tall.max()))        # centre of the lens band
+    cy = 0.5 * (int(wide.min()) + int(wide.max()))        # vertical centre of the lens band
+    midi = int(round(cx))
 
-    def centroid(x0, x1):
-        sub = silh[:, x0:x1]
-        ys, xs = np.where(sub)
-        if len(xs) < max(50, 0.002 * h * w):
-            return None
-        return ((xs.mean() + x0) / w, ys.mean() / h)
+    def half(x0, x1):                                      # centroid of TALL columns on a side
+        cc = tall[(tall >= x0) & (tall < x1)]
+        return None if len(cc) < 5 else float(cc.mean())
 
-    L = centroid(0, mid); R = centroid(mid, w)
-    if not (L and R):
+    lxm, rxm = half(0, midi), half(midi, w)
+    if lxm is None or rxm is None:
         return None
-    dx = R[0] - L[0]
-    ok = (0.20 < dx < 0.78 and abs(R[1] - L[1]) < 0.12
-          and 0.06 < L[0] < 0.46 and 0.54 < R[0] < 0.94
-          and 0.22 < L[1] < 0.78 and 0.22 < R[1] < 0.78)
-    return [L, R] if ok else None
+    d = 0.5 * ((cx - lxm) + (rxm - cx))                   # symmetric half-separation
+    lx, rx = (cx - d) / w, (cx + d) / w
+    ly = ry = cy / h
+    dx = rx - lx
+    ok = (0.20 < dx < 0.80 and 0.32 < (lx + rx) / 2 < 0.68
+          and 0.06 < lx < 0.46 and 0.54 < rx < 0.94 and 0.20 < ly < 0.80)
+    return [(lx, ly), (rx, ry)] if ok else None
 
 
 def clean_lenses(rgba, tint=None, opacity=None):

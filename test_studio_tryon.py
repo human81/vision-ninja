@@ -140,8 +140,8 @@ def offline():
     fc = lens_centers_norm(flag)
     sym = abs((fc[0][0] + fc[1][0]) / 2 - 0.5) if fc else 1.0
     midy = (fc[0][1] + fc[1][1]) / 2 if fc else 0.0
-    check("eyewear: coloured/flag lenses → symmetric, mid-height centres (not colour-fooled)",
-          fc is not None and sym < 0.08 and 0.4 < midy < 0.6, f"{fc} sym={sym:.2f}")
+    check("eyewear: coloured/flag lenses → CENTRED & mid-height (not colour-fooled, no left shift)",
+          fc is not None and sym < 0.04 and 0.4 < midy < 0.6, f"{fc} centre-off={sym:.3f}")
     cl = clean_lenses(gl)
     regions, _ = _lens_regions(gl)
     lensmask = np.zeros(gl.shape[:2], bool)
