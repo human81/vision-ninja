@@ -576,30 +576,66 @@ def _keep_glasses(bgr, alpha):
     return np.where(keep > 0, alpha, 0).astype(np.uint8)
 
 
+_REMBG_SESSION = None
+_REMBG_ON = os.environ.get("STUDIO_REMBG", "1") != "0"
+_CUTOUT_CACHE = "out/studio/cache/cutout"
+
+
+def _rembg_alpha(bgr):
+    """A real SEGMENTATION/matting model (rembg · U2Net) → a clean alpha matte of the
+    glasses, robust to any studio background. Process-wide session (loaded once).
+    Returns the alpha channel, or None if rembg is unavailable / disabled."""
+    global _REMBG_SESSION
+    if not _REMBG_ON:
+        return None
+    try:
+        from rembg import remove, new_session
+        if _REMBG_SESSION is None:
+            _REMBG_SESSION = new_session(os.environ.get("STUDIO_REMBG_MODEL", "u2net"))
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        out = remove(rgb, session=_REMBG_SESSION)
+        out = np.asarray(out)
+        if out.ndim == 3 and out.shape[2] == 4:
+            return out[:, :, 3]
+    except Exception as e:
+        globals()["_REMBG_ON"] = False                # disable after a failure (graceful)
+        print(f"[rembg] disabled: {type(e).__name__}: {e}")
+    return None
+
+
 def load_eyewear_rgba(raw: bytes):
     """Decode a product image to a tight RGBA cutout with a clean transparent
-    background (handles both real-alpha PNGs and opaque white-bg product shots)."""
+    background. Primary path: the rembg/U2Net SEGMENTATION matte (robust to any studio
+    background); cached on disk by content hash. Falls back to the classical
+    flood-fill + connected-component segmentation if rembg is unavailable."""
+    import hashlib
+    key = hashlib.md5(raw).hexdigest()
+    cp = os.path.join(_CUTOUT_CACHE, key + ".png")
+    if os.path.exists(cp) and os.path.getsize(cp) > 800:
+        c = cv2.imdecode(np.frombuffer(open(cp, "rb").read(), np.uint8), cv2.IMREAD_UNCHANGED)
+        if c is not None and c.ndim == 3 and c.shape[2] == 4:
+            return c
     img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_UNCHANGED)
     if img is None:
         return None
-    if img.ndim == 3 and img.shape[2] == 4:
-        bgr, a0 = img[:, :, :3], img[:, :, 3]
-        opaque = float((a0 > 200).mean())                  # real-alpha structure?
-        if opaque > 0.04:
-            # genuine transparency → trust it, but still cut any outer white studio bg
+    bgr = (img[:, :, :3] if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR))
+    a0 = img[:, :, 3] if (img.ndim == 3 and img.shape[2] == 4) else None
+    alpha = _rembg_alpha(bgr)                           # the segmentation model (preferred)
+    if alpha is None:                                  # classical fallback
+        if a0 is not None and float((a0 > 200).mean()) > 0.04:
             alpha = np.minimum(a0, _knockout_bg(bgr))
         else:
-            # DEGENERATE alpha (whole image faintly transparent / fake) → ignore it and
-            # knock out the white background. (Fixes the translucent-rectangle artifact.)
             alpha = _knockout_bg(bgr)
-    else:
-        bgr = img[:, :, :3] if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        alpha = _knockout_bg(bgr)
-    alpha = _keep_glasses(bgr, alpha)                  # segmentation: only the frame survives
+        alpha = _keep_glasses(bgr, alpha)              # safety net (the matte needs none)
     rgba = np.dstack([bgr, alpha])
     ys, xs = np.where(alpha > 12)                       # tight-crop to the frame
     if len(xs):
         rgba = rgba[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    try:
+        os.makedirs(_CUTOUT_CACHE, exist_ok=True)
+        cv2.imwrite(cp, rgba)
+    except Exception:
+        pass
     return rgba
 
 
