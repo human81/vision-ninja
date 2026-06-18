@@ -436,6 +436,7 @@
               <button id=vshop class=vbtn onclick="vTogglePanel('tryonbar',this)" title="Shop · try on">🛍</button>
               <button id=vgest class=vbtn onclick="vToggleGestures()" title="Gesture browsing — hands-free try-on">🖐</button>
               <button id=vdetect class=vbtn onclick="vToggleDetect()" title="Detection · tracking · occupancy">🔎</button>
+              <button id=vinfo class=vbtn onclick="vTogglePanel('ovpanel',this)" title="Overlays & settings">⚙</button>
               <span class=vsep></span>
               <select id=vbackend onchange="vSetBackend(this.value)" title="Live Voice model — OpenAI is best at Haitian Creole">
                 <option value=gemini>🜂 Gemini</option>
@@ -491,9 +492,11 @@
           <div class=gcat id=gcat></div>
           <div class=garments id=garments></div>
         </div>
-        <div class=ov-chips id=ovchips></div>
-        <div class=cfg id=cfg></div>
-        <div class=cfg id=dwell style=margin-top:4px></div>
+        <div id=ovpanel>
+          <div class=ov-chips id=ovchips></div>
+          <div class=cfg id=cfg></div>
+          <div class=cfg id=dwell style=margin-top:4px></div>
+        </div>
       </div>
       <div id=editwrap>
         <div class=renderbar>
@@ -1038,13 +1041,14 @@ function vStopVideo(){
 }
 function toggleFill(){const on=$('wrap').classList.toggle('fill');$('fillbtn').classList.toggle('on',on);
   toast(on?'canvas: fill (edge to edge)':'canvas: fit');}
-/* icon-driven slide-in panels — keep the canvas pure until you ask for one */
+/* icon-driven panels — keep the canvas pure; only one panel open at a time */
+const VPANELS={filterbar:'flex',tryonbar:'block',ovpanel:'block'};
+const VPANEL_BTN={filterbar:'vfilters',tryonbar:'vshop',ovpanel:'vinfo'};
 function vTogglePanel(id,btn){const el=$(id);
   const show=(el.style.display==='none'||!el.style.display);
-  // only one of filters/shop open at a time
-  if(show&&id!=='filterbar'){$('filterbar').style.display='none';$('vfilters')&&$('vfilters').classList.remove('on');}
-  if(show&&id!=='tryonbar'){$('tryonbar').style.display='none';$('vshop')&&$('vshop').classList.remove('on');}
-  el.style.display=show?(id==='tryonbar'?'block':'flex'):'none';
+  Object.keys(VPANELS).forEach(k=>{if(k!==id){$(k).style.display='none';
+    const bb=$(VPANEL_BTN[k]);bb&&bb.classList.remove('on');}});
+  el.style.display=show?VPANELS[id]:'none';
   if(btn)btn.classList.toggle('on',show);
   if(id==='tryonbar'&&show)loadGarments();}
 const VBTN={mic:'vmic',cam:'vcam',screen:'vscr'};
@@ -1276,9 +1280,11 @@ function nleSetMode(m){const prev=NLE.mode;NLE.mode=m;
   $('editwrap').style.display=m==='edit'?'flex':'none';
   $('drawbar').style.display=(m==='voice')?'none':'';
   $('voicebar').style.display=(m==='voice')?'flex':'none';
-  // pure canvas: try-on / filter panels stay hidden until their icon is tapped
+  // pure canvas: filters / shop / overlays-&-settings panels are icon-driven now.
+  // they stay hidden in voice mode (clean stage); in live mode the analytics show.
   $('filterbar').style.display='none';$('tryonbar').style.display='none';
-  ['vfilters','vshop'].forEach(b=>$(b)&&$(b).classList.remove('on'));
+  $('ovpanel').style.display=(m==='voice')?'none':'';
+  ['vfilters','vshop','vinfo'].forEach(b=>$(b)&&$(b).classList.remove('on'));
   document.querySelectorAll('#modeswitch button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
   if(prev==='voice'&&m!=='voice'){try{vStop();}catch(e){}}
   if(m==='voice'){setCanvas('live');loadGarments();}   // canvas stays on the live stream (= annotated you when cam on)

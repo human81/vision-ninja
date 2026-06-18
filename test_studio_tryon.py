@@ -404,6 +404,10 @@ def ui():
         check("fill toggle fills the canvas", "fill" in (pg.get_attribute("#wrap", "class") or ""))
         pg.click("#fillbtn"); pg.wait_for_timeout(100)
         check("self-view PiP element present", pg.query_selector("#selfview") is not None)
+        # overlays/config tucked behind the ⚙ icon → canvas is 100% clean by default
+        check("overlays/settings hidden in voice by default", not pg.is_visible("#ovpanel"))
+        pg.click("#vinfo"); pg.wait_for_timeout(250)
+        check("⚙ opens overlays/settings panel", pg.is_visible("#ovpanel"))
         b.close()
     check("no uncaught JS errors", not errs, "; ".join(errs[:3]))
 
