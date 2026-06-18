@@ -171,6 +171,35 @@
     -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
   #fitloader.on{display:flex;animation:fitfade .3s ease}
   @keyframes fitfade{from{opacity:0}to{opacity:1}}
+  /* cinematic film-generation loader — kind, intimate, visual */
+  #filmloader{position:absolute;inset:0;display:none;z-index:8;overflow:hidden;
+    background:radial-gradient(120% 100% at 50% 42%,#0a1422 0%,#05080e 60%,#020306 100%)}
+  #filmloader.on{display:block;animation:fitfade .5s ease}
+  .filmbar{position:absolute;left:0;right:0;height:13%;background:#000;z-index:2}
+  #filmbar-top{top:0;animation:barin .7s cubic-bezier(.2,.7,.2,1) both}
+  #filmbar-bot{bottom:0;animation:barin .7s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes barin{from{height:0}to{height:13%}}
+  .filmstage{position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:14px;text-align:center}
+  .filmhorizon{position:absolute;left:-10%;right:-10%;top:33%;height:2px;
+    background:linear-gradient(90deg,transparent,#7CFFB2,#36d7e0,#ffd479,transparent);
+    box-shadow:0 0 40px 8px rgba(120,240,190,.35);filter:blur(.4px);
+    animation:hzbreath 3.4s ease-in-out infinite}
+  .filmhorizon::after{content:'';position:absolute;left:0;right:0;top:1px;height:170px;
+    background:linear-gradient(180deg,rgba(120,240,190,.16),transparent)}
+  @keyframes hzbreath{0%,100%{opacity:.55;transform:scaleY(1)}50%{opacity:1;transform:scaleY(1.6)}}
+  .filmkicker{position:relative;font-size:12px;letter-spacing:.32em;text-transform:uppercase;
+    color:#8fb6d6;opacity:.9}
+  .filmbrand{position:relative;font-family:Georgia,'Times New Roman',serif;font-weight:600;
+    font-size:clamp(26px,4.4vw,46px);letter-spacing:.02em;color:#fff;
+    text-shadow:0 4px 40px rgba(0,0,0,.6),0 0 40px rgba(120,240,190,.25)}
+  .filmcap{position:relative;font-size:14px;color:#bfe0ff;min-height:20px;
+    transition:opacity .4s;font-style:italic}
+  .filmprog{position:relative;width:min(46%,360px);height:3px;border-radius:9px;
+    background:rgba(255,255,255,.1);overflow:hidden;margin-top:4px}
+  .filmprog i{display:block;height:100%;width:36%;border-radius:9px;
+    background:linear-gradient(90deg,transparent,#7CFFB2,#36d7e0,transparent);
+    animation:fitslide 1.8s ease-in-out infinite}
   .fitcard{position:relative;display:flex;flex-direction:column;align-items:center;gap:16px;
     padding:30px 38px;border-radius:20px;
     background:linear-gradient(165deg,rgba(22,30,46,.82),rgba(11,17,27,.82));
@@ -435,6 +464,18 @@
               <div class=fitbar><i></i></div>
             </div>
           </div>
+          <!-- cinematic film-generation loader: kind, intimate, visual (Veo ~60s) -->
+          <div id=filmloader>
+            <div class=filmbar id=filmbar-top></div>
+            <div class=filmbar id=filmbar-bot></div>
+            <div class=filmstage>
+              <div class=filmhorizon></div>
+              <div class=filmkicker id=filmkicker>A film, just for you</div>
+              <div class=filmbrand id=filmbrand>Ralba Optical</div>
+              <div class=filmcap id=filmcap>composing your film…</div>
+              <div class=filmprog><i></i></div>
+            </div>
+          </div>
           <!-- gesture try-on side-rails (live in the canvas gutters; never cover your face) -->
           <div id=grail-left class=grail>
             <div class=gstore><span id=gstore-name>Ralba Optical</span><span id=gstore-count class=muted>0/0</span></div>
@@ -489,6 +530,7 @@
           <!-- 3-2-1 "strike a pose" countdown over the main canvas -->
           <div id=countdown></div>
           <button id=fillbtn class=cornicon onclick="toggleFill()" title="Fill / fit the canvas">⤢</button>
+          <button id=volbtn class=cornicon onclick="toggleVolume()" title="Mute / unmute video audio" style="display:none;right:96px">🔇</button>
         </div>
         <div class=canvascap id=canvascap></div>
         <div class=drawbar id=drawbar>
@@ -702,6 +744,7 @@ function handleFrame(f){
   else if(f.type==='ui_action'){driveUI(d);}
   else if(f.type==='catalog'){showCatalog(d);}
   else if(f.type==='fitting'){if(d.on){vShowFitting(d.title,null);}else vHideFitting();}
+  else if(f.type==='filming'){if(d.on){vShowFilm(d.brand);}else vHideFilm();}
   else if(f.type==='refresh'){refreshPanel(d.panel);}
   else if(f.type==='final'){if(curText.trim()==='')cur._text.textContent=d.text||'';}
   else if(f.type==='error'){ensureActs().innerHTML='<div class="act err">▸ <b>error</b> '+(d.text||'')+'</div>';}
@@ -709,6 +752,12 @@ function handleFrame(f){
 }
 
 /* the smart canvas: live feed | image | video */
+/* video audio control — one-tap mute/unmute (Veo clips ship with an audio track) */
+function vSetVolIcon(){const v=$('video');$('volbtn').textContent=(v.muted||v.volume===0)?'🔇':'🔊';
+  $('volbtn').classList.toggle('on',!(v.muted||v.volume===0));}
+function toggleVolume(){const v=$('video');v.muted=!v.muted;if(!v.muted&&v.volume===0)v.volume=1;
+  if(!v.muted&&v.paused)v.play().catch(()=>{});vSetVolIcon();
+  toast(v.muted?'🔇 audio muted':'🔊 audio on');}
 function setCanvas(mode,src,caption){
   const img=$('img'),media=$('media'),vid=$('video');
   $('canvascap').textContent=caption||'';
@@ -719,9 +768,13 @@ function setCanvas(mode,src,caption){
     $('livebtn').classList.remove('on');}
   else if(mode==='video'&&src){img.style.display='none';hide(media);
     vid.src=src;vid.style.display='block';$('livebtn').classList.remove('on');
-    vid.load();}   /* show native controls + big play button; user controls playback w/ audio */
+    vid.load();
+    // autoplay MUTED (browsers block autoplay-with-sound); the 🔊 button unmutes.
+    vid.muted=true;vid.play().catch(()=>{});
+    $('volbtn').style.display='flex';vSetVolIcon();}
   else{hide(media);hide(vid);try{vid.pause();}catch(e){}img.style.display='block';
-    $('canvasmode').textContent='live';$('livebtn').classList.add('on');}
+    $('canvasmode').textContent='live';$('livebtn').classList.add('on');
+    $('volbtn').style.display='none';}
   if(window.setDrawEnabled&&mode!=='live')window.setDrawEnabled(false);  /* draw only on live */
 }
 
@@ -998,7 +1051,7 @@ function vOnLive(m){const t=m.type;
   if(t==='tool'){const d=m.data||{};vStatus('▸ '+(d.name||'tool'),'live');
     if(d.name==='create_overlay'&&d.ok){switchTab('code');pollOverlays();}return;}
   // fitting loader + shopped catalog must work over the BIDI voice path too
-  if(['fitting','catalog','refresh','canvas','ui_action','library','sources','export','timeline','scene'].includes(t)){handleFrame(m);}
+  if(['fitting','filming','catalog','refresh','canvas','ui_action','library','sources','export','timeline','scene'].includes(t)){handleFrame(m);}
 }
 function vTranscript(role,text){if(!text)return;
   // transcripts stream as deltas — accumulate each side into ONE bubble per turn
@@ -1290,6 +1343,19 @@ function vShowFitting(title,sub){
       setTimeout(()=>{s.textContent=_FIT_STEPS[i];s.style.opacity=1;},220);},2100); }
 }
 function vHideFitting(){$('fitloader').classList.remove('on');clearInterval(_fitRot);}
+/* cinematic film loader — warm, intimate captions while Veo composes (~60s) */
+const _FILM_STEPS=['composing your film…','chasing the golden hour…','finding your horizon…',
+  'rolling the cameras…','scoring the moment…','painting the light…',
+  'taking our time to make it beautiful…','almost there — this one’s for you'];
+let _filmRot=null;
+function vShowFilm(brand){
+  $('filmbrand').textContent=brand||'Ralba Optical';
+  $('filmkicker').textContent='A film, just for you';
+  $('filmloader').classList.add('on');clearInterval(_filmRot);
+  let i=0;$('filmcap').textContent=_FILM_STEPS[0];
+  _filmRot=setInterval(()=>{i=(i+1)%_FILM_STEPS.length;const c=$('filmcap');
+    c.style.opacity=0;setTimeout(()=>{c.textContent=_FILM_STEPS[i];c.style.opacity=1;},380);},2600);}
+function vHideFilm(){$('filmloader').classList.remove('on');clearInterval(_filmRot);}
 const _PREFETCHED=new Set();
 function vPrefetch(url){ if(!url||_PREFETCHED.has(url))return; _PREFETCHED.add(url);
   fetch('/eyewear/prefetch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:url})}).catch(()=>{}); }

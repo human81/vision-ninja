@@ -462,6 +462,15 @@ def ui():
         check("shop panel opens on icon", pg.is_visible("#tryonbar"))
         pg.click("#store-eyewear"); pg.wait_for_timeout(1200)
         check("store switch → Ralba sponsor", "Ralba Optical" in (pg.text_content("#sponsor") or ""))
+        # video audio control: a video on the canvas shows a one-tap mute/unmute button
+        pg.evaluate("()=>setCanvas('video','/download/horizon_lenses.mp4','horizon')")
+        pg.wait_for_timeout(300)
+        check("video shows the volume button", pg.is_visible("#volbtn"))
+        check("video autoplays MUTED (browser-safe)", pg.eval_on_selector("#video", "v=>v.muted") is True)
+        pg.click("#volbtn"); pg.wait_for_timeout(150)
+        check("volume button unmutes the audio", pg.eval_on_selector("#video", "v=>v.muted") is False)
+        pg.evaluate("()=>setCanvas('live')"); pg.wait_for_timeout(150)
+        check("volume button hides off-video", not pg.is_visible("#volbtn"))
         # one unified glasses try-on with a courteous fitting loader
         pg.evaluate("()=>vShowFitting('Tailoring your fit','fitting…')")
         pg.wait_for_timeout(150)
@@ -508,7 +517,13 @@ def ui():
         pg.wait_for_timeout(120)
         check("PiP shows 5 touchless icon buttons", pg.eval_on_selector_all("#selfbtns .sbtn", "e=>e.length") == 5)
         check("PiP finger cursor visible", pg.eval_on_selector("#selfcursor", "e=>getComputedStyle(e).display") != "none")
-        pg.evaluate("()=>gCountdown(3)"); pg.wait_for_timeout(120)
+        # turn gestures OFF server-side + stop the rail loop so neither overwrites the
+        # countdown primitive (pollStats would otherwise restart the loop and reset it)
+        pg.evaluate("""async()=>{try{await fetch('/gestures',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify({on:false})});}catch(e){}
+          try{gStopRails();}catch(e){}}""")
+        pg.wait_for_timeout(300)
+        pg.evaluate("()=>gCountdown(3)"); pg.wait_for_timeout(80)
         check("pose countdown overlay shows", "on" in (pg.get_attribute("#countdown", "class") or "")
               and pg.text_content("#countdown") == "3")
         # overlays/config tucked behind the ⚙ icon → canvas is 100% clean by default

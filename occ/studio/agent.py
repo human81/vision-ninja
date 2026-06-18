@@ -109,7 +109,13 @@ _FITTING_TOOLS = {
 }
 
 
+# Veo film generation (~60s) → a cinematic, kind film loader on the canvas
+_FILMING_TOOLS = {"eyewear_film", "generate_video", "extend_video"}
+
+
 def fitting_on(name: str):
+    if name in _FILMING_TOOLS:
+        return {"type": "filming", "data": {"on": True}}
     if name in _FITTING_TOOLS:
         t, s = _FITTING_TOOLS[name]
         return {"type": "fitting", "data": {"on": True, "title": t, "sub": s}}
@@ -189,6 +195,9 @@ def frames_for(name: str, res) -> list[dict]:
         out.append({"type": "sources", "data": {"items": srcs}})
     if name in _FITTING_TOOLS:                  # close the fitting loader
         out.append({"type": "fitting", "data": {"on": False}})
+    if name in _FILMING_TOOLS:                  # close the film loader
+        out.append({"type": "filming", "data": {"on": False, "ok": ok,
+                                                "brand": res.get("brand", "")}})
     out.append({"type": "tool", "data": {"name": name, "ok": ok,
                                          "detail": res.get("error", "")}})
     if res.get("ui"):

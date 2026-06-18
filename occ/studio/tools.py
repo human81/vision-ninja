@@ -878,6 +878,46 @@ def generate_video(prompt: str, from_frame: bool = True) -> dict:
                 source="generated")
 
 
+def eyewear_film(brand: str = "", tagline: str = "") -> dict:
+    """Generate a BRANDED cinematic film of the eyewear the user is wearing, with Veo —
+    the BRAND appears in the visuals AND in a spoken voiceover tagline, sponsored by
+    Ralba Optical. Seeded by the live try-on frame; the camera reveals the open road /
+    horizon coming alive THROUGH the clear see-through lenses. Use when the user asks for
+    a branded ad / film / promo / 'show me the horizon' of the glasses they're wearing.
+    `brand` overrides the detected brand; `tagline` overrides the spoken line."""
+    if not _has_key():
+        return {"status": "error", "error": "Veo needs a Gemini key"}
+    from . import genmedia
+    from .face_filters import _EYEWEAR
+    label = (brand or _EYEWEAR.get("label") or "these frames").strip()
+    bword = " ".join(label.split()[:3]) or "these frames"
+    tag = tagline or (f"{bword}. Your vision, your horizon — the road ahead, clearer. "
+                      "Ralba Optical.")
+    prompt = (
+        f"A premium luxury eyewear commercial for {bword} eyeglasses, presented by Ralba "
+        f"Optical. Cinematic slow push-in on the person wearing the clear see-through {bword} "
+        "frames. THROUGH the transparent lenses, the open road ahead and a golden-hour horizon "
+        "come alive — a winding coastal road stretching toward the sunrise, rolling waves, "
+        "drifting clouds, the future opening up. Elegant on-screen serif typography gracefully "
+        f"reveals '{bword}', then 'Ralba Optical'. A warm, confident voiceover says: \"{tag}\" "
+        "Soft uplifting cinematic music with gentle ocean and open-road ambience. Photoreal, "
+        "luxury ad grade, shallow depth of field, warm cinematic colour.")
+    model = os.environ.get("STUDIO_VIDEO_MODEL", "veo-3.1-generate-preview")
+    img = _frame_jpg("frame", "")[0]
+    data, err = genmedia.generate_video(prompt, image_jpg=img, model=model, max_wait=360)
+    if not data:
+        return {"status": "error", "error": err or "veo failed"}
+    os.makedirs("out/studio/exports", exist_ok=True)
+    out = f"out/studio/exports/film_{time.strftime('%H%M%S')}.mp4"
+    open(out, "wb").write(data)
+    ctx().ledger.record("agent_brain", model=model, input_tokens=500, output_tokens=5000,
+                        label="eyewear_film")
+    return _lib({"status": "success", "kind": "clip", "output": out,
+                 "caption": f"{bword} — branded film", "brand": bword,
+                 "seconds": ff.probe(out).get("duration", 0)},
+                tags=["veo", "video", "branded", bword], source="generated")
+
+
 def extend_video(prompt: str = "continue the scene naturally", which: str = "recording") -> dict:
     """VEO video extension: take a clip's LAST frame as a seed, generate a continuation
     with Veo, and stitch it on. SLOW + costs money."""
@@ -1480,7 +1520,7 @@ ALL_TOOLS = [
     apply_face_filter, try_eyewear, set_lens_tint, shop_search, try_product, gesture_browse, live_control,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
-    nano_banana, virtual_try_on, generate_video, extend_video, narrate, generate_music,
+    nano_banana, virtual_try_on, generate_video, eyewear_film, extend_video, narrate, generate_music,
     search_library, list_library, show_media, save_to_library,
     load_youtube, save_source, list_sources, use_source, co_direct, direct_story,
     export_gif, export_clip, export_contact_sheet, speed_ramp, probe_media,
