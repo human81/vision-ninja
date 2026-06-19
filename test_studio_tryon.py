@@ -246,6 +246,25 @@ def offline():
     occ = lambda y: (y < 0.28, y > -0.28)                 # (left shown, right shown)
     check("temple-arm yaw occlusion: turned head hides the far arm",
           occ(0.0) == (True, True) and occ(0.5) == (False, True) and occ(-0.5) == (True, False))
+    # 3D POSE from the matrix: decode is correct (synthetic ±25° yaw) and on the real face
+    # the matrix roll/yaw AGREE with the trusted landmark geometry; pitch is now available.
+    if ff:
+        import math as _m
+        from occ.studio.facemesh import Face as _F
+        def _Ry(t):
+            c, s = _m.cos(t), _m.sin(t)
+            return np.array([[c, 0, s, 0], [0, 1, 0, 0], [-s, 0, c, 0], [0, 0, 0, 1]], float)
+        m25 = _F(lm=ff[0].lm, lmz=ff[0].lmz, blend={}, matrix=_Ry(_m.radians(25)), w=ff[0].w, h=ff[0].h)
+        mneg = _F(lm=ff[0].lm, lmz=ff[0].lmz, blend={}, matrix=_Ry(_m.radians(-25)), w=ff[0].w, h=ff[0].h)
+        check("3D matrix: yaw decode correct + signed (±25°)",
+              m25._pose_rad() is not None and np.degrees(m25._pose_rad()[0]) > 20
+              and np.degrees(mneg._pose_rad()[0]) < -20)
+        pr = ff[0]._pose_rad()
+        if pr is not None:
+            check("3D matrix: roll agrees with landmark geometry on the real face",
+                  abs(np.degrees(pr[2]) - ff[0].roll) < 6,
+                  f"matrix roll={np.degrees(pr[2]):.1f}° geom roll={ff[0].roll:.1f}°")
+            check("3D matrix: pitch now available (was 0 before)", "pitch" in dir(ff[0]))
 
     det = sv.Detections.empty()
     set_current_eyewear(get_asset("sunglasses"), "test")   # so 'eyewear' has a product

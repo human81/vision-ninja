@@ -781,13 +781,15 @@ def _draw_temple_arms(ctx, f, quad, color):
     arm and OCCLUDES the one on the side that's turned away (it goes behind the head)."""
     TL, TR, BR, BL = [np.array(p, float) for p in quad]
     ex, ey = _frame_axes(f)
-    yaw = f.yaw
+    yaw = f.yaw; pitch = f.pitch
     # hinge = the TOP-outer corner of the frame (where a real temple attaches)
     hinge_l = TL * 0.88 + BL * 0.12
     hinge_r = TR * 0.88 + BR * 0.12
-    # ear anchor = the real ear keypoint, raised to the TOP of the ear (temples rest there)
-    ear_l = np.array(f.p("ear_l"), float) - ey * (f.eye_dist * 0.28)
-    ear_r = np.array(f.p("ear_r"), float) - ey * (f.eye_dist * 0.28)
+    # ear anchor = the real ear keypoint, raised to the TOP of the ear; the raise tracks
+    # head PITCH (3D matrix) so the temple line reads right when nodding up/down.
+    raise_amt = f.eye_dist * (0.28 - 0.12 * pitch)
+    ear_l = np.array(f.p("ear_l"), float) - ey * raise_amt
+    ear_r = np.array(f.p("ear_r"), float) - ey * raise_amt
     th = max(3, int(f.eye_dist * 0.085))
     hi = tuple(min(255, int(c) + 55) for c in color)
     dk = tuple(max(0, int(c) - 45) for c in color)

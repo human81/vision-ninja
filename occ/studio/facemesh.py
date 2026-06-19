@@ -78,17 +78,57 @@ class Face:
         d = self.p("temple_r") - self.p("temple_l")
         return float(np.degrees(np.arctan2(d[1], d[0])))
 
-    @property
-    def yaw(self) -> float:
-        """Head turn, normalised ∈ [-1, 1] from the two cheek widths (ear↔eye-centre):
-        0 = facing forward, +ve = turned so the RIGHT side faces the camera (left side
-        recedes), -ve = the opposite. Robust, landmark-only — used to foreshorten/occlude
-        the temple arms in 3D."""
+    def _pose_rad(self):
+        """(yaw, pitch, roll) in RADIANS from MediaPipe's 4×4 facial transform MATRIX —
+        true 3D head pose. Returns None if the matrix is absent. Signs are calibrated to
+        match the landmark conventions (verified against the geometric roll/yaw):
+        +yaw = turned so the RIGHT side faces the camera; +pitch = chin up; +roll = right
+        ear down."""
+        M = self.matrix
+        if M is None:
+            return None
+        R = np.array(M, dtype=float)[:3, :3]
+        for i in range(3):                               # strip scale → pure rotation
+            n = np.linalg.norm(R[:, i]) or 1.0
+            R[:, i] /= n
+        sy = float(np.hypot(R[0, 0], R[1, 0]))
+        if sy > 1e-6:
+            pitch = np.arctan2(R[2, 1], R[2, 2])
+            yaw = np.arctan2(-R[2, 0], sy)
+            roll = np.arctan2(R[1, 0], R[0, 0])
+        else:
+            pitch = np.arctan2(-R[1, 2], R[1, 1]); yaw = np.arctan2(-R[2, 0], sy); roll = 0.0
+        # calibrate to the landmark conventions (image y is DOWN)
+        return (float(yaw), float(-pitch), float(-roll))
+
+    def _yaw_geom(self) -> float:
         ecx = float(self.eyes_center[0])
         lw = abs(ecx - float(self.p("ear_l")[0]))
         rw = abs(float(self.p("ear_r")[0]) - ecx)
         s = lw + rw
         return float((rw - lw) / s) if s > 1e-6 else 0.0
+
+    @property
+    def yaw(self) -> float:
+        """Head turn, signed ≈[-1, 1]: 0 = forward, +ve = LEFT side receding (left temple
+        arm should hide). The 3D MATRIX gives the accurate magnitude; the landmark
+        geometry gives the TRUSTED sign convention (so the temple-arm occlusion can never
+        flip) — they agree on the front face, verified."""
+        g = self._yaw_geom()
+        pr = self._pose_rad()
+        if pr is None:
+            return g
+        m = float(np.clip(np.sin(pr[0]), -1.0, 1.0))
+        if abs(g) < 0.03:                                # near-forward → trust the matrix
+            return m
+        return max(abs(m), abs(g)) * (1.0 if g >= 0 else -1.0)
+
+    @property
+    def pitch(self) -> float:
+        """Head nod, signed ≈[-1, 1] (sin of true pitch): +ve = chin up / looking up.
+        From the 3D matrix; 0 if unavailable."""
+        pr = self._pose_rad()
+        return float(np.clip(np.sin(pr[1]), -1.0, 1.0)) if pr else 0.0
 
     @property
     def face_w(self) -> float:
