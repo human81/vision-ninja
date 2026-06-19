@@ -587,7 +587,9 @@ def _keep_glasses(bgr, alpha):
 _REMBG_SESSION = None
 _REMBG_ON = os.environ.get("STUDIO_REMBG", "1") != "0"
 _CUTOUT_CACHE = "out/studio/cache/cutout"
-_TEMPLE_ARMS = os.environ.get("STUDIO_TEMPLE_ARMS", "1") != "0"   # 3D arms hinge→ear
+_TEMPLE_ARMS = os.environ.get("STUDIO_TEMPLE_ARMS", "0") != "0"   # synthesized arms OFF by
+# default — head-on they read as fake strips; the clean frame-on-eyes looks better. The 3D
+# head pose (Face.yaw/pitch/roll from the matrix) stays available for everything else.
 
 
 def _rembg_alpha(bgr):
