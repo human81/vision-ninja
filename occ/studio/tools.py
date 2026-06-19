@@ -919,6 +919,82 @@ def lens_reflection(scene: str = "", narrate_with: str = "gemini") -> dict:
             "scene": out, "tagline": tagline, "brand": brand, "audio": audio}
 
 
+def _decode_frames(path: str, max_frames: int = 240, max_w: int = 384):
+    """Decode a video file → a list of small BGR frames (for lens-reflection playback)."""
+    cap = cv2.VideoCapture(path)
+    frames = []
+    while len(frames) < max_frames:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        if fr.shape[1] > max_w:
+            sc = max_w / fr.shape[1]
+            fr = cv2.resize(fr, (max_w, int(fr.shape[0] * sc)))
+        frames.append(fr)
+    cap.release()
+    return frames
+
+
+def lens_movie(scene: str = "", narrate_with: str = "gemini", extend: int = 0) -> dict:
+    """Play a generated MOVIE INSIDE the user's see-through lenses — the road / horizon
+    ahead, ANIMATED, from the viewer's perspective (the movie behind their lenses), with
+    real reflection + refraction + transparency (eyes still show), on the live try-on,
+    same glasses. Veo generates the clip; it's reflected frame-by-frame in the lenses
+    (NOT played on the canvas). `extend` (0-2) adds Veo continuation passes for a longer,
+    evolving movie. Speaks a branded TTS tagline (narrate_with 'gemini' or 'chatgpt').
+    Use for 'play the road ahead in my lenses', 'a movie in my lenses', 'make it move'."""
+    from .face_filters import _EYEWEAR, set_lens_reflection_video
+    if _EYEWEAR.get("armless") is None:
+        return {"status": "error", "error": "put some glasses on first", "ui": "overlays"}
+    if not _has_key():
+        return {"status": "error", "error": "needs a Gemini key"}
+    from . import genmedia
+    sp = scene or ("a cinematic forward drive down an open coastal road toward a "
+                   "golden-hour ocean horizon, smooth gliding motion, photoreal")
+    model = os.environ.get("STUDIO_VIDEO_MODEL", "veo-3.1-generate-preview")
+    mp4, err = genmedia.generate_video(sp + ", no text, no people", image_jpg=None,
+                                       model=model, max_wait=360)
+    if not mp4:
+        return {"status": "error", "error": err or "veo failed", "ui": "overlays"}
+    os.makedirs("out/studio/exports", exist_ok=True)
+    out = f"out/studio/exports/lensmovie_{time.strftime('%H%M%S')}.mp4"
+    open(out, "wb").write(mp4)
+    frames = _decode_frames(out)
+    for _ in range(max(0, min(int(extend), 2))):           # EXTEND: continue the movie
+        if not frames:
+            break
+        seed = cv2.imencode(".jpg", frames[-1])[1].tobytes()
+        m2, _ = genmedia.generate_video("continue gliding forward down the road, " + sp +
+                                        ", no text", image_jpg=seed, model=model, max_wait=360)
+        if m2:
+            o2 = f"out/studio/exports/lensmovie_{time.strftime('%H%M%S')}_ext.mp4"
+            open(o2, "wb").write(m2)
+            frames += _decode_frames(o2)
+    if not frames or not set_lens_reflection_video(frames):
+        return {"status": "error", "error": "could not build the lens movie", "ui": "overlays"}
+    brand = " ".join((_EYEWEAR.get("label") or "these frames").split()[:3])
+    try:                                                   # the FULL movie → media library (viewable)
+        ctx().library.add("video", out, caption=f"{brand} — lens movie",
+                          tags=["veo", "lens-movie", brand], source="generated")
+    except Exception:
+        pass
+    tagline = f"{brand}. The road ahead — playing in your lenses. Ralba Optical."
+    nw = (narrate_with or "gemini").lower()
+    tts_model = "gpt-4o-mini-tts" if any(k in nw for k in ("chat", "gpt", "openai")) else ""
+    audio = ""
+    try:
+        nar = narrate(tagline, model=tts_model)
+        if nar.get("status") == "success":
+            audio = "/download/" + os.path.basename(nar["output"])
+    except Exception:
+        pass
+    ctx().ledger.record("agent_brain", model=model, input_tokens=500, output_tokens=5000,
+                        label="lens_movie")
+    return {"status": "success", "kind": "reflection", "mode": "live", "ui": "library",
+            "movie": "/download/" + os.path.basename(out), "frames": len(frames),
+            "tagline": tagline, "brand": brand, "audio": audio}
+
+
 def eyewear_film(brand: str = "", tagline: str = "") -> dict:
     """Generate a BRANDED cinematic film of the eyewear the user is wearing, with Veo —
     the BRAND appears in the visuals AND in a spoken voiceover tagline, sponsored by
@@ -1558,7 +1634,7 @@ ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render, set_detection,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays, go_live,
-    apply_face_filter, try_eyewear, set_lens_tint, lens_reflection, shop_search, try_product, gesture_browse, live_control,
+    apply_face_filter, try_eyewear, set_lens_tint, lens_reflection, lens_movie, shop_search, try_product, gesture_browse, live_control,
     analyze_scene, analyze_image, describe_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, eyewear_film, extend_video, narrate, generate_music,

@@ -653,8 +653,8 @@ def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None):
     Pass None to clear the current eyewear."""
     if rgba is None:
         with _EYEWEAR_LOCK:
-            _EYEWEAR.update({"rgba": None, "armless": None, "label": "",
-                             "reflection": None, "refl_layer": None})
+            _EYEWEAR.update({"rgba": None, "armless": None, "label": "", "reflection": None,
+                             "refl_layer": None, "refl_video": None, "refl_shading": None})
         return
     regions, _ = _lens_regions(rgba)
     lm = np.zeros(rgba.shape[:2], np.uint8)
@@ -671,39 +671,50 @@ def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None):
         _EYEWEAR["lensmask"] = lm                            # exact glass region (asset space)
         _EYEWEAR["reflection"] = None                        # a new pair starts with NO reflection
         _EYEWEAR["refl_layer"] = None
+        _EYEWEAR["refl_video"] = None; _EYEWEAR["refl_shading"] = None
 
 
 def set_lens_reflection(scene_bgr) -> bool:
     """Set (or clear with None) a STATIC scene that REALLY reflects in the see-through
-    lenses of the current glasses — eyes still show through. Computational photography,
-    not a video paste. The reflection LAYER is built ONCE here (it's static) and cached,
-    so the live loop just warps it (fast)."""
+    lenses of the current glasses — eyes still show through. Built ONCE (static)."""
     with _EYEWEAR_LOCK:
         if _EYEWEAR.get("armless") is None:
             return False
         _EYEWEAR["reflection"] = scene_bgr
+        _EYEWEAR["refl_video"] = None                       # static replaces any video
         lm = _EYEWEAR.get("lensmask")
-        _EYEWEAR["refl_layer"] = (_build_reflection(_EYEWEAR["armless"].shape, lm, scene_bgr)
-                                  if (scene_bgr is not None and lm is not None) else None)
+        ok = scene_bgr is not None and lm is not None and lm.any()
+        _EYEWEAR["refl_shading"] = _reflection_shading(_EYEWEAR["armless"].shape, lm) if ok else None
+        _EYEWEAR["refl_layer"] = (_reflection_compose(scene_bgr, _EYEWEAR["refl_shading"])
+                                  if ok else None)
         return True
 
 
-def _build_reflection(shape, lensmask, scene, strength=0.78):
-    """Compose a photoreal glass REFLECTION layer (RGBA, asset space) of `scene` inside
-    the lens region — 2026 computational-photography pass:
-      • the scene is mapped per-lens with a slight BARREL warp (curved-glass refraction),
-      • a FRESNEL gradient (brighter toward the top/sky) and a RIM glow,
-      • the centre stays dim so the EYE shows through (real transparency),
-      • a luminous diagonal SPECULAR streak (the classic glass glint),
-      • a faint chromatic rim fringe. Eyes remain visible; nothing reads as opaque."""
+def set_lens_reflection_video(frames) -> bool:
+    """Set a MOVIE that plays INSIDE the lens transparency — the same real reflection +
+    refraction as the static image, but animated frame-by-frame from the viewer's
+    perspective (the movie behind your lenses). `frames` = list of BGR images (looped).
+    The expensive shading is precomputed ONCE; the live loop just swaps the frame."""
+    with _EYEWEAR_LOCK:
+        if _EYEWEAR.get("armless") is None or not frames:
+            return False
+        lm = _EYEWEAR.get("lensmask")
+        if lm is None or not lm.any():
+            return False
+        _EYEWEAR["refl_video"] = list(frames)
+        _EYEWEAR["refl_vidx"] = 0
+        _EYEWEAR["refl_shading"] = _reflection_shading(_EYEWEAR["armless"].shape, lm)
+        _EYEWEAR["refl_layer"] = _reflection_compose(frames[0], _EYEWEAR["refl_shading"])
+        _EYEWEAR["reflection"] = frames[0]
+        return True
+
+
+def _reflection_shading(shape, lensmask):
+    """Precompute the glass optics for a given lens mask ONCE (static for the frames):
+    per-lens BARREL remap maps (refraction), the FRESNEL×RIM alpha (centre kept clear so
+    the EYE shows through), and the SPECULAR streak. Returns a dict consumed per-frame."""
     h, w = shape[:2]
-    s = cv2.resize(scene, (w, h)).astype(np.float32)
-    s = np.clip(s * 1.16 + 14, 0, 255)                          # glassy luminance lift
-    refl = np.zeros((h, w, 4), np.uint8)
     m = lensmask.astype(np.float32)
-    if not m.any():
-        return refl
-    # per-lens barrel warp: pull the scene toward each lens centre a touch (refraction)
     regs = cv2.connectedComponents(lensmask.astype(np.uint8))[1]
     mapx, mapy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
     for li in range(1, regs.max() + 1):
@@ -711,28 +722,40 @@ def _build_reflection(shape, lensmask, scene, strength=0.78):
         if len(xs) < 30:
             continue
         cx, cy = xs.mean(), ys.mean(); rad = max(np.ptp(xs), np.ptp(ys)) / 2 + 1
-        dxm = (mapx - cx) / rad; dym = (mapy - cy) / rad
-        r2 = dxm * dxm + dym * dym
-        k = 0.14                                                # barrel strength
-        sel = regs == li
+        r2 = ((mapx - cx) / rad) ** 2 + ((mapy - cy) / rad) ** 2
+        sel = regs == li; k = 0.14
         mapx[sel] = (cx + (mapx - cx) * (1 - k * r2))[sel]
         mapy[sel] = (cy + (mapy - cy) * (1 - k * r2))[sel]
-    s = cv2.remap(s, mapx, mapy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-    # specular diagonal streak (bright glass glint)
     diag = (mapx + mapy); diag = diag / (diag.max() or 1.0)
     streak = np.exp(-((diag - 0.46) ** 2) / (2 * 0.018 ** 2)) * 150.0
-    s = np.clip(s + streak[..., None], 0, 255)
-    refl[:, :, :3] = s.astype(np.uint8)
-    # alpha shaping: fresnel (top) × rim glow × strength, centre kept see-through
     ys = np.where(m.any(1))[0]; y0, y1 = int(ys.min()), int(ys.max())
     vg = np.clip(1.0 - (np.arange(h) - y0) / max(1, (y1 - y0)), 0.30, 1.0)[:, None]
     dist = cv2.distanceTransform(lensmask.astype(np.uint8), cv2.DIST_L2, 5)
-    dist = dist / (dist.max() or 1.0)                           # 0 rim → 1 centre
-    edge = 1.0 - 0.62 * dist
-    a = m * vg * edge * strength * 255.0
-    a = np.maximum(a, m * (streak * 0.6))                       # the glint stays bright
-    refl[:, :, 3] = np.clip(a, 0, 235).astype(np.uint8)
+    dist = dist / (dist.max() or 1.0)
+    a = m * vg * (1.0 - 0.62 * dist) * 0.78 * 255.0
+    alpha = np.clip(np.maximum(a, m * (streak * 0.6)), 0, 235).astype(np.uint8)
+    return {"size": (w, h), "mapx": mapx, "mapy": mapy, "streak": streak, "alpha": alpha}
+
+
+def _reflection_compose(scene_bgr, shading):
+    """FAST per-frame: map one scene/movie frame through the precomputed glass optics →
+    an RGBA reflection layer (asset space)."""
+    if shading is None or scene_bgr is None:
+        return None
+    w, h = shading["size"]
+    s = cv2.resize(scene_bgr, (w, h)).astype(np.float32)
+    s = np.clip(s * 1.16 + 14, 0, 255)
+    s = cv2.remap(s, shading["mapx"], shading["mapy"], cv2.INTER_LINEAR,
+                  borderMode=cv2.BORDER_REFLECT)
+    s = np.clip(s + shading["streak"][..., None], 0, 255)
+    refl = np.zeros((h, w, 4), np.uint8)
+    refl[:, :, :3] = s.astype(np.uint8)
+    refl[:, :, 3] = shading["alpha"]
     return refl
+
+
+def _build_reflection(shape, lensmask, scene, strength=0.78):   # back-compat (tests)
+    return _reflection_compose(scene, _reflection_shading(shape, lensmask))
 
 
 def set_lens_tint(tint=None, opacity=None) -> bool:
@@ -784,7 +807,13 @@ def filter_eyewear(ctx):
     with _EYEWEAR_LOCK:
         rgba = _EYEWEAR["rgba"]; color = _EYEWEAR["color"]
         lc = _EYEWEAR.get("lens_centers")
-        refl = _EYEWEAR.get("refl_layer")          # prebuilt once (static) → fast warp
+        vid = _EYEWEAR.get("refl_video"); shading = _EYEWEAR.get("refl_shading")
+        if vid:                                    # a MOVIE playing inside the lenses
+            i = _EYEWEAR.get("refl_vidx", 0)
+            _EYEWEAR["refl_vidx"] = (i + 1) % len(vid)
+            refl = _reflection_compose(vid[i], shading)
+        else:
+            refl = _EYEWEAR.get("refl_layer")      # static reflection (prebuilt → fast)
     if rgba is None:
         return
     for f in ctx.faces:

@@ -206,6 +206,34 @@ def offline():
     check("reflection: confined to the lens region", outside < 30, f"{outside}px outside")
     check("reflection: see-through (eyes still show)", 20 < inside < 180, f"mean α={inside:.0f}")
     check("reflection: not fully opaque anywhere", int((ra > 240).sum()) == 0, f"{int((ra>240).sum())}px")
+    # MOVIE IN THE LENSES: a video reflection must ANIMATE (different frames differ) while
+    # staying see-through + confined; the shading is precomputed once, the alpha is stable.
+    from occ.studio.face_filters import (_reflection_shading, _reflection_compose,
+                                         set_lens_reflection_video, _EYEWEAR,
+                                         set_current_eyewear as _sce)
+    shading = _reflection_shading((160, 320, 4), lensmask)
+    f_a = np.zeros((120, 240, 3), np.uint8); cv2.rectangle(f_a, (0, 0), (60, 120), (60, 200, 255), -1)
+    f_b = np.zeros((120, 240, 3), np.uint8); cv2.rectangle(f_b, (180, 0), (240, 120), (60, 200, 255), -1)
+    ra_a = _reflection_compose(f_a, shading); ra_b = _reflection_compose(f_b, shading)
+    moved = int(np.abs(ra_a[:, :, :3].astype(int) - ra_b[:, :, :3].astype(int)).sum())
+    check("movie-in-lens: different frames render different reflections (animated)",
+          moved > 5000, f"Δ={moved}")
+    check("movie-in-lens: alpha shaping stable + see-through",
+          np.array_equal(ra_a[:, :, 3], ra_b[:, :, 3]) and 20 < ra_a[:, :, 3][lensmask > 0].mean() < 180)
+    check("movie-in-lens: still confined to the lens region",
+          int((ra_a[:, :, 3][lensmask == 0] > 8).sum()) < 30)
+    # the engine stores a looping video + clears on go-live (set state directly)
+    _EYEWEAR["armless"] = np.dstack([np.zeros((160, 320, 3), np.uint8),
+                                     (lensmask * 255).astype(np.uint8)])
+    _EYEWEAR["lensmask"] = lensmask
+    okv = set_lens_reflection_video([f_a, f_b, f_a])
+    check("movie-in-lens: set_lens_reflection_video stores the looping movie",
+          okv and _EYEWEAR.get("refl_video") is not None and _EYEWEAR.get("refl_shading") is not None)
+    _sce(None)
+    check("movie-in-lens: go-live clears the movie",
+          _EYEWEAR.get("refl_video") is None and _EYEWEAR.get("refl_shading") is None)
+    check("lens_movie tool registered + in film loader",
+          "lens_movie" in {f.__name__ for f in T.ALL_TOOLS})
 
     det = sv.Detections.empty()
     set_current_eyewear(get_asset("sunglasses"), "test")   # so 'eyewear' has a product

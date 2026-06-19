@@ -69,11 +69,16 @@ Operating principles:
   audio control and in the library (so co_direct/Izumi can cut it into a longer edit).
   TWO ROUTES, SAME MAGIC — for 'show me the horizon / the road ahead' on the glasses
   they're wearing, choose:
-    • IMAGE (fast, live): `lens_reflection(scene, narrate_with)` — generates a static
-      IMAGEN scene and REALLY reflects it in their see-through lenses (real reflection +
-      transparency, eyes still show) on the LIVE try-on, plus a spoken TTS tagline
-      (narrate_with 'gemini' or 'chatgpt'). Use this when they want it instant/live.
-    • VIDEO (cinematic, ~1 min): `eyewear_film()` — the Veo branded film.
+    • IMAGE in the lenses (fast, live): `lens_reflection(scene, narrate_with)` — a static
+      IMAGEN scene REALLY reflected in their see-through lenses (real reflection +
+      transparency, eyes still show), plus a spoken TTS tagline ('gemini' or 'chatgpt').
+    • MOVIE in the lenses (live, animated): `lens_movie(scene, narrate_with, extend)` — a
+      Veo clip that PLAYS INSIDE the lenses frame-by-frame (the movie behind their lenses,
+      from their perspective), real reflection + refraction, eyes still show. `extend` 0-2
+      for a longer evolving movie. The full clip also lands in the media library to view.
+      Use when they say 'play the road ahead in my lenses', 'make it move', 'a movie in
+      my lenses'.
+    • CANVAS FILM (cinematic, ~1 min): `eyewear_film()` — the Veo branded film on the canvas.
   Both work on the SAME frame they're wearing and can be re-run ("do it again" / "make it
   a video instead"). Pick image for live/instant, video for a finished cinematic ad.
 - TOUCHLESS SHOPPING (be its co-pilot). In live voice with the camera on, the user's
@@ -129,7 +134,7 @@ _FITTING_TOOLS = {
 
 
 # slow generative reveals (Veo ~60s film, Imagen ~10s reflection) → cinematic loader
-_FILMING_TOOLS = {"eyewear_film", "generate_video", "extend_video", "lens_reflection"}
+_FILMING_TOOLS = {"eyewear_film", "generate_video", "extend_video", "lens_reflection", "lens_movie"}
 
 
 def fitting_on(name: str):
@@ -337,6 +342,15 @@ class SimRunner:
             add("live_control", {"action": "try"}, "Okay — strike a pose!", "try it on")
             return steps, acts
 
+        # MOVIE-in-lenses route — an animated Veo clip playing inside the lenses (+ TTS)
+        if (any(p in m for p in ("in my lens", "in the lens", "lenses")) and
+                any(p in m for p in ("movie", "play", "video", "moving", "make it move",
+                                     "animate", "drive", "road ahead"))):
+            nw = "chatgpt" if any(k in m for k in ("chatgpt", "gpt", "openai")) else "gemini"
+            ext = 1 if any(k in m for k in ("longer", "extend", "keep going")) else 0
+            add("lens_movie", {"narrate_with": nw, "extend": ext},
+                "Rolling the movie inside your lenses…", "lens movie")
+            return steps, acts
         # IMAGE route — reflect a static Imagen horizon in the live lenses (+ TTS)
         if any(p in m for p in ("reflect", "in my lens", "in the lens", "horizon in",
                                 "road ahead in", "show the road ahead", "reflection")):
