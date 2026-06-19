@@ -79,6 +79,18 @@ class Face:
         return float(np.degrees(np.arctan2(d[1], d[0])))
 
     @property
+    def yaw(self) -> float:
+        """Head turn, normalised ∈ [-1, 1] from the two cheek widths (ear↔eye-centre):
+        0 = facing forward, +ve = turned so the RIGHT side faces the camera (left side
+        recedes), -ve = the opposite. Robust, landmark-only — used to foreshorten/occlude
+        the temple arms in 3D."""
+        ecx = float(self.eyes_center[0])
+        lw = abs(ecx - float(self.p("ear_l")[0]))
+        rw = abs(float(self.p("ear_r")[0]) - ecx)
+        s = lw + rw
+        return float((rw - lw) / s) if s > 1e-6 else 0.0
+
+    @property
     def face_w(self) -> float:
         return float(np.linalg.norm(self.p("temple_r") - self.p("temple_l")))
 

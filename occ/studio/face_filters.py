@@ -587,6 +587,7 @@ def _keep_glasses(bgr, alpha):
 _REMBG_SESSION = None
 _REMBG_ON = os.environ.get("STUDIO_REMBG", "1") != "0"
 _CUTOUT_CACHE = "out/studio/cache/cutout"
+_TEMPLE_ARMS = os.environ.get("STUDIO_TEMPLE_ARMS", "1") != "0"   # 3D arms hinge→ear
 
 
 def _rembg_alpha(bgr):
@@ -599,7 +600,9 @@ def _rembg_alpha(bgr):
     try:
         from rembg import remove, new_session
         if _REMBG_SESSION is None:
-            _REMBG_SESSION = new_session(os.environ.get("STUDIO_REMBG_MODEL", "u2net"))
+            # ISNet (isnet-general-use) = U-2-Net's own successor, sharper on thin frames,
+            # ~same speed. BiRefNet (birefnet-general) is higher fidelity but 5× slower.
+            _REMBG_SESSION = new_session(os.environ.get("STUDIO_REMBG_MODEL", "isnet-general-use"))
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         out = remove(rgb, session=_REMBG_SESSION)
         out = np.asarray(out)
@@ -617,7 +620,8 @@ def load_eyewear_rgba(raw: bytes):
     background); cached on disk by content hash. Falls back to the classical
     flood-fill + connected-component segmentation if rembg is unavailable."""
     import hashlib
-    key = hashlib.md5(raw).hexdigest()
+    model_tag = os.environ.get("STUDIO_REMBG_MODEL", "isnet-general-use") if _REMBG_ON else "cv"
+    key = hashlib.md5(raw + model_tag.encode()).hexdigest()   # cache per cutout-model
     cp = os.path.join(_CUTOUT_CACHE, key + ".png")
     if os.path.exists(cp) and os.path.getsize(cp) > 800:
         c = cv2.imdecode(np.frombuffer(open(cp, "rb").read(), np.uint8), cv2.IMREAD_UNCHANGED)
@@ -771,32 +775,37 @@ def set_lens_tint(tint=None, opacity=None) -> bool:
 
 
 def _draw_temple_arms(ctx, f, quad, color):
-    """Synthesize the temple arms (legs) from each lens hinge BACK to the ears,
-    using the dense landmarks, in the frame's colour — so the glasses read as truly
-    worn. Drawn BEFORE the lens front so the rim covers the hinge join cleanly."""
+    """Synthesize the TEMPLE ARMS in 3D — from each frame hinge, straight back at TEMPLE
+    height to the TOP of the real EAR keypoint (not draped over the cheek), in the frame
+    colour with a top highlight + lower shadow for roundness. Head YAW foreshortens each
+    arm and OCCLUDES the one on the side that's turned away (it goes behind the head)."""
     TL, TR, BR, BL = [np.array(p, float) for p in quad]
     ex, ey = _frame_axes(f)
-    ec = f.eyes_center
-    # connect near the TOP-outer corner of the frame, tucked well INWARD so the rim
-    # covers the flat hinge end (arms are drawn BEFORE the front) — no visible stub.
-    tuck = f.eye_dist * 0.11
-    hinges = [TL * 0.72 + BL * 0.28 + ex * tuck,        # left: top-outer corner
-              TR * 0.72 + BR * 0.28 - ex * tuck]        # right
-    ears = [ec - ex * (f.face_w * 0.52) + ey * (f.eye_dist * 0.05),   # face-edge, ear height
-            ec + ex * (f.face_w * 0.52) + ey * (f.eye_dist * 0.05)]
-    th = max(3, int(f.eye_dist * 0.11))
-    hi = tuple(min(255, c + 50) for c in color)
-    dk = tuple(max(0, c - 30) for c in color)
-    for hinge, ear in zip(hinges, ears):
+    yaw = f.yaw
+    # hinge = the TOP-outer corner of the frame (where a real temple attaches)
+    hinge_l = TL * 0.88 + BL * 0.12
+    hinge_r = TR * 0.88 + BR * 0.12
+    # ear anchor = the real ear keypoint, raised to the TOP of the ear (temples rest there)
+    ear_l = np.array(f.p("ear_l"), float) - ey * (f.eye_dist * 0.28)
+    ear_r = np.array(f.p("ear_r"), float) - ey * (f.eye_dist * 0.28)
+    th = max(3, int(f.eye_dist * 0.085))
+    hi = tuple(min(255, int(c) + 55) for c in color)
+    dk = tuple(max(0, int(c) - 45) for c in color)
+    # (hinge, ear, is_left). Occlude the side turned AWAY (yaw>0 hides the LEFT arm).
+    for hinge, ear, vis in ((hinge_l, ear_l, yaw < 0.28), (hinge_r, ear_r, yaw > -0.28)):
+        if not vis:
+            continue
         d = ear - hinge; n = np.linalg.norm(d) or 1.0
-        p = np.array([-d[1], d[0]]) / n                    # perpendicular
-        mid = (hinge + ear) / 2 + ey * (f.eye_dist * 0.04)  # slight downward bow to the ear
-        poly = np.array([hinge + p * (th / 2), mid + p * (th * 0.40), ear + p * (th * 0.30),
-                         ear - p * (th * 0.30), mid - p * (th * 0.40), hinge - p * (th / 2)],
-                        np.int32)
-        cv2.fillPoly(ctx.frame, [poly], color, cv2.LINE_AA)
+        perp = np.array([-d[1], d[0]]) / n               # perpendicular (for thickness)
+        # a gentle outward bow so the arm hugs the side of the head, not the cheek
+        mid = (hinge + ear) / 2 - ey * (f.eye_dist * 0.02)
+        t_h, t_m, t_e = th, th * 0.85, th * 0.55         # taper: thick at hinge → thin at ear
+        top = [hinge + perp * t_h, mid + perp * t_m, ear + perp * t_e]
+        bot = [ear - perp * t_e, mid - perp * t_m, hinge - perp * t_h]
+        poly = np.array(top + bot, np.int32)
+        cv2.fillPoly(ctx.frame, [poly], tuple(int(c) for c in color), cv2.LINE_AA)
         cv2.polylines(ctx.frame, [poly], True, dk, 1, cv2.LINE_AA)
-        cv2.line(ctx.frame, tuple(hinge.astype(int)), tuple(ear.astype(int)), hi, 1, cv2.LINE_AA)
+        cv2.polylines(ctx.frame, [np.array(top, np.int32)], False, hi, 1, cv2.LINE_AA)  # top glint
 
 
 def filter_eyewear(ctx):
@@ -829,6 +838,8 @@ def filter_eyewear(ctx):
         shadow[:, :, 3] = np.clip(sa * 0.16, 0, 70).astype(np.uint8)
         off = ey * (f.eye_dist * 0.03)
         ctx.warp(shadow, [p + off for p in q])
+        if _TEMPLE_ARMS:                                   # 3D temple arms hinge → ear, BEHIND
+            _draw_temple_arms(ctx, f, q, color)            # the frame so the rim covers the join
         ctx.warp(rgba, q)
         if refl is not None:                              # REAL scene reflection in the glass
             ctx.warp(refl, q)

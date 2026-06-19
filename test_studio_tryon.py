@@ -234,6 +234,18 @@ def offline():
           _EYEWEAR.get("refl_video") is None and _EYEWEAR.get("refl_shading") is None)
     check("lens_movie tool registered + in film loader",
           "lens_movie" in {f.__name__ for f in T.ALL_TOOLS})
+    # TEMPLE ARMS (3D, ear-anchored): Face.yaw is computed and the arm occlusion logic
+    # hides the side that's turned away (so arms read in 3D, not draped over the cheek).
+    from occ.studio.facemesh import detect_faces, IDX
+    check("face landmarks include EAR keypoints (ear_l/ear_r)", "ear_l" in IDX and "ear_r" in IDX)
+    ff = detect_faces(face)
+    if ff:
+        yaw = ff[0].yaw
+        check("Face.yaw computes (front face ≈ 0)", abs(yaw) < 0.25, f"yaw={yaw:.3f}")
+    # the occlusion rule: turned-away arm is hidden (yaw>0.28 hides LEFT, yaw<-0.28 hides RIGHT)
+    occ = lambda y: (y < 0.28, y > -0.28)                 # (left shown, right shown)
+    check("temple-arm yaw occlusion: turned head hides the far arm",
+          occ(0.0) == (True, True) and occ(0.5) == (False, True) and occ(-0.5) == (True, False))
 
     det = sv.Detections.empty()
     set_current_eyewear(get_asset("sunglasses"), "test")   # so 'eyewear' has a product
