@@ -340,6 +340,40 @@ def lens_centers_norm(rgba):
     return [(lx, ly), (rx, ry)] if ok else None
 
 
+def _is_crystal(rgba):
+    """A CLEAR / CRYSTAL acetate frame: the frame material itself is light NEUTRAL grey (clear
+    plastic on a white studio bg) with almost no solid dark material anywhere. Such frames are
+    nearly invisible to segmentation AND to the normal see-through-glass fill (which erases
+    them) — they need the crystal render instead. Distinct from a light METAL frame with dark
+    lenses (those have a dark lens body) and from coloured/dark frames."""
+    a = rgba[:, :, 3]; bgr = rgba[:, :, :3]
+    col = frame_color(rgba)
+    val = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)[:, :, 2]
+    light = max(col) > 150 and (max(col) - min(col)) < 32
+    dark = float(((a > 150) & (val < 120)).mean())          # any solid dark lens / frame material
+    return bool(light and dark < 0.03)
+
+
+def _crystallize(rgba):
+    """Render a clear/crystal frame as a VISIBLE light translucent acetate: emphasise the
+    structural EDGES (rims, bridge, brow bar) and keep the interior softly translucent, so the
+    frame reads as truly worn while the eyes still show through. Fixes 'we don't see the frame
+    at all' for clear-on-white frames the normal lens fill would erase."""
+    out = rgba.copy(); bgr = out[:, :, :3]; a = out[:, :, 3]; h, w = a.shape
+    binm = (a > 30).astype(np.uint8)
+    ff = binm.copy(); cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)
+    filled = (binm | (ff == 0)) > 0
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    edges = cv2.GaussianBlur(np.abs(cv2.Laplacian(gray, cv2.CV_32F, ksize=3)), (0, 0), 2)
+    edges = edges / (float(edges.max()) or 1.0)
+    # base translucency + strong edge emphasis + a lift where the acetate is slightly grey
+    crys = np.clip(70 + edges * 230 + (255 - gray.astype(np.float32)) * 0.6, 0, 200)
+    out[:, :, 3] = np.where(filled, crys.astype(np.uint8), 0)
+    out[:, :, :3] = np.where(filled[..., None],
+                             np.clip(bgr.astype(np.int16) + 18, 0, 255).astype(np.uint8), bgr)
+    return out
+
+
 def clean_lenses(rgba, tint=None, opacity=None):
     """RECONSTRUCT the lenses as flat, uniform glass — never passing the product photo's
     baked-in reflections/gradients through (the cause of the dark half-lens / "two dark
@@ -352,6 +386,11 @@ def clean_lenses(rgba, tint=None, opacity=None):
       tint    — None=match original; 'clear'; a name in _LENS_TINTS; or a BGR tuple.
       opacity — None=auto (clear≈46, tinted≈200); else 1-255 (low = more see-through)."""
     rgba = rgba.copy(); a = rgba[:, :, 3]; bgr = rgba[:, :, :3]; h, w = a.shape
+    # CRYSTAL / CLEAR ACETATE frame: frame & lens are both transparent → inseparable, and the
+    # normal see-through fill erases the frame ('we don't see the frame at all'). Render it as a
+    # visible light crystal instead. (Only on the default path — an explicit tint is respected.)
+    if tint is None and _is_crystal(rgba):
+        return _crystallize(rgba)
     regions, holes = _lens_regions(rgba)
     if not regions:
         return glassify(rgba, tint, opacity)        # couldn't isolate lenses → safe fallback

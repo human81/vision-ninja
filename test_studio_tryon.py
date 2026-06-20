@@ -212,6 +212,22 @@ def offline():
     check("eyewear: asset alpha CONTOURS the frame (no rectangle outside the silhouette)",
           _outside < 40, f"{_outside}px of alpha outside the glasses silhouette")
     set_current_eyewear(get_asset("sunglasses"), "test")            # restore a normal pair
+    # CRYSTAL / CLEAR ACETATE frame (the "we don't see the frame at all" bug): a clear frame is
+    # near-invisible to segmentation AND the normal see-through fill erases it. It must be
+    # detected and rendered as a VISIBLE light crystal — while a normal clear-lens pair is not.
+    from occ.studio.face_filters import _is_crystal
+    cry = np.zeros((220, 460, 4), np.uint8)
+    for cx in (140, 320):                                            # light neutral-grey clear rims
+        cv2.rectangle(cry, (cx - 95, 60), (cx + 95, 170), (170, 172, 174, 215), 16)
+    cv2.rectangle(cry, (233, 105), (247, 125), (170, 172, 174, 215), -1)   # bridge
+    check("eyewear: clear/crystal frame is detected", _is_crystal(cry))
+    check("eyewear: a normal clear-lens (coloured frame) pair is NOT mis-detected as crystal",
+          not _is_crystal(gl))
+    ccl = clean_lenses(cry)
+    _fp = cry[:, :, 3] > 40
+    _vis = float(ccl[:, :, 3][_fp].mean()) if _fp.any() else 0.0
+    check("eyewear: crystal frame rendered VISIBLE (not erased to see-through)",
+          _vis > 110, f"frame mean α={_vis:.0f}")
     # DEGENERATE-ALPHA cutout (Nano render with a faint global alpha) must NOT leave a
     # translucent rectangle — load_eyewear_rgba must knock out the white background.
     from occ.studio.face_filters import load_eyewear_rgba
