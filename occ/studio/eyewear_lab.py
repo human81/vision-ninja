@@ -372,6 +372,173 @@ def regenerate_canonical(src: str):
     return bool(tools._canonical_eyewear(raw, src))
 
 
+# ----------------------------------- per-stage Nano Banana enhance + cascade ----
+# A stage-tuned prompt that re-images the asset to FIX exactly what that stage is
+# responsible for, all aimed at one thing: a flawless front-on try-on asset. The base
+# spells the non-negotiables; each stage adds its own emphasis.
+_ENH_BASE = (
+    "This is eyeglasses for a virtual try-on. Render ONLY the FRONT of the frames — the "
+    "two lens rims joined by the nose bridge (and brow bar if present), in their EXACT "
+    "colour, pattern and shape. Temple arms / legs MUST be ENTIRELY ABSENT — none visible, "
+    "not even folded or behind the lenses. Perfectly FRONT-ON and symmetric, both lenses "
+    "equal size and position. PURE WHITE seamless background, centred, the frame front "
+    "filling ~85% of the width. No face, no hands, no shadow, no text. ")
+STAGE_PROMPTS = {
+    "00_raw": _ENH_BASE + "Start from this raw catalog photo: straighten any angle to dead "
+              "front-on, upscale and sharpen, remove the store background.",
+    "01_canonical": _ENH_BASE + "Refine into a flawlessly symmetric render with crisp, clean "
+              "frame edges and even studio lighting.",
+    "02_segmentation": _ENH_BASE + "Maximise the contrast between the frame and the background "
+              "with crisp hard edges on PURE WHITE, so the matte/segmentation is perfect.",
+    "03_cutout": _ENH_BASE + "Clean, continuous frame outline on PURE WHITE with no stray "
+              "pixels or halo, so the cutout is exact.",
+    "04_armless": _ENH_BASE + "Absolutely NO temple arms, hinges or stubs anywhere — only the "
+              "lens rims and the bridge.",
+    "05_lens_regions": _ENH_BASE + "Make each lens a single clean, evenly-filled surface clearly "
+              "bounded by its rim: if the lenses are clear, render them fully transparent; if "
+              "they are tinted/sunglasses, a SMOOTH even tint — so each lens reads as one region.",
+    "06_clean_lenses": _ENH_BASE + "The lenses must be PERFECTLY CLEAN and uniform: if clear, "
+              "fully transparent showing only what is behind them; if tinted or gradient "
+              "sunglasses, a SMOOTH even tint/gradient with NO mottling, reflections, glare or "
+              "smudges. Both lenses identical.",
+    "07_centers": _ENH_BASE + "Perfectly symmetric and level: both lenses identical in size, "
+              "shape and height, mirrored about the bridge.",
+}
+
+
+def _to_jpg(b: bytes) -> bytes:
+    img = cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR)
+    return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()
+
+
+def _stage_input_jpg(src: str, stage_key: str):
+    """The CLEAN input image to feed Nano Banana for a given stage = the (clean) output of the
+    stage before it, so 'use Nano Banana with those inputs' is literal."""
+    from . import tools
+    from .face_filters import load_eyewear_rgba, remove_arms, clean_lenses
+    raw = tools._fetch_bytes(src)
+    if not raw:
+        return None
+    canon = tools._canonical_eyewear(raw, src) or raw
+    if stage_key == "00_raw":
+        return _to_jpg(raw)
+    if stage_key in ("01_canonical", "02_segmentation", "03_cutout"):
+        return _to_jpg(canon)
+    cut = load_eyewear_rgba(canon)
+    if cut is None:
+        return _to_jpg(canon)
+    if stage_key == "04_armless":
+        return tools._flatten_white_jpg(cut)
+    arm = remove_arms(cut)
+    if stage_key in ("05_lens_regions", "06_clean_lenses"):
+        return tools._flatten_white_jpg(arm)
+    return tools._flatten_white_jpg(clean_lenses(arm))      # 07_centers
+
+
+def _b64png(bgr):
+    ok, buf = cv2.imencode(".png", _fit(bgr))
+    import base64
+    return "data:image/png;base64," + base64.b64encode(buf).decode() if ok else None
+
+
+def _cascade_from_asset(img_bytes):
+    """Run the DOWNSTREAM asset pipeline (cutout → armless → lens isolation → clean_lenses →
+    centres) on an already-front-on asset (e.g. a Nano-Banana-enhanced image), returning the
+    enhanced asset + each downstream stage as a base64 PNG — so the CASCADE is visible."""
+    from .face_filters import (load_eyewear_rgba, remove_arms, clean_lenses,
+                               _lens_regions, lens_centers_norm, lens_classification)
+    out = [{"key": "enhanced", "title": "✨ Nano Banana enhanced", "stats": {},
+            "png": _b64png(cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR))}]
+    cut = load_eyewear_rgba(img_bytes)
+    if cut is None:
+        return out
+    out.append({"key": "03_cutout", "title": STAGE_TITLES["03_cutout"], "stats": {},
+                "png": _b64png(_over_checker(cut))})
+    arm = remove_arms(cut)
+    out.append({"key": "04_armless", "title": STAGE_TITLES["04_armless"], "stats": {},
+                "png": _b64png(_over_checker(arm))})
+    cls = lens_classification(arm)
+    viz = _over_checker(arm).copy()
+    regions, _ = _lens_regions(arm)
+    cols = [(80, 220, 80), (80, 160, 255)]
+    for i, (interior, c) in enumerate(regions):
+        cnts, _ = cv2.findContours(interior.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(viz, cnts, -1, cols[i % 2], 2)
+        cv2.circle(viz, (int(c[0]), int(c[1])), 4, (40, 40, 240), -1)
+    out.append({"key": "05_lens_regions", "title": STAGE_TITLES["05_lens_regions"],
+                "stats": cls, "png": _b64png(viz)})
+    clean = clean_lenses(arm)
+    lm = np.zeros(arm.shape[:2], bool)
+    for it, _c in regions:
+        lm |= it
+    st6 = {"lens_mean_alpha": int(clean[:, :, 3][lm].mean())} if lm.any() else {}
+    out.append({"key": "06_clean_lenses", "title": STAGE_TITLES["06_clean_lenses"],
+                "stats": st6, "png": _b64png(_over_checker(clean))})
+    centers = lens_centers_norm(arm)
+    cviz = _over_checker(arm).copy(); h, w = arm.shape[:2]
+    if centers:
+        for (cx, cy) in centers:
+            cv2.drawMarker(cviz, (int(cx * w), int(cy * h)), (40, 220, 240), cv2.MARKER_CROSS, 18, 2)
+    out.append({"key": "07_centers", "title": STAGE_TITLES["07_centers"],
+                "stats": {"left": [round(centers[0][0], 3), round(centers[0][1], 3)],
+                          "right": [round(centers[1][0], 3), round(centers[1][1], 3)]} if centers else {},
+                "png": _b64png(cviz)})
+    return out
+
+
+def enhance_stage(src: str, stage_key: str):
+    """Re-image a stage's input with Nano Banana Pro using a prompt tuned for an optimal
+    try-on, then CASCADE the downstream pipeline on the result. Returns the enhanced asset +
+    downstream stages (base64) + the data URI of the enhanced asset (to apply live).
+    Requires an API key."""
+    from . import tools, genmedia
+    if stage_key not in STAGE_PROMPTS:
+        return {"error": f"unknown stage {stage_key}"}
+    if not tools._has_key():
+        return {"error": "no API key — set GOOGLE_API_KEY / GEMINI_API_KEY"}
+    inp = _stage_input_jpg(src, stage_key)
+    if not inp:
+        return {"error": "could not build the stage input image"}
+    try:
+        model = tools.ctx().settings.model_for("image_pro")
+        png, _txt, _r = genmedia.edit_image([inp], STAGE_PROMPTS[stage_key], model=model)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+    if not png:
+        return {"error": "Nano Banana returned no image"}
+    try:
+        tools.ctx().ledger.record("agent_brain", model=model, input_tokens=600,
+                                  output_tokens=1800, label=f"lab_enhance:{stage_key}")
+    except Exception:
+        pass
+    import base64
+    return {"stage": stage_key, "prompt": STAGE_PROMPTS[stage_key],
+            "enhanced_uri": "data:image/png;base64," + base64.b64encode(png).decode(),
+            "stages": _cascade_from_asset(png)}
+
+
+def apply_enhanced(png_uri: str, label: str = ""):
+    """Apply an enhanced asset (data URI) as the LIVE try-on, bypassing the canonical step
+    (it is already a clean front-on asset)."""
+    from . import tools
+    from .face_filters import load_eyewear_rgba, remove_arms, clean_lenses, set_current_eyewear, frame_color
+    raw = tools._fetch_bytes(png_uri)
+    if not raw:
+        return False
+    cut = load_eyewear_rgba(raw)
+    if cut is None:
+        return False
+    arm = remove_arms(cut)
+    set_current_eyewear(arm, label or "enhanced", color=frame_color(arm), src=png_uri)
+    try:
+        ctx_ = tools.ctx()
+        ctx_.overlays.clear(); ctx_.overlays.add_builtin("eyewear")
+        ctx_.pipe.set_render_flags(draw_boxes=False, draw_labels=False, draw_counts=False)
+    except Exception:
+        pass
+    return True
+
+
 # ---------------------------------------------------------- coding-assistant report ----
 def _md_table(stats: dict) -> str:
     if not stats:

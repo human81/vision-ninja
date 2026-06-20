@@ -284,6 +284,37 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
                              "regenerated": ok,
                              "error": None if ok else "no API key / generation failed"})
 
+    @app.post("/eyewear/lab/enhance")
+    async def eyewear_lab_enhance(req: Request):
+        """Re-image a pipeline STAGE with Nano Banana Pro (stage-tuned for optimal try-on) and
+        cascade the downstream pipeline on the result. Body: {src, stage}."""
+        import asyncio as _aio
+        from . import eyewear_lab
+        from .face_filters import _EYEWEAR
+        b = await req.json()
+        src = b.get("src") or _EYEWEAR.get("src")
+        stage = b.get("stage", "")
+        if not src or not stage:
+            return JSONResponse({"status": "error", "error": "src + stage required"}, status_code=400)
+        res = await _aio.get_event_loop().run_in_executor(
+            None, lambda: eyewear_lab.enhance_stage(src, stage))
+        if res.get("error"):
+            return JSONResponse({"status": "error", **res}, status_code=502)
+        return JSONResponse({"status": "success", **res})
+
+    @app.post("/eyewear/lab/apply")
+    async def eyewear_lab_apply(req: Request):
+        """Apply an enhanced asset (data URI) as the live try-on, bypassing the canonical step."""
+        import asyncio as _aio
+        from . import eyewear_lab
+        b = await req.json()
+        uri = b.get("uri") or ""
+        if not uri:
+            return JSONResponse({"status": "error", "error": "no uri"}, status_code=400)
+        ok = await _aio.get_event_loop().run_in_executor(
+            None, lambda: eyewear_lab.apply_enhanced(uri, b.get("label", "enhanced")))
+        return JSONResponse({"status": "success" if ok else "error", "applied": ok})
+
     @app.get("/eyewear/lab", response_class=HTMLResponse)
     def eyewear_lab_page():
         return (Path(__file__).with_name("eyewear_lab.html")).read_text()

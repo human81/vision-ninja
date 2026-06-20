@@ -69,7 +69,9 @@
   .rcard .row button{flex:1}
   .badge3d{display:inline-block;font-size:10px;font-weight:700;padding:1px 7px;border-radius:5px}
   .badge3d.yes{background:#10381f;color:#6ee7b7} .badge3d.no{background:#2a2030;color:#b89}
-  .cascade{margin:14px 0}
+  .card .enh{width:100%;margin-top:8px;font-size:11.5px;background:#15233a;border-color:#2a3d5c;color:#bcd0ff}
+  .card .enh:hover{border-color:var(--accent2);background:#1a2c48}
+  .cascade{margin:14px 0;scroll-margin-top:60px}
   .cascade .strip{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px}
   .cascade .st{flex:none;width:190px}
   .cascade .st img{width:100%;border-radius:8px;border:1px solid var(--line);background:#000}
@@ -218,6 +220,34 @@ async function runCascade(image){
         <img src="${s.png}"><div class="c"><b>${s.key.split('_')[0]}</b> ${esc(s.title.split('(')[0].split('—')[0].trim())}${s.stats&&s.stats.decision?'<br>'+esc(s.stats.decision):''}</div></div>`).join('')}</div>`;
   }catch(e){box.innerHTML='<div class="iss">cascade error</div>';}
 }
+let LAST_ENH=null;
+async function enhanceStage(stage){
+  const f=CUR; if(!f){return;}
+  const box=document.getElementById('cascade');
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+  box.innerHTML=`<div class="hint" style="color:var(--accent)">✨ Nano Banana re-imagining <b>${stage}</b> for an optimal try-on, then cascading the pipeline… (~10–20s)</div>`;
+  try{
+    const r=await fetch('/eyewear/lab/enhance',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({src:f.src,stage})}).then(r=>r.json());
+    if(r.status!=='success'||!r.stages){box.innerHTML='<div class="iss">enhance failed: '+esc(r.error||'')+'</div>';return;}
+    LAST_ENH=r.enhanced_uri;
+    box.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+        <b>✨ Stage ${stage} re-imagined with Nano Banana → cascade</b>
+        <button onclick="applyEnhanced()">✓ Use this asset live</button>
+        <span style="flex:1"></span></div>
+      <div class="hint" style="margin-bottom:6px">Prompt: ${esc((r.prompt||'').slice(0,160))}…</div>
+      <div class="strip">${r.stages.map(s=>`<div class="st">
+        <img src="${s.png}"><div class="c"><b>${(s.key.split('_')[0])||''}</b> ${esc((s.title||'').split('(')[0].split('—')[0].trim())}${s.stats&&s.stats.decision?'<br>'+esc(s.stats.decision):''}</div></div>`).join('')}</div>`;
+    toast('✨ stage '+stage+' enhanced — see the cascade');
+  }catch(e){box.innerHTML='<div class="iss">enhance error</div>';}
+}
+async function applyEnhanced(){
+  if(!LAST_ENH){return;}
+  try{const r=await fetch('/eyewear/lab/apply',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({uri:LAST_ENH,label:(CUR&&CUR.title)||'enhanced'})}).then(r=>r.json());
+    toast(r.applied?'↻ enhanced asset applied live — switch to the studio tab':'apply failed');
+  }catch(e){toast('apply failed');}
+}
 async function fixImage(src){
   toast('🪄 re-rendering canonical (Nano Banana Pro)…');
   try{const r=await fetch('/eyewear/refix',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({src,apply:true})}).then(r=>r.json());
@@ -239,6 +269,7 @@ function copyBrief(){navigator.clipboard.writeText(window.__md||'').then(()=>toa
 function closeModal(){document.getElementById('modal').classList.remove('show');}
 function toast(m){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';t.style.cssText='position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#17202e;border:1px solid var(--line);padding:8px 16px;border-radius:10px;z-index:40';document.body.appendChild(t);}t.textContent=m;t.style.opacity=1;clearTimeout(t._h);t._h=setTimeout(()=>t.style.opacity=0,3200);}
 function card(s){
+  const canEnhance = !['08_landmarks','09_registration','10_final'].includes(s.key);
   return `<div class="card">
     <div class="ph"><span class="num">${s.key.split('_')[0]}</span>
       ${s.ms!=null?`<span class="ms">${s.ms} ms</span>`:''}
@@ -247,6 +278,7 @@ function card(s){
       <div class="ttl">${esc(s.title)}</div>
       <div class="dsc">${esc(s.desc)}</div>
       ${stats(s.stats)}
+      ${canEnhance?`<button class="enh" onclick="enhanceStage('${s.key}')" title="Re-image this step with Nano Banana Pro (tuned for an optimal try-on) and cascade the rest of the pipeline">✨ Nano Banana this step</button>`:''}
     </div></div>`;
 }
 function stats(st){
