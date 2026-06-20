@@ -237,6 +237,15 @@ def _lens_regions(rgba):
     # FRAME material = coloured (saturated) OR dark, where opaque. Everything else
     # inside the silhouette is lens (clear/white) or a transparent opening.
     frame = ((sat > 55) | (val < 105)) & (binm > 0)
+    # WHITE-FRAME guard: a bright white acetate frame is neither saturated nor dark, so it
+    # would read as lens and get painted see-through (erasing the frame). A frame, though,
+    # forms a THICK ring on the silhouette PERIMETER; a clear lens sits in the DEEP centre.
+    # So treat bright-white pixels in the perimeter band as frame — protecting white frames
+    # while the deep lens core stays see-through.
+    core = cv2.erode(filled, _ellipse(max(5, int(0.13 * h)))) > 0
+    perim = (filled > 0) & ~core
+    white = (sat < 50) & (val > 200)
+    frame = frame | (perim & white & (binm > 0))
     inside = cv2.erode(filled, _ellipse(max(3, int(0.02 * h)))) > 0     # drop the outer rim
     lens_mask = ((inside & ~frame) | (holes > 0)).astype(np.uint8)
     lens_mask = cv2.morphologyEx(lens_mask, cv2.MORPH_OPEN,             # de-speckle only
@@ -257,10 +266,35 @@ def _lens_regions(rgba):
         cv2.drawContours(sol, [max(cnts, key=cv2.contourArea)], -1, 1, -1)
         sol = cv2.morphologyEx(sol, cv2.MORPH_CLOSE, smooth)           # smooth, continuous edge
         sol = cv2.dilate(sol, tuck) & filled                          # meet the rim, no gap
-        interior = sol > 0
+        interior = (sol > 0) & ~frame                                 # never paint frame (incl. white rim)
         if interior.any():
             out.append((interior, (float(cent[i][0]), float(cent[i][1]))))
     out.sort(key=lambda r: r[1][0])                                    # left → right
+    # ---- WHITE-FRAME GUARD: bound each lens to a disc around its geometric centre ----
+    # A white/bright acetate frame reads as low-saturation "lens" material, so the whole
+    # front can merge into one blob and (without this) get painted see-through — erasing
+    # the frame. The disc is an UPPER BOUND only (generous radius), so normal lenses are
+    # untouched; it just clips frame/brow-bar pixels that stray far from the eye.
+    lc = lens_centers_norm(rgba)
+    if lc is not None and out:
+        union = np.zeros((h, w), bool)
+        for interior, _c in out:
+            union |= interior
+        cxs = [lc[0][0] * w, lc[1][0] * w]; cys = [lc[0][1] * h, lc[1][1] * h]
+        sep = abs(cxs[1] - cxs[0]) or (0.4 * w)
+        R = max(0.42 * h, 0.66 * sep)                                  # generous: full lens fits inside
+        bounded = []
+        for cx, cy in zip(cxs, cys):                                   # one disc per EYE (always two)
+            disc = np.zeros((h, w), np.uint8)
+            cv2.circle(disc, (int(cx), int(cy)), int(R), 1, -1)
+            iv = union & (disc > 0)
+            if iv.sum() > 50:
+                ys, xs = np.where(iv)
+                bounded.append((iv, (float(xs.mean()), float(ys.mean()))))
+        if len(bounded) == 2 and bounded[0][0].sum() > 0.15 * union.sum() \
+                and bounded[1][0].sum() > 0.15 * union.sum():
+            bounded.sort(key=lambda r: r[1][0])
+            return bounded, holes                       # disc-split: two clean, frame-safe lenses
     return out, holes
 
 
@@ -307,13 +341,14 @@ def lens_centers_norm(rgba):
 
 
 def clean_lenses(rgba, tint=None, opacity=None):
-    """Rebuild the lenses as REAL see-through glass — and GUARANTEE no opaque white
-    blob survives anywhere in the lens area (the bug that left white marks). Each lens
-    interior is repainted: clear frames → low-alpha cool glass (the live eye shows
-    through), tinted/sun frames → their own colour, slightly translucent. A hard
-    safety net then forces ANY near-white enclosed (lens-area) pixel to see-through, so
-    studio-backdrop bleed can never read as a white lens. Frame/rim pixels (incl. white
-    acetate frames) are untouched.
+    """RECONSTRUCT the lenses as flat, uniform glass — never passing the product photo's
+    baked-in reflections/gradients through (the cause of the dark half-lens / "two dark
+    rectangles" on clear frames whose photo has a photographic reflection on one side).
+    Both lenses get ONE shared appearance so they "see the same thing": clear pairs →
+    uniform low-alpha cool glass (the live eye shows through); tinted/sun pairs → one flat
+    colour, slightly translucent. A hard safety net then forces ANY near-white enclosed
+    (lens-area) pixel to see-through, so studio-backdrop bleed can never read as a white
+    lens. Frame/rim pixels (incl. white acetate frames) are untouched.
       tint    — None=match original; 'clear'; a name in _LENS_TINTS; or a BGR tuple.
       opacity — None=auto (clear≈46, tinted≈200); else 1-255 (low = more see-through)."""
     rgba = rgba.copy(); a = rgba[:, :, 3]; bgr = rgba[:, :, :3]; h, w = a.shape
@@ -333,26 +368,47 @@ def clean_lenses(rgba, tint=None, opacity=None):
 
     hsv0 = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     lens_union = np.zeros((h, w), bool)
+
+    # ---- PASS 1: classify the lens TYPE from the WHOLE pair, robustly ----------------
+    # The product photo bakes in reflections/gradients: a "clear" lens is often half bright
+    # glass and half a dark photographic reflection (the Bvlgari dark-purple half-lens). A
+    # MEDIAN hides that bimodality and reads "clear", but keeping the original pixels then
+    # reproduces the dark half. So we vote on the *fraction* of genuinely-glassy pixels and
+    # — crucially — RECONSTRUCT a flat surface instead of passing the photo through. Both
+    # lenses get ONE shared appearance ("both lenses should see the same thing").
+    tint_cols = []
+    clear_votes = 0
     for interior, _c in regions:
-        frac_hole = float((holes[interior] > 0).mean())          # was it a transparent opening?
-        med = np.median(bgr[interior].reshape(-1, 3), 0)
-        v = float(np.median(hsv0[:, :, 2][interior])); s = float(np.median(hsv0[:, :, 1][interior]))
-        is_clear = clear_force or (forced is None and (frac_hole > 0.30 or (v > 150 and s < 60)))
-        if not is_clear and forced is None and max(med) > 232 and (max(med) - min(med)) < 24:
-            is_clear = True                                      # near-white "tint" = clear lens
+        frac_hole = float((holes[interior] > 0).mean())          # transparent opening = clear glass
+        hv = hsv0[:, :, 2][interior].astype(np.float32)
+        sv = hsv0[:, :, 1][interior].astype(np.float32)
+        clear_frac = float(((hv > 150) & (sv < 60)).mean())      # share that is bright, desaturated glass
+        is_clear = clear_force or (forced is None and (frac_hole > 0.55 or clear_frac > 0.42))
+        if is_clear:
+            clear_votes += 1
+        else:                                                    # robust tint = the TINTED pixels only
+            px = bgr[interior].reshape(-1, 3).astype(np.float32)
+            tinted = (hv <= 170) | (sv >= 55)
+            src = px[tinted] if int(tinted.sum()) > 30 else px
+            tint_cols.append(np.median(src, 0))
+    # one shared decision for the pair
+    if forced is not None:
+        fill_clear, fill_col = False, np.array(forced, np.float32)
+    elif clear_force or clear_votes >= len(regions):             # all lenses read clear → clear pair
+        fill_clear, fill_col = True, np.array(_GLASS_TINT, np.float32)
+    else:                                                        # any tinted lens → tinted pair, ONE colour
+        fill_clear = False
+        fill_col = np.median(np.stack(tint_cols), 0) if tint_cols else np.array(_GLASS_TINT, np.float32)
+
+    # ---- PASS 2: REPAINT each lens as a flat, uniform surface ------------------------
+    for interior, _c in regions:
         idx = interior
-        if forced is not None:                                   # explicit tint override → flat
-            a[idx] = int(opacity) if opacity else _SUN_A
-            bgr[idx] = np.array(forced, np.uint8)
-        elif is_clear:
-            # KEEP the aligned lens pixels, just make them SEE-THROUGH (low alpha). A light
-            # cool-glass blend stops a pure-white studio backdrop reading as a milky veil,
-            # while preserving the real lens texture/reflections.
+        if fill_clear:                                           # see-through glass: uniform, faint
             a[idx] = int(opacity) if opacity else _CLEAR_A
-            bgr[idx] = (bgr[idx] * 0.62 + np.array(_GLASS_TINT, np.float32) * 0.38).astype(np.uint8)
-        else:
-            # tinted / sun: KEEP the real lens colour, just slightly translucent.
+            bgr[idx] = fill_col.astype(np.uint8)
+        else:                                                    # tint/sun: ONE flat colour both lenses
             a[idx] = int(opacity) if opacity else _SUN_A
+            bgr[idx] = fill_col.astype(np.uint8)
         lens_union |= interior
 
     # ---- HARD SAFETY NET: no opaque white may survive ANYWHERE inside the frame ----
@@ -367,7 +423,12 @@ def clean_lenses(rgba, tint=None, opacity=None):
     near_white = (hsv1[:, :, 2] > 224) & (hsv1[:, :, 1] < 36) & (a > 110)
     enclosed = (holes > 0) | lens_union | deep                       # lens + enclosed gaps
     enclosed = cv2.dilate(enclosed.astype(np.uint8), _ellipse(max(3, int(0.03 * h)))) > 0
-    kill = near_white & enclosed
+    # WHITE-FRAME guard: a white acetate frame's rim is near-white and sits on the
+    # silhouette PERIMETER — never zero it (that erased white frames). The deep lens core
+    # is still fair game.
+    perim = (filled > 0) & ~(cv2.erode(filled, _ellipse(max(5, int(0.13 * h)))) > 0)
+    white_frame = perim & (hsv1[:, :, 1] < 50) & (hsv1[:, :, 2] > 200)
+    kill = near_white & enclosed & ~white_frame
     if kill.any():
         a[kill] = int(opacity) if (opacity and clear_force) else _CLEAR_A
         bgr[kill] = (bgr[kill] * 0.62 + np.array(_GLASS_TINT, np.float32) * 0.38).astype(np.uint8)

@@ -154,6 +154,50 @@ def offline():
     check("eyewear: lenses are SEE-THROUGH (low alpha)", see_through < 110, f"mean α={see_through:.0f}")
     red_rim = (cl[:, :, 2] > 150) & (cl[:, :, 1] < 90) & (a2 > 200)   # frame preserved, opaque
     check("eyewear: frame stays opaque (not removed)", int(red_rim.sum()) > 500, f"{int(red_rim.sum())}px")
+    # BIMODAL BAKED REFLECTION (the Bvlgari clear-lens bug): the product photo bakes a dark
+    # photographic reflection over HALF of each clear lens. Keeping the original pixels
+    # reproduced it as two DARK OPAQUE rectangles. RECONSTRUCTION must render the lens FLAT
+    # and uniform (no dark half) and see-through.
+    refl = np.zeros((180, 360, 4), np.uint8)
+    for cx in (96, 264):
+        cv2.circle(refl, (cx, 90), 62, (250, 250, 250, 255), -1)       # clear (white) lens
+        cv2.ellipse(refl, (cx, 90), (62, 62), 0, -90, 90, (104, 82, 100, 255), -1)  # dark-purple reflection half
+    for cx in (96, 264):
+        cv2.circle(refl, (cx, 90), 62, (60, 50, 45, 255), 12)          # dark rim
+    cv2.rectangle(refl, (158, 80), (202, 100), (60, 50, 45, 255), -1)  # bridge
+    clr = clean_lenses(refl)
+    rg, _ = _lens_regions(refl)
+    lm = np.zeros(refl.shape[:2], bool)
+    for it, _c in rg:
+        lm |= it
+    # uniform: low within-lens colour spread (the dark half is gone); and see-through
+    lstd = float(clr[:, :, :3][lm].reshape(-1, 3).std(0).mean()) if lm.any() else 99.0
+    lalpha = float(clr[:, :, 3][lm].mean()) if lm.any() else 255.0
+    dark_blob = int(((clr[:, :, :3].max(2) < 130) & (clr[:, :, 3] > 110) & lm).sum())
+    check("eyewear: baked dark-reflection half RECONSTRUCTED uniform (no dark rectangle)",
+          lm.any() and lstd < 25 and dark_blob == 0, f"within-lens std={lstd:.0f} dark-opaque={dark_blob}px")
+    check("eyewear: reconstructed clear lens is see-through", lalpha < 110, f"mean α={lalpha:.0f}")
+    # WHITE ACETATE FRAME + CLEAR LENS: the bright white rim must NOT be painted see-through
+    # (it reads as low-saturation 'lens' material) — the white-perimeter guard protects it
+    # while the deep lens core stays see-through.
+    wf = np.zeros((320, 680, 4), np.uint8)
+    for cx in (200, 480):
+        cv2.ellipse(wf, (cx, 160), (120, 95), 0, 0, 360, (248, 248, 248, 255), 28)
+        cv2.ellipse(wf, (cx, 160), (106, 81), 0, 0, 360, (250, 250, 250, 120), -1)
+        cv2.ellipse(wf, (cx, 160), (120, 95), 0, 0, 360, (248, 248, 248, 255), 28)
+    cv2.rectangle(wf, (300, 140), (380, 175), (248, 248, 248, 255), -1)
+    wcl = clean_lenses(wf)
+    rim = np.zeros((320, 680), np.uint8)
+    for cx in (200, 480):
+        cv2.ellipse(rim, (cx, 160), (120, 95), 0, 0, 360, 1, 6)        # the outer rim edge
+    rim = rim > 0
+    core = np.zeros((320, 680), np.uint8)
+    for cx in (200, 480):
+        cv2.ellipse(core, (cx, 160), (60, 45), 0, 0, 360, 1, -1)       # deep lens core
+    core = core > 0
+    rim_a = float(wcl[:, :, 3][rim].mean()); core_a = float(wcl[:, :, 3][core].mean())
+    check("eyewear: white-acetate frame rim stays opaque (not erased)", rim_a > 180, f"rim α={rim_a:.0f}")
+    check("eyewear: white-frame lens core is see-through", core_a < 120, f"core α={core_a:.0f}")
     # DEGENERATE-ALPHA cutout (Nano render with a faint global alpha) must NOT leave a
     # translucent rectangle — load_eyewear_rgba must knock out the white background.
     from occ.studio.face_filters import load_eyewear_rgba
