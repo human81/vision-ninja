@@ -172,18 +172,19 @@
   .gcard.worn::after{content:'✓ worn';position:absolute;top:4px;left:4px;background:#e7b24a;color:#1a1205;
     font-size:8px;font-weight:700;padding:1px 5px;border-radius:6px;letter-spacing:.3px}
   .gcard{position:relative}
-  /* persistent "Now wearing" chip pinned on the canvas — visible no matter what */
-  #nowwearing{position:absolute;left:12px;top:12px;z-index:7;display:none;align-items:center;gap:9px;
-    max-width:280px;padding:6px 10px 6px 6px;border-radius:12px;background:rgba(11,16,25,.82);
-    backdrop-filter:blur(8px);border:1px solid rgba(231,178,74,.5);box-shadow:0 6px 20px #0009}
+  /* persistent "Now wearing" chip — sits just above the self-view PiP (bottom-right) */
+  #nowwearing{position:absolute;right:14px;bottom:calc(24px + clamp(150px,14.5%,196px) * 0.75);
+    z-index:9;display:none;align-items:center;gap:8px;width:clamp(150px,14.5%,196px);
+    padding:5px 7px 5px 5px;border-radius:11px;background:rgba(11,16,25,.88);
+    backdrop-filter:blur(8px);border:1px solid rgba(231,178,74,.55);box-shadow:0 8px 22px #000a}
   #nowwearing.on{display:flex}
-  #nowwearing img{width:48px;height:34px;object-fit:contain;background:#0a1018;border-radius:7px;flex:none}
-  #nowwearing .nw-l{min-width:0}
-  #nowwearing .nw-k{font-size:9px;letter-spacing:.6px;text-transform:uppercase;color:#e7b24a;font-weight:700}
-  #nowwearing .nw-t{font-size:12.5px;color:#fff;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px}
-  #nowwearing .nw-b{font-size:10px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px}
-  #nowwearing .nw-x{margin-left:4px;width:22px;height:22px;border-radius:50%;border:1px solid var(--line);
-    background:rgba(255,255,255,.06);color:#cdd9ea;cursor:pointer;font-size:12px;line-height:1;flex:none}
+  #nowwearing img{width:42px;height:30px;object-fit:contain;background:#0a1018;border-radius:6px;flex:none}
+  #nowwearing .nw-l{min-width:0;flex:1}
+  #nowwearing .nw-k{font-size:8.5px;letter-spacing:.6px;text-transform:uppercase;color:#e7b24a;font-weight:700}
+  #nowwearing .nw-t{font-size:12px;color:#fff;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #nowwearing .nw-b{font-size:9.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #nowwearing .nw-x{width:20px;height:20px;border-radius:50%;border:1px solid var(--line);
+    background:rgba(255,255,255,.06);color:#cdd9ea;cursor:pointer;font-size:11px;line-height:1;flex:none}
   #nowwearing .nw-x:hover{border-color:#ff7a7a;color:#ff7a7a}
   /* premium "processing" loader on the main canvas */
   #fitloader{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
