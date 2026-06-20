@@ -198,6 +198,20 @@ def offline():
     rim_a = float(wcl[:, :, 3][rim].mean()); core_a = float(wcl[:, :, 3][core].mean())
     check("eyewear: white-acetate frame rim stays opaque (not erased)", rim_a > 180, f"rim α={rim_a:.0f}")
     check("eyewear: white-frame lens core is see-through", core_a < 120, f"core α={core_a:.0f}")
+    # ALPHA CONTOURS THE FRAME (the wide-shield "translucent rectangle outside the lenses"
+    # bug): the stored asset must have NO alpha outside the true glasses silhouette, so the
+    # warp never composites a translucent bounding-box rectangle onto the face.
+    from occ.studio.face_filters import set_current_eyewear, _EYEWEAR, _silhouette_mask
+    shield = np.zeros((220, 520, 4), np.uint8)
+    cv2.ellipse(shield, (260, 110), (220, 78), 0, 0, 360, (170, 95, 70, 255), -1)   # big mirror lens
+    cv2.ellipse(shield, (260, 110), (220, 78), 0, 0, 360, (40, 40, 40, 255), 11)    # thin rim
+    sil_in = _silhouette_mask(shield)
+    set_current_eyewear(shield, "shield-rect-test")
+    _ra = _EYEWEAR["rgba"][:, :, 3]
+    _outside = int(((_ra > 6) & ~sil_in).sum())
+    check("eyewear: asset alpha CONTOURS the frame (no rectangle outside the silhouette)",
+          _outside < 40, f"{_outside}px of alpha outside the glasses silhouette")
+    set_current_eyewear(get_asset("sunglasses"), "test")            # restore a normal pair
     # DEGENERATE-ALPHA cutout (Nano render with a faint global alpha) must NOT leave a
     # translucent rectangle — load_eyewear_rgba must knock out the white background.
     from occ.studio.face_filters import load_eyewear_rgba
@@ -360,6 +374,19 @@ def offline():
                                      "Reproduce offline")))
     check("lab: delete_flag removes the entry",
           _lab.delete_flag(_fid) and not any(x["id"] == _fid for x in _lab.list_flags()))
+    # PER-STAGE NANO BANANA enhance: input builders + cascade renderer (no API; canon is seeded)
+    _inp = _lab._stage_input_jpg(_p, "06_clean_lenses")
+    check("lab: _stage_input_jpg builds a clean stage input", bool(_inp) and len(_inp) > 500)
+    _casc2 = _lab._cascade_from_asset(open(_p, "rb").read())
+    check("lab: _cascade_from_asset returns enhanced + downstream stages (base64)",
+          any(s["key"] == "enhanced" for s in _casc2)
+          and any(s["key"] == "06_clean_lenses" for s in _casc2)
+          and _casc2[0]["png"].startswith("data:image"))
+    check("lab: enhance_stage rejects an unknown stage (graceful)",
+          bool(_lab.enhance_stage(_p, "99_bogus").get("error")))
+    import base64 as _b64
+    _uri = "data:image/png;base64," + _b64.b64encode(open(_p, "rb").read()).decode()
+    check("lab: apply_enhanced sets the live eyewear from a data URI", _lab.apply_enhanced(_uri, "t"))
     _os.remove(_p); _os.remove(_cp)
 
     det = sv.Detections.empty()
@@ -586,6 +613,14 @@ def online():
     lab_html = urllib.request.urlopen(STUDIO_URL + "/eyewear/lab", timeout=8).read().decode()
     check("GET /eyewear/lab renders the dashboard",
           "Try-on Lab" in lab_html and "pipeline" in lab_html.lower())
+    check("lab dashboard exposes the per-stage Nano Banana enhance button",
+          "Nano Banana this step" in lab_html and "enhanceStage" in lab_html)
+    for _ep in ("/eyewear/lab/enhance", "/eyewear/lab/apply"):  # guarded against missing args
+        try:
+            _post(_ep, {}); _g = True
+        except urllib.error.HTTPError as _e:
+            _g = _e.code == 400
+        check(f"POST {_ep} guards missing args", _g)
     try:                                              # flag with no pair set → guarded 400
         _post("/eyewear/flag", {"note": "x"}); guard_ok = True   # (a pair may already be set)
     except urllib.error.HTTPError as e:

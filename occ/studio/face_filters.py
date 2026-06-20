@@ -451,6 +451,23 @@ def clean_lenses(rgba, tint=None, opacity=None):
     return rgba
 
 
+def _silhouette_mask(rgba):
+    """The TRUE glasses silhouette (frame + lens openings) of a cutout — the filled region
+    enclosed by the opaque frame, flood-filled from every border so a frame touching one edge
+    can't fool it. Used to guarantee the asset's alpha CONTOURS THE FRAME and is zero
+    everywhere outside it (no translucent bounding-box rectangle when warped)."""
+    a = rgba[:, :, 3]; h, w = a.shape
+    binm = (a > 40).astype(np.uint8)
+    ff = binm.copy(); ffmask = np.zeros((h + 2, w + 2), np.uint8)
+    for sx, sy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1),
+                   (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)):
+        if ff[sy, sx] == 0:
+            cv2.floodFill(ff, ffmask, (sx, sy), 1)
+    filled = (binm | (ff == 0)).astype(np.uint8)            # glasses + enclosed lens openings
+    filled = cv2.morphologyEx(filled, cv2.MORPH_CLOSE, _ellipse(max(3, int(0.012 * h))))
+    return filled > 0
+
+
 def lens_classification(rgba):
     """READ-ONLY introspection for the Try-on Lab: per-lens classification stats and the
     final reconstruction decision, mirroring clean_lenses PASS-1 (kept in lock-step so the
@@ -764,11 +781,18 @@ def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None, src
     lm = np.zeros(rgba.shape[:2], np.uint8)
     for it, _c in regions:
         lm[it] = 1
+    cleaned = clean_lenses(rgba, tint, opacity)
+    # ALPHA MUST CONTOUR THE FRAME — never outside it. clean_lenses / lens detection can leave
+    # faint alpha in the background (e.g. a wide shield's lens region spilling past the rim),
+    # which warps onto the face as a translucent bounding-box RECTANGLE. Clamp the asset's alpha
+    # to the true glasses silhouette (from the clean-background armless) so nothing outside survives.
+    sil = _silhouette_mask(rgba)
+    cleaned[:, :, 3] = np.where(sil, cleaned[:, :, 3], 0)
     with _EYEWEAR_LOCK:
         _EYEWEAR["armless"] = rgba
         _EYEWEAR["tint"] = tint
         _EYEWEAR["opacity"] = opacity
-        _EYEWEAR["rgba"] = clean_lenses(rgba, tint, opacity)
+        _EYEWEAR["rgba"] = cleaned
         _EYEWEAR["label"] = label
         _EYEWEAR["color"] = color or frame_color(rgba)
         _EYEWEAR["lens_centers"] = lens_centers_norm(rgba)   # for pupil registration
