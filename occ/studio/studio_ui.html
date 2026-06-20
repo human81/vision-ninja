@@ -569,6 +569,8 @@
             <button onclick="vTryOn()" class=accentbtn id=tryonbtn title="Try it on me">✨</button>
             <input type=file id=garmentfile accept="image/*" style=display:none>
             <span id=tryonstatus class=muted style=font-size:10px></span>
+            <button onclick="vFlagTryon()" id=flagbtn title="🚩 DEV: flag this try-on — capture the face frame + every pipeline stage into the Try-on Lab dataset">🚩</button>
+            <a href="/eyewear/lab" target=_blank class=sponsor title="Open the Try-on Lab (pipeline dashboard + bad-case dataset)">🔬 Lab</a>
             <span style=flex:1></span>
             <a id=sponsor class=sponsor target=_blank></a>
           </div>
@@ -1327,7 +1329,7 @@ function vStore(name){document.querySelectorAll('.storebtn').forEach(b=>b.classL
 /* ONE unified try-on: glasses → Gemini canonical + live AR; garments → generative */
 async function vTryItem(i){
   const g=CATALOG[STORE]&&CATALOG[STORE].items[i];if(!g)return;$('garmenturl').value=g.img;
-  if(STORE==='eyewear')vTryEyewear(g.img,g.title); else vTryOnWith(g.img,g.title);
+  if(STORE==='eyewear')vTryEyewear(g.img,g.title,g.ar); else vTryOnWith(g.img,g.title);
 }
 /* premium processing loader on the main canvas (shared by tap + agent), with a
    rotating status so it always feels like the app/agent is working */
@@ -1361,9 +1363,10 @@ function vHideFilm(){$('filmloader').classList.remove('on');clearInterval(_filmR
 const _PREFETCHED=new Set();
 function vPrefetch(url){ if(!url||_PREFETCHED.has(url))return; _PREFETCHED.add(url);
   fetch('/eyewear/prefetch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:url})}).catch(()=>{}); }
-async function vTryEyewear(url,label){
+async function vTryEyewear(url,label,ar){
   vShowFitting('Tailoring '+(label?label.split(/[·,]/)[0].trim():'your frames'),'fitting them to your face…');
   setCanvas('live');
+  window.__curEyewear={img:url,title:label||'',ar:!!ar,brand:(SPONSORS.eyewear&&SPONSORS.eyewear.name)||'Ralba Optical'};
   try{
     const r=await fetch('/eyewear/try',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({image:url,label:label||''})}).then(r=>r.json());
@@ -1371,6 +1374,20 @@ async function vTryEyewear(url,label){
     else toast('eyewear: '+(r.error||'failed'));
   }catch(e){toast('eyewear try-on failed');}
   vHideFitting();
+}
+/* DEV: flag the current try-on → capture face + every pipeline stage into the Lab dataset */
+async function vFlagTryon(){
+  const e=window.__curEyewear;
+  const note=prompt("🚩 Flag this try-on for the dataset.\nWhat looks wrong? (e.g. 'left lens too dark', 'frame too wide', 'shifted left')","");
+  if(note===null) return;            // cancelled
+  const btn=$('flagbtn'); if(btn){btn.disabled=true;btn.textContent='⏳';}
+  try{
+    const r=await fetch('/eyewear/flag',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({src:e&&e.img,title:e&&e.title,brand:e&&e.brand,ar:e&&e.ar,note})}).then(r=>r.json());
+    if(r.status==='success') toast('🚩 flagged ✓ ('+r.count+' in dataset) — open 🔬 Lab');
+    else toast('flag: '+(r.error||'failed'));
+  }catch(err){toast('flag failed');}
+  if(btn){btn.disabled=false;btn.textContent='🚩';}
 }
 /* the agent (stylist) found products → reveal the try-on picker + show them */
 const SPONSORS={apparel:{name:'Mode Marco',url:'https://modemarco.ca'},
@@ -1393,7 +1410,7 @@ function showCatalog(d){
        <div class=gt>${(g.title||'').slice(0,18)}</div><div class=gp>${g.price?'$'+g.price:'try on'}</div></div>`).join('');
 }
 function vTryMatch(i){const m=window.__matches;if(!m||!m.items[i])return;const g=m.items[i];$('garmenturl').value=g.img;
-  if(m.store==='eyewear')vTryEyewear(g.img,g.title); else vTryOnWith(g.img,g.title);
+  if(m.store==='eyewear')vTryEyewear(g.img,g.title,g.ar); else vTryOnWith(g.img,g.title);
 }
 function vUpload(){$('garmentfile').click();}
 $('garmentfile').addEventListener('change',async(e)=>{

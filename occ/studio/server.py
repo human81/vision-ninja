@@ -197,6 +197,97 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
             _aio.get_event_loop().run_in_executor(None, prefetch_eyewear, img)
         return JSONResponse({"status": "queued"})
 
+    # ---------- Try-on Lab: flag bad try-ons, inspect the pipeline frame-by-frame ----------
+    @app.post("/eyewear/flag")
+    async def eyewear_flag(req: Request):
+        """DEV: capture the current live try-on (face frame + every pipeline stage) into the
+        bad-case dataset. Body: {note, title, brand, src?}. src falls back to the live pair."""
+        import asyncio as _aio
+        from . import eyewear_lab
+        from .face_filters import _EYEWEAR
+        b = await req.json()
+        src = b.get("src") or _EYEWEAR.get("src")
+        if not src:
+            return JSONResponse({"status": "error", "error": "try a pair on first"}, status_code=400)
+        clean = pipe.snapshot_clean(); vis = pipe.snapshot_vis()
+        title = b.get("title") or _EYEWEAR.get("label") or ""
+        has_3d = bool(b.get("ar") or b.get("has_3d"))
+        try:
+            fid = await _aio.get_event_loop().run_in_executor(
+                None, lambda: eyewear_lab.save_flag(src, title=title, brand=b.get("brand", ""),
+                                                    note=b.get("note", ""), clean_bgr=clean,
+                                                    vis_bgr=vis, has_3d=has_3d))
+        except Exception as e:
+            return JSONResponse({"status": "error", "error": f"{type(e).__name__}: {e}"}, status_code=500)
+        return JSONResponse({"status": "success", "id": fid,
+                             "count": len(eyewear_lab.list_flags()), "lab": "/eyewear/lab"})
+
+    @app.get("/eyewear/flags")
+    def eyewear_flags():
+        from . import eyewear_lab
+        return JSONResponse({"flags": eyewear_lab.list_flags()})
+
+    @app.post("/eyewear/flag/delete")
+    async def eyewear_flag_delete(req: Request):
+        from . import eyewear_lab
+        b = await req.json()
+        return JSONResponse({"deleted": eyewear_lab.delete_flag(b.get("id", ""))})
+
+    @app.get("/eyewear/lab/img/{fid}/{fn}")
+    def eyewear_lab_img(fid: str, fn: str):
+        from . import eyewear_lab
+        p = eyewear_lab.flag_image_path(fid, fn)
+        if not p:
+            return Response(status_code=404)
+        return FileResponse(p, media_type="image/png")
+
+    @app.get("/eyewear/lab/report/{fid}")
+    def eyewear_lab_report(fid: str):
+        """The coding-assistant REPORT.md for a flag, as raw markdown."""
+        from . import eyewear_lab
+        p = eyewear_lab.flag_image_path(fid, "REPORT.md")
+        if not p:
+            return Response(status_code=404)
+        return Response(open(p).read(), media_type="text/markdown; charset=utf-8")
+
+    @app.post("/eyewear/inspect")
+    async def eyewear_inspect(req: Request):
+        """CASCADE analysis: run the asset pipeline on a candidate image (upload/URL) WITHOUT
+        saving and return every stage (base64) + stats — so you can see how a new image flows
+        through before committing to it."""
+        import asyncio as _aio
+        from . import eyewear_lab
+        b = await req.json()
+        img = b.get("image") or b.get("url") or ""
+        if not img:
+            return JSONResponse({"status": "error", "error": "no image"}, status_code=400)
+        res = await _aio.get_event_loop().run_in_executor(None, eyewear_lab.inspect_candidate, img)
+        return JSONResponse({"status": "success", **res})
+
+    @app.post("/eyewear/refix")
+    async def eyewear_refix(req: Request):
+        """FIX THE IMAGE: force a fresh Nano Banana Pro canonical render for a product and
+        re-apply it live (requires an API key). Returns whether a new canonical was produced."""
+        import asyncio as _aio
+        from . import eyewear_lab
+        from .face_filters import _EYEWEAR
+        b = await req.json()
+        src = b.get("src") or b.get("image") or _EYEWEAR.get("src")
+        if not src:
+            return JSONResponse({"status": "error", "error": "no source"}, status_code=400)
+        ok = await _aio.get_event_loop().run_in_executor(None, eyewear_lab.regenerate_canonical, src)
+        if ok and b.get("apply", True):
+            from .tools import try_eyewear
+            await _aio.get_event_loop().run_in_executor(
+                None, lambda: try_eyewear(image=src, label=b.get("title", "")))
+        return JSONResponse({"status": "success" if ok else "error",
+                             "regenerated": ok,
+                             "error": None if ok else "no API key / generation failed"})
+
+    @app.get("/eyewear/lab", response_class=HTMLResponse)
+    def eyewear_lab_page():
+        return (Path(__file__).with_name("eyewear_lab.html")).read_text()
+
     @app.post("/tryon")
     async def tryon_route(req: Request):
         """Garment virtual try-on on the live frame (you). garment = URL / data URI."""

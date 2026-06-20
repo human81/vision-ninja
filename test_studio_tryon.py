@@ -310,6 +310,58 @@ def offline():
                   f"matrix roll={np.degrees(pr[2]):.1f}° geom roll={ff[0].roll:.1f}°")
             check("3D matrix: pitch now available (was 0 before)", "pitch" in dir(ff[0]))
 
+    # --- TRY-ON LAB: pipeline introspection + bad-case dataset (dev feature) ---
+    import os as _os, hashlib as _hl
+    from occ.studio.face_filters import lens_classification
+    from occ.studio import eyewear_lab as _lab
+    from occ.studio.tools import _CANON_DIR, _CANON_VER
+    # classification mirrors clean_lenses: the clear synthetic 'gl' → see-through decision
+    _lc = lens_classification(gl)
+    _glm = np.zeros(gl.shape[:2], bool)
+    for _it, _c in _lens_regions(gl)[0]:
+        _glm |= _it
+    check("lab: lens_classification mirrors clean_lenses (clear → see-through)",
+          "clear" in _lc["decision"] and _glm.any()
+          and float(clean_lenses(gl)[:, :, 3][_glm].mean()) < 110, _lc["decision"])
+    # introspect_asset on a local synthetic (pre-seed the canonical cache → no API, offline)
+    _p = "out/_labtest_glasses.png"; cv2.imwrite(_p, gl)
+    _ck = _hl.md5((_p + "|" + _CANON_VER).encode()).hexdigest()
+    _os.makedirs(_CANON_DIR, exist_ok=True)
+    _cp = _os.path.join(_CANON_DIR, _ck + ".png"); open(_cp, "wb").write(open(_p, "rb").read())
+    _imgs, _stats = _lab.introspect_asset(_p)
+    check("lab: introspect_asset produces the core pipeline stages",
+          all(k in _imgs for k in ("00_raw", "03_cutout", "04_armless",
+                                   "05_lens_regions", "06_clean_lenses")),
+          f"got {sorted(_imgs)}")
+    check("lab: stage 05 carries the lens classification stats",
+          "decision" in _stats.get("05_lens_regions", {}) and
+          "lens_mean_alpha" in _stats.get("06_clean_lenses", {}))
+    # source-image quality assessor flags an obvious problem (tiny, busy image)
+    _badimg = np.random.randint(0, 255, (120, 120, 3), np.uint8)
+    _qi = _lab.assess_source_image(_badimg)
+    check("lab: assess_source_image flags a poor photo (low-res/busy)", len(_qi) >= 1, f"{_qi}")
+    # candidate CASCADE (inspect a new image without saving → base64 stages, for 'what if')
+    _cand = _lab.inspect_candidate(_p)
+    check("lab: inspect_candidate returns the cascade (base64 stages + issues)",
+          len(_cand["stages"]) >= 5 and _cand["stages"][0]["png"].startswith("data:image/png;base64,"))
+    # save → list → (live stages) → REPORT.md → delete roundtrip
+    _fid = _lab.save_flag(_p, title="labtest", note="unit", clean_bgr=face.copy(),
+                          vis_bgr=face.copy(), has_3d=True)
+    _fl = _lab.list_flags(); _m = next((x for x in _fl if x["id"] == _fid), None)
+    check("lab: save_flag → list_flags roundtrip writes the dataset entry",
+          _m is not None and len(_m["stages"]) >= 6 and _m.get("has_3d") is True)
+    if ff:                                            # the test face is detectable → live stages
+        check("lab: live face stages captured (landmarks + registration)",
+              any(s["key"] in ("08_landmarks", "09_registration") for s in _m["stages"]))
+    _report = open(_os.path.join(_lab.FLAGS_DIR, _fid, "REPORT.md")).read()
+    check("lab: REPORT.md brief written with all sections (assistant + 3 fix paths)",
+          all(s in _report for s in ("Where to look", "Upload a better source image",
+                                     "Fix the image automatically", "Use the 3D model",
+                                     "Reproduce offline")))
+    check("lab: delete_flag removes the entry",
+          _lab.delete_flag(_fid) and not any(x["id"] == _fid for x in _lab.list_flags()))
+    _os.remove(_p); _os.remove(_cp)
+
     det = sv.Detections.empty()
     set_current_eyewear(get_asset("sunglasses"), "test")   # so 'eyewear' has a product
     REACTIVE = {"heart_eyes"}
@@ -528,6 +580,39 @@ def online():
     check("GET /garments", _get("/garments")["sponsor"]["name"] == "Mode Marco")
     ec = _get("/eyewear")
     check("GET /eyewear", ec["sponsor"]["name"] == "Ralba Optical" and len(ec["eyewear"]) > 300)
+
+    # Try-on Lab: page renders, flag captures the pipeline, dataset + image serving work
+    import urllib.error
+    lab_html = urllib.request.urlopen(STUDIO_URL + "/eyewear/lab", timeout=8).read().decode()
+    check("GET /eyewear/lab renders the dashboard",
+          "Try-on Lab" in lab_html and "pipeline" in lab_html.lower())
+    try:                                              # flag with no pair set → guarded 400
+        _post("/eyewear/flag", {"note": "x"}); guard_ok = True   # (a pair may already be set)
+    except urllib.error.HTTPError as e:
+        guard_ok = e.code == 400
+    check("POST /eyewear/flag guards 'try a pair on first'", guard_ok)
+    _eimg = next(g for g in ec["eyewear"] if g.get("img"))["img"]
+    _post("/eyewear/try", {"image": _eimg, "label": "labtest"})   # no API needed (falls back to raw)
+    fr = _post("/eyewear/flag", {"note": "online regression"})
+    check("POST /eyewear/flag captures the pipeline into the dataset",
+          fr.get("status") == "success" and fr.get("id"))
+    _fid = fr.get("id")
+    _fm = next((x for x in _get("/eyewear/flags")["flags"] if x["id"] == _fid), None)
+    check("GET /eyewear/flags lists the flag with its stages",
+          _fm is not None and len(_fm["stages"]) >= 6)
+    _code = urllib.request.urlopen(
+        STUDIO_URL + f"/eyewear/lab/img/{_fid}/06_clean_lenses.png", timeout=8).getcode()
+    check("GET /eyewear/lab/img serves a stage PNG", _code == 200)
+    _rep = urllib.request.urlopen(STUDIO_URL + f"/eyewear/lab/report/{_fid}", timeout=8).read().decode()
+    check("GET /eyewear/lab/report serves the coding-assistant brief",
+          "How to resolve" in _rep and "Use the 3D model" in _rep)
+    _casc = _post("/eyewear/inspect", {"image": _eimg})
+    check("POST /eyewear/inspect returns the candidate cascade",
+          _casc.get("status") == "success" and len(_casc.get("stages", [])) >= 5
+          and _casc["stages"][0]["png"].startswith("data:image"))
+    _post("/eyewear/flag/delete", {"id": _fid})
+    check("POST /eyewear/flag/delete removes it",
+          not any(x["id"] == _fid for x in _get("/eyewear/flags")["flags"]))
 
     # apply a face filter via the endpoint, confirm it's active
     r = _post("/filter", {"name": "ninja_mask"})

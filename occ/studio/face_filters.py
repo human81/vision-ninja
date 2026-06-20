@@ -451,6 +451,41 @@ def clean_lenses(rgba, tint=None, opacity=None):
     return rgba
 
 
+def lens_classification(rgba):
+    """READ-ONLY introspection for the Try-on Lab: per-lens classification stats and the
+    final reconstruction decision, mirroring clean_lenses PASS-1 (kept in lock-step so the
+    dashboard reflects what actually happens). Returns a dict — never mutates `rgba`."""
+    regions, holes = _lens_regions(rgba)
+    bgr = rgba[:, :, :3]
+    hsv0 = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    lenses, clear_votes, tint_cols = [], 0, []
+    for interior, c in regions:
+        frac_hole = float((holes[interior] > 0).mean())
+        hv = hsv0[:, :, 2][interior].astype(np.float32)
+        sv = hsv0[:, :, 1][interior].astype(np.float32)
+        clear_frac = float(((hv > 150) & (sv < 60)).mean())
+        is_clear = bool(frac_hole > 0.55 or clear_frac > 0.42)
+        med = np.median(bgr[interior].reshape(-1, 3), 0)
+        if is_clear:
+            clear_votes += 1
+        else:
+            px = bgr[interior].reshape(-1, 3).astype(np.float32)
+            tinted = (hv <= 170) | (sv >= 55)
+            tint_cols.append(np.median(px[tinted] if int(tinted.sum()) > 30 else px, 0))
+        lenses.append({"center": [round(c[0], 1), round(c[1], 1)],
+                       "clear_frac": round(clear_frac, 3), "frac_hole": round(frac_hole, 3),
+                       "is_clear": is_clear, "median_bgr": [int(x) for x in med],
+                       "area_px": int(interior.sum())})
+    if not regions:
+        decision, fill = "none (fallback glassify)", [60, 46, 36]
+    elif clear_votes >= len(regions):
+        decision, fill = "clear pair → uniform see-through glass", [60, 46, 36]
+    else:
+        decision = "tinted pair → one flat colour both lenses"
+        fill = [int(x) for x in (np.median(np.stack(tint_cols), 0) if tint_cols else [60, 46, 36])]
+    return {"regions": len(regions), "decision": decision, "fill_bgr": fill, "lenses": lenses}
+
+
 def remove_arms(rgba):
     """Mask a front-on glasses cutout down to JUST the two lens discs + the bridge
     between them — dropping temple arms/hinge stubs entirely (they look unnatural
@@ -571,7 +606,7 @@ def glassify(rgba, tint=None, opacity=None):
 # ---- live eyewear try-on: warp the actual selected product onto the face ----
 import threading as _threading  # noqa: E402
 _EYEWEAR = {"rgba": None, "armless": None, "label": "", "color": (45, 45, 45),
-            "tint": None, "opacity": None}
+            "tint": None, "opacity": None, "src": None}
 _EYEWEAR_LOCK = _threading.Lock()
 
 
@@ -714,14 +749,16 @@ def load_eyewear_rgba(raw: bytes):
     return rgba
 
 
-def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None):
+def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None, src=None):
     """`rgba` is the ARMLESS front (remove_arms output). We store it so the lenses
     can be re-tinted live, and paint the lenses now via clean_lenses(tint, opacity).
-    Pass None to clear the current eyewear."""
+    `src` = the product image URL/path it came from (so the Try-on Lab can re-run the
+    full pipeline). Pass None to clear the current eyewear."""
     if rgba is None:
         with _EYEWEAR_LOCK:
-            _EYEWEAR.update({"rgba": None, "armless": None, "label": "", "reflection": None,
-                             "refl_layer": None, "refl_video": None, "refl_shading": None})
+            _EYEWEAR.update({"rgba": None, "armless": None, "label": "", "src": None,
+                             "reflection": None, "refl_layer": None, "refl_video": None,
+                             "refl_shading": None})
         return
     regions, _ = _lens_regions(rgba)
     lm = np.zeros(rgba.shape[:2], np.uint8)
@@ -736,6 +773,7 @@ def set_current_eyewear(rgba, label="", color=None, tint=None, opacity=None):
         _EYEWEAR["color"] = color or frame_color(rgba)
         _EYEWEAR["lens_centers"] = lens_centers_norm(rgba)   # for pupil registration
         _EYEWEAR["lensmask"] = lm                            # exact glass region (asset space)
+        _EYEWEAR["src"] = src                                # product URL (Try-on Lab re-runs the pipeline)
         _EYEWEAR["reflection"] = None                        # a new pair starts with NO reflection
         _EYEWEAR["refl_layer"] = None
         _EYEWEAR["refl_video"] = None; _EYEWEAR["refl_shading"] = None

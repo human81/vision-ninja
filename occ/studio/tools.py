@@ -615,7 +615,7 @@ def try_eyewear(image: str = "", label: str = "") -> dict:
     if rgba is None:
         return {"status": "error", "error": "could not load eyewear image", "ui": "overlays"}
     from .face_filters import set_current_eyewear
-    set_current_eyewear(rgba, label or "eyewear", color=color)
+    set_current_eyewear(rgba, label or "eyewear", color=color, src=image)
     try:
         ctx().overlays.clear()
         ctx().overlays.add_builtin("eyewear")

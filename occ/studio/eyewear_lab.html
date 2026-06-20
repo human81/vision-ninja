@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Try-on Lab · Vision Ninja</title>
+<style>
+  :root{
+    --bg:#0d0f14; --panel:#151823; --panel2:#1b1f2e; --line:#262b3b;
+    --txt:#e7ecf5; --dim:#9aa3b8; --accent:#6ee7b7; --accent2:#7aa2ff; --bad:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:14px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(13,15,20,.92);backdrop-filter:blur(8px);z-index:5}
+  header h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px}
+  header .tag{font-size:11px;color:var(--dim);border:1px solid var(--line);padding:2px 8px;border-radius:20px}
+  header .sp{flex:1}
+  a{color:var(--accent2);text-decoration:none}
+  button{font:inherit;color:var(--txt);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer}
+  button:hover{border-color:var(--accent2)}
+  button.danger:hover{border-color:var(--bad);color:var(--bad)}
+  .wrap{display:grid;grid-template-columns:300px 1fr;height:calc(100vh - 53px)}
+  .side{border-right:1px solid var(--line);overflow:auto;padding:10px}
+  .side h2{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);margin:8px 6px}
+  .flag{display:flex;gap:10px;padding:8px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer;background:var(--panel)}
+  .flag:hover{border-color:var(--accent2)}
+  .flag.sel{border-color:var(--accent);background:var(--panel2)}
+  .flag img{width:64px;height:48px;object-fit:cover;border-radius:6px;background:#000;flex:none}
+  .flag .t{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .flag .m{color:var(--dim);font-size:11px}
+  .flag .n{color:var(--accent);font-size:11px;margin-top:2px}
+  .main{overflow:auto;padding:20px}
+  .empty{color:var(--dim);text-align:center;margin-top:18vh}
+  .hero{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:8px}
+  .hero figure{margin:0}
+  .hero img{width:100%;border-radius:12px;border:1px solid var(--line);background:#000}
+  .hero figcaption{color:var(--dim);font-size:12px;margin-top:6px}
+  .note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:10px 14px;margin:14px 0}
+  .note .lbl{color:var(--accent);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+  .meta-row{display:flex;gap:18px;flex-wrap:wrap;color:var(--dim);font-size:12px;margin-bottom:10px}
+  .meta-row b{color:var(--txt);font-weight:600}
+  h3.sec{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);margin:22px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .pipe{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+  .card .ph{position:relative;background:#0a0c11}
+  .card .ph img{width:100%;display:block}
+  .card .num{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.7);color:var(--accent);font-weight:700;font-size:11px;padding:2px 7px;border-radius:6px;letter-spacing:.5px}
+  .card .ms{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.7);color:var(--dim);font-size:10px;padding:2px 6px;border-radius:6px}
+  .card .body{padding:10px 12px}
+  .card .ttl{font-weight:650;font-size:13px}
+  .card .dsc{color:var(--dim);font-size:12px;margin-top:3px}
+  .stats{margin-top:8px;font-size:11.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .stats .kv{display:flex;justify-content:space-between;gap:8px;border-top:1px dashed var(--line);padding:3px 0;color:var(--dim)}
+  .stats .kv b{color:var(--txt);font-weight:600}
+  .chip{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:5px;margin-right:4px}
+  .chip.clear{background:#10381f;color:#6ee7b7}
+  .chip.tint{background:#11264a;color:#7aa2ff}
+  .legend{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-top:24px;color:var(--dim);font-size:12.5px}
+  .legend b{color:var(--txt)} .legend code{color:var(--accent);background:#0a0c11;padding:1px 5px;border-radius:5px}
+  .swatch{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px;margin-right:4px}
+  .resolve{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:4px 0}
+  .rcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column}
+  .rcard h4{margin:0 0 4px;font-size:13px}
+  .rcard .hint{color:var(--dim);font-size:11.5px;margin-bottom:6px}
+  .rcard ul{margin:4px 0;padding-left:15px;color:var(--dim);font-size:11px}
+  .rcard .iss{color:#ffc7c7;font-size:11.5px;margin:2px 0}
+  .rcard input[type=text]{width:100%;background:#0a0c11;border:1px solid var(--line);color:var(--txt);border-radius:7px;padding:6px 8px;margin:4px 0;font:inherit}
+  .rcard .row{display:flex;gap:6px;margin-top:auto}
+  .rcard .row button{flex:1}
+  .badge3d{display:inline-block;font-size:10px;font-weight:700;padding:1px 7px;border-radius:5px}
+  .badge3d.yes{background:#10381f;color:#6ee7b7} .badge3d.no{background:#2a2030;color:#b89}
+  .cascade{margin:14px 0}
+  .cascade .strip{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px}
+  .cascade .st{flex:none;width:190px}
+  .cascade .st img{width:100%;border-radius:8px;border:1px solid var(--line);background:#000}
+  .cascade .st .c{font-size:10.5px;color:var(--dim);margin-top:4px}
+  .cascade .st .c b{color:var(--accent)}
+  #modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;z-index:30}
+  #modal.show{display:flex}
+  #modal .box{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(860px,93vw);max-height:88vh;display:flex;flex-direction:column}
+  #modal .hd{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:650}
+  #modal .hd .sp{flex:1}
+  #modal textarea{flex:1;border:0;background:#0a0c11;color:var(--txt);font:12px/1.55 ui-monospace,Menlo,monospace;padding:16px;resize:none;border-radius:0 0 14px 14px;min-height:54vh;white-space:pre}
+</style>
+</head>
+<body>
+<header>
+  <h1>🔬 Try-on Lab</h1>
+  <span class="tag" id="count">0 flagged</span>
+  <span class="sp"></span>
+  <button onclick="load()">↻ Refresh</button>
+  <a href="/" target="_blank">← Studio</a>
+</header>
+<div class="wrap">
+  <div class="side">
+    <h2>Flagged try-ons</h2>
+    <div id="list"></div>
+  </div>
+  <div class="main" id="main">
+    <div class="empty" id="empty">
+      <p>No flags yet.</p>
+      <p>In the studio, try on a pair and hit <b>🚩 Flag try-on</b> to capture it here.</p>
+    </div>
+  </div>
+</div>
+<div id="modal" onclick="if(event.target.id==='modal')closeModal()">
+  <div class="box">
+    <div class="hd">📋 Fix brief — for a coding assistant<span class="sp"></span>
+      <button onclick="copyBrief()">Copy</button><button onclick="closeModal()">Close</button></div>
+    <textarea id="mdbox" readonly></textarea>
+  </div>
+</div>
+<script>
+let FLAGS=[], SEL=null, CUR=null;
+const imgURL=(id,fn)=>`/eyewear/lab/img/${id}/${fn}`;
+
+async function load(){
+  const r=await fetch('/eyewear/flags'); const j=await r.json();
+  FLAGS=j.flags||[];
+  document.getElementById('count').textContent=`${FLAGS.length} flagged`;
+  renderList();
+  if(FLAGS.length){ select(FLAGS.find(f=>f.id===SEL)?SEL:FLAGS[0].id); }
+  else { document.getElementById('main').innerHTML='<div class="empty"><p>No flags yet.</p><p>In the studio, try on a pair and hit <b>🚩 Flag try-on</b> to capture it here.</p></div>'; }
+}
+function renderList(){
+  document.getElementById('list').innerHTML=FLAGS.map(f=>`
+    <div class="flag ${f.id===SEL?'sel':''}" onclick="select('${f.id}')">
+      <img src="${imgURL(f.id,f.thumb||'10_final.png')}" onerror="this.style.visibility='hidden'">
+      <div style="min-width:0">
+        <div class="t">${esc(f.title||f.src.split('/').pop())}</div>
+        <div class="m">${esc(f.brand||'')} · ${f.ts.replace('T',' ')}</div>
+        ${f.note?`<div class="n">🚩 ${esc(f.note)}</div>`:''}
+      </div>
+    </div>`).join('');
+}
+function select(id){
+  SEL=id; renderList();
+  const f=FLAGS.find(x=>x.id===id); if(!f) return;
+  const final=f.stages.find(s=>s.key==='10_final'), raw=f.stages.find(s=>s.key==='00_raw');
+  const main=document.getElementById('main');
+  main.innerHTML=`
+    <div class="hero">
+      <figure><img src="${imgURL(id, raw?raw.file:'00_raw.png')}"><figcaption>Original product photo</figcaption></figure>
+      <figure><img src="${imgURL(id, final?final.file:(f.thumb||'06_clean_lenses.png'))}"><figcaption>On your face — the flagged result</figcaption></figure>
+    </div>
+    ${f.note?`<div class="note"><div class="lbl">Your note</div>${esc(f.note)}</div>`:''}
+    <div class="meta-row">
+      <span><b>${esc(f.title||'—')}</b></span>
+      ${f.brand?`<span>brand <b>${esc(f.brand)}</b></span>`:''}
+      <span>captured <b>${f.ts.replace('T',' ')}</b></span>
+      <span style="word-break:break-all">src <a href="${esc(f.src)}" target="_blank">${esc(short(f.src))}</a></span>
+      <span>3D model <span class="badge3d ${f.has_3d?'yes':'no'}">${f.has_3d?'available':'none'}</span></span>
+      <span style="flex:1"></span>
+      <button onclick="openBrief('${id}')">📋 Fix brief (.md)</button>
+      <button class="danger" onclick="del('${id}')">Delete</button>
+    </div>
+    <h3 class="sec">Resolve this try-on — three paths</h3>
+    ${resolve(f)}
+    <div class="cascade" id="cascade"></div>
+    <h3 class="sec">The pipeline, frame by frame</h3>
+    <div class="pipe">${f.stages.map(card).join('')}</div>
+    ${legend()}
+  `;
+  CUR=f;
+}
+function resolve(f){
+  const iss=(f.source_issues||[]);
+  return `<div class="resolve">
+    <div class="rcard">
+      <h4>📸 Upload a better image</h4>
+      <div class="hint">A bad try-on often starts with a bad source photo. Test how a new image
+        <b>cascades</b> through the whole pipeline before committing.</div>
+      ${iss.length?`<div style="margin:2px 0 6px">${iss.map(i=>`<div class="iss">⚠ ${esc(i.issue)} — ${esc(i.advice)}</div>`).join('')}</div>`:'<div class="hint">No obvious issues auto-detected in this photo.</div>'}
+      <input type="text" id="candurl" placeholder="paste a new image URL…">
+      <div class="row">
+        <button onclick="pickFile()">📎 File</button>
+        <button onclick="runCascade(document.getElementById('candurl').value)">▶ Analyze cascade</button>
+      </div>
+      <input type="file" id="candfile" accept="image/*" style="display:none">
+    </div>
+    <div class="rcard">
+      <h4>🪄 Fix the image automatically</h4>
+      <div class="hint">Re-render the canonical front-on asset with <b>Nano Banana Pro</b> — cleans up an
+        angled or messy photo, then re-applies it live. (Needs an API key.)</div>
+      <ul><li>Forces a fresh <code>_canonical_eyewear</code> render (bypasses the cache).</li>
+          <li>Or bump <code>_CANON_VER</code> / strengthen the prompt in <code>tools.py</code>.</li></ul>
+      <div class="row"><button onclick="fixImage('${esc(f.src)}')">🪄 Fix image &amp; re-apply</button></div>
+    </div>
+    <div class="rcard">
+      <h4>🧊 Use the 3D model</h4>
+      <div class="hint">For frames the 2D warp can't nail, the <b>.glb</b> 3D model is the robust path.</div>
+      ${f.has_3d
+        ? `<ul><li>This frame <b>has</b> a 3D model (<code>ar: true</code>).</li>
+             <li>Pull the glb via <code>scripts/fetch_ralba.py</code> (<code>product_tryon_3d_image</code>).</li>
+             <li>Pose it with the head matrix (<code>Face.matrix</code> in <code>facemesh.py</code>).</li></ul>`
+        : `<ul><li>No 3D model for this frame (<code>ar: false</code>).</li><li>Use path 1 or 2.</li></ul>`}
+      <div class="row"><button onclick="applyLive('${esc(f.src)}')">↻ Re-apply live</button></div>
+    </div>
+  </div>`;
+}
+function pickFile(){const el=document.getElementById('candfile');el.onchange=async e=>{
+  const file=e.target.files[0];if(!file)return;
+  const dataURL=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(file);});
+  runCascade(dataURL);};el.click();}
+async function runCascade(image){
+  if(!image){toast('paste an image URL or pick a file');return;}
+  const box=document.getElementById('cascade');
+  box.innerHTML='<div class="hint" style="color:var(--dim)">⏳ running the pipeline on the candidate image…</div>';
+  try{
+    const r=await fetch('/eyewear/inspect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image})}).then(r=>r.json());
+    if(r.status!=='success'||!r.stages){box.innerHTML='<div class="iss">cascade failed: '+esc(r.error||'')+'</div>';return;}
+    const iss=(r.source_issues||[]).map(i=>`<div class="iss">⚠ ${esc(i.issue)} — ${esc(i.advice)}</div>`).join('');
+    box.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+        <b>Candidate cascade</b>
+        <button onclick="applyLive(${JSON.stringify(image).replace(/"/g,'&quot;')})">✓ Use this image live</button>
+        <span style="flex:1"></span></div>${iss}
+      <div class="strip">${r.stages.map(s=>`<div class="st">
+        <img src="${s.png}"><div class="c"><b>${s.key.split('_')[0]}</b> ${esc(s.title.split('(')[0].split('—')[0].trim())}${s.stats&&s.stats.decision?'<br>'+esc(s.stats.decision):''}</div></div>`).join('')}</div>`;
+  }catch(e){box.innerHTML='<div class="iss">cascade error</div>';}
+}
+async function fixImage(src){
+  toast('🪄 re-rendering canonical (Nano Banana Pro)…');
+  try{const r=await fetch('/eyewear/refix',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({src,apply:true})}).then(r=>r.json());
+    toast(r.regenerated?'🪄 image fixed & re-applied live — flag again to compare':'fix: '+(r.error||'failed'));
+  }catch(e){toast('fix failed');}
+}
+async function applyLive(src){
+  try{await fetch('/eyewear/try',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:src,label:(CUR&&CUR.title)||''})});
+    toast('↻ applied live — switch to the studio tab to see it on your face');
+  }catch(e){toast('apply failed');}
+}
+async function openBrief(id){
+  try{const md=await fetch('/eyewear/lab/report/'+id).then(r=>r.text());
+    document.getElementById('mdbox').value=md;document.getElementById('modal').classList.add('show');
+    window.__md=md;
+  }catch(e){toast('could not load the brief');}
+}
+function copyBrief(){navigator.clipboard.writeText(window.__md||'').then(()=>toast('📋 fix brief copied — paste it to a coding assistant'));}
+function closeModal(){document.getElementById('modal').classList.remove('show');}
+function toast(m){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';t.style.cssText='position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#17202e;border:1px solid var(--line);padding:8px 16px;border-radius:10px;z-index:40';document.body.appendChild(t);}t.textContent=m;t.style.opacity=1;clearTimeout(t._h);t._h=setTimeout(()=>t.style.opacity=0,3200);}
+function card(s){
+  return `<div class="card">
+    <div class="ph"><span class="num">${s.key.split('_')[0]}</span>
+      ${s.ms!=null?`<span class="ms">${s.ms} ms</span>`:''}
+      <img src="${imgURL(SEL,s.file)}" loading="lazy"></div>
+    <div class="body">
+      <div class="ttl">${esc(s.title)}</div>
+      <div class="dsc">${esc(s.desc)}</div>
+      ${stats(s.stats)}
+    </div></div>`;
+}
+function stats(st){
+  if(!st||!Object.keys(st).length) return '';
+  // special-case the lens classification (stage 05)
+  if(st.lenses){
+    let h=`<div class="stats"><div class="kv"><span>decision</span><b>${esc(st.decision)}</b></div>`;
+    if(st.fill_bgr) h+=`<div class="kv"><span>fill</span><b><span class="swatch" style="background:rgb(${st.fill_bgr[2]},${st.fill_bgr[1]},${st.fill_bgr[0]})"></span>BGR ${st.fill_bgr.join(',')}</b></div>`;
+    st.lenses.forEach((l,i)=>{ h+=`<div class="kv"><span>lens ${i+1}</span><b><span class="chip ${l.is_clear?'clear':'tint'}">${l.is_clear?'CLEAR':'TINT'}</span>clear_frac ${l.clear_frac} · hole ${l.frac_hole}</b></div>`; });
+    return h+'</div>';
+  }
+  return '<div class="stats">'+Object.entries(st).map(([k,v])=>
+    `<div class="kv"><span>${esc(k)}</span><b>${esc(typeof v==='object'?JSON.stringify(v):v)}</b></div>`).join('')+'</div>';
+}
+function legend(){
+  return `<div class="legend">
+    <b>How a pair becomes a live try-on.</b> The asset stages (00–07) run once per product and are cached;
+    the live stages (08–10) run every frame on your face.<br><br>
+    <b>00→01</b> <code>Nano Banana Pro</code> normalizes the catalog photo into a clean, symmetric, arms-removed front-on render.
+    <b>02→03</b> <code>rembg · U²-Net/ISNet</code> mattes the glasses off the background.
+    <b>04</b> <code>remove_arms</code> keeps just the rims + bridge.
+    <b>05</b> <code>_lens_regions</code> isolates each lens and classifies it
+    <span class="chip clear">CLEAR</span>/<span class="chip tint">TINT</span> — most bugs start here.
+    <b>06</b> <code>clean_lenses</code> reconstructs both lenses as one uniform surface (no baked reflections).
+    <b>07→09</b> <code>lens_centers_norm</code> + <code>_eyewear_quad</code> register the asset's lens centres onto your pupils.
+    <b>10</b> the warped result. If a try-on looks wrong, find the first stage that already looks wrong — that's the culprit.
+  </div>`;
+}
+async function del(id){
+  if(!confirm('Delete this flagged try-on from the dataset?')) return;
+  await fetch('/eyewear/flag/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+  if(SEL===id) SEL=null; load();
+}
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const short=s=>{s=String(s);return s.length>60?s.slice(0,30)+'…'+s.slice(-26):s;};
+load();
+</script>
+</body>
+</html>
