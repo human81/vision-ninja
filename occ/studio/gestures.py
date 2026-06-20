@@ -266,6 +266,28 @@ class GestureBrowser:
     def goto(self, query: str) -> dict:    # back-compat alias
         return self.search(query)
 
+    def set_current(self, img: str = "", store: str | None = None) -> dict:
+        """Move the browse cursor to the item with this image — e.g. the user clicked a tile
+        in the catalogue strip. Switches store and drops any search filter only if needed, so
+        gesture Prev/Next continues from the clicked item and the rails stay in sync with the
+        strip."""
+        if not img:
+            return self.state()
+
+        def _find():
+            for j, it in enumerate(self.items):
+                if it.get("img") == img:
+                    return j
+            return -1
+        j = _find()
+        if j < 0 and store in ("eyewear", "apparel"):
+            self.store = store; self.query = ""; self._load(); j = _find()
+        if j < 0 and self.query:
+            self.query = ""; self._load(); j = _find()
+        if j >= 0:
+            self.idx = j
+        return self.state()
+
     def step(self, d: int):
         if not self.items:
             return

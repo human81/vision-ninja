@@ -145,6 +145,15 @@ class StudioPipeline:
             self.set_render_flags(draw_boxes=False, draw_labels=False, draw_counts=False)
         return st
 
+    def set_gesture_current(self, img="", store=None) -> dict:
+        """Move the browse cursor to a clicked item so the rails + strip stay in sync."""
+        return self.gestures.set_current(img, store)
+
+    def step_gesture(self, d: int) -> dict:
+        """Move the browse cursor by ±N (keyboard / UI Prev-Next), returning the new state."""
+        self.gestures.step(int(d))
+        return self.gestures.state()
+
     def start_camera(self) -> str:
         """Switch the live source to the browser push feed, remembering the prior
         source so stop_camera() can restore it. Detection/tracking/occupancy default

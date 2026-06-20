@@ -165,6 +165,26 @@
   .gcard .gt{font-size:8.5px;color:var(--fg);padding:4px 5px 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .gcard .gp{font-size:8.5px;color:#e7b24a;padding:0 5px 4px}
   .gcard.warming{outline:1px solid var(--cyan);outline-offset:-1px}
+  /* the item you're BROWSING (cursor) — cyan ring; the menu scrolls to keep it in view */
+  .gcard.browsing{border-color:var(--cyan);box-shadow:0 0 0 2px var(--cyan),0 6px 16px #0008;transform:translateY(-3px)}
+  /* the item you're WEARING — persistent gold ring + ✓ badge, so you always know */
+  .gcard.worn{border-color:#e7b24a;box-shadow:0 0 0 2px #e7b24a inset}
+  .gcard.worn::after{content:'✓ worn';position:absolute;top:4px;left:4px;background:#e7b24a;color:#1a1205;
+    font-size:8px;font-weight:700;padding:1px 5px;border-radius:6px;letter-spacing:.3px}
+  .gcard{position:relative}
+  /* persistent "Now wearing" chip pinned on the canvas — visible no matter what */
+  #nowwearing{position:absolute;left:12px;top:12px;z-index:7;display:none;align-items:center;gap:9px;
+    max-width:280px;padding:6px 10px 6px 6px;border-radius:12px;background:rgba(11,16,25,.82);
+    backdrop-filter:blur(8px);border:1px solid rgba(231,178,74,.5);box-shadow:0 6px 20px #0009}
+  #nowwearing.on{display:flex}
+  #nowwearing img{width:48px;height:34px;object-fit:contain;background:#0a1018;border-radius:7px;flex:none}
+  #nowwearing .nw-l{min-width:0}
+  #nowwearing .nw-k{font-size:9px;letter-spacing:.6px;text-transform:uppercase;color:#e7b24a;font-weight:700}
+  #nowwearing .nw-t{font-size:12.5px;color:#fff;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px}
+  #nowwearing .nw-b{font-size:10px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px}
+  #nowwearing .nw-x{margin-left:4px;width:22px;height:22px;border-radius:50%;border:1px solid var(--line);
+    background:rgba(255,255,255,.06);color:#cdd9ea;cursor:pointer;font-size:12px;line-height:1;flex:none}
+  #nowwearing .nw-x:hover{border-color:#ff7a7a;color:#ff7a7a}
   /* premium "processing" loader on the main canvas */
   #fitloader{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
     z-index:7;background:radial-gradient(130% 120% at 50% 38%,rgba(10,16,26,.45),rgba(3,6,11,.88));
@@ -529,6 +549,12 @@
           </div>
           <!-- 3-2-1 "strike a pose" countdown over the main canvas -->
           <div id=countdown></div>
+          <!-- persistent "Now wearing" chip — always shows what's on you -->
+          <div id=nowwearing onclick="if(event.target.className!=='nw-x')scrollToWorn()" title="Currently worn — click to find it in the menu">
+            <img id=nw-img onerror="this.style.visibility='hidden'">
+            <div class=nw-l><div class=nw-k>Now wearing</div><div class=nw-t id=nw-title>—</div><div class=nw-b id=nw-brand></div></div>
+            <button class=nw-x onclick="clearWorn(true)" title="Take them off (back to live)">✕</button>
+          </div>
           <button id=fillbtn class=cornicon onclick="toggleFill()" title="Fill / fit the canvas">⤢</button>
           <button id=volbtn class=cornicon onclick="toggleVolume()" title="Mute / unmute video audio" style="display:none;right:96px">🔇</button>
         </div>
@@ -900,7 +926,7 @@ function renderCode(overlays){let a=overlays||[];
   $('codepane').innerHTML=a.length?a.map(o=>
     `<div class="codecard ${o.error?'err':o.enabled?'live':''}"><div class=ch><span>${o.builtin?'⚙ ':'🥷 '}<b>${o.name}</b> · ${(o.intent||'').replace(/</g,'&lt;')}</span><span class=st>${o.enabled?'● live':'○ off'}</span></div><pre>${(o.code||'(no code)').replace(/</g,'&lt;')}</pre>${o.error?`<div class=er>${o.error.replace(/</g,'&lt;')}</div>`:''}</div>`
   ).join(''):'<div class=muted style=font-size:11px>No overlays yet — ask the ninja for a visual and its OpenCV code appears here as it draws.</div>';}
-window.clearAllOv=async()=>{await fetch('/overlays/clear',{method:'POST'});pollOverlays();toast('overlays cleared');};
+window.clearAllOv=async()=>{await fetch('/overlays/clear',{method:'POST'});pollOverlays();toast('overlays cleared');if(typeof WORN!=='undefined'&&WORN){WORN=null;renderNowWearing();markStrip();}};
 window.toggleOv=async(n,on)=>{await fetch('/overlays/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,on})});pollOverlays();};
 window.rmOv=async(n)=>{await fetch('/overlays/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});pollOverlays();};
 
@@ -1235,6 +1261,12 @@ function gRenderRails(g){
   $('ghint-status').textContent=st;
   gRenderPiP(g);                                   // icon buttons + cursor on the self-view
   gCountdown(g.countdown||0);                      // big 3-2-1 over the canvas
+  // SYNC the bottom catalogue strip to the browse cursor — Prev/Next scrolls the GUI to it
+  if(c.img&&c.img!==BROWSE_IMG)setBrowse(c.img,{scroll:true});      // server is the source → no echo back
+  const wm=(g.banner||'').match(/^Wearing (.+)$/);                  // a gesture try-on just landed
+  if(wm){const it=(g.window||[]).find(x=>x.title===wm[1])||(c.title===wm[1]?c:null);
+    if(it&&(!WORN||WORN.img!==it.img))setWorn({img:it.img,title:it.title,brand:it.brand,price:it.price,store:'eyewear'});}
+  if(/^Cleared/.test(g.banner||'')&&WORN)clearWorn(false);
   $('gfilm').innerHTML=(g.window||[]).map(it=>
     `<div class="gcardf${it.current?' cur':''}">`+
     (it.img?`<img src="${it.img}" loading=lazy onerror="this.style.visibility='hidden'">`
@@ -1319,16 +1351,65 @@ function gSetCat(c){GCAT=c;renderCats();renderItems();}
 function renderItems(){
   const wrap=$('garments'),cat=CATALOG[STORE];if(!wrap||!cat)return;
   const items=cat.items.map((g,i)=>[g,i]).filter(([g])=>GCAT==='all'||g.cat===GCAT||(GCAT==='ar'&&g.ar)||g.shape===GCAT).slice(0,150);
-  wrap.innerHTML=items.map(([g,i])=>
-    `<div class=gcard onclick="vTryItem(${i})" ${STORE==='eyewear'?`onmouseenter="vPrefetch('${g.img}')"`:''} title="${(g.title||'').replace(/"/g,'&quot;')}${g.price?' · $'+g.price:''}">
+  wrap.innerHTML=items.map(([g,i])=>{
+    const worn=WORN&&WORN.img===g.img, browsing=BROWSE_IMG===g.img;
+    return `<div class="gcard${worn?' worn':''}${browsing?' browsing':''}" data-img="${(g.img||'').replace(/"/g,'&quot;')}" onclick="vTryItem(${i})" ${STORE==='eyewear'?`onmouseenter="vPrefetch('${g.img}')"`:''} title="${(g.title||'').replace(/"/g,'&quot;')}${g.price?' · $'+g.price:''}">
        <img loading=lazy src="${g.img}${g.img.includes('?')?'&':'?'}width=180" onerror="this.style.opacity=.2">
-       <div class=gt>${(g.title||'').slice(0,18)}</div><div class=gp>${g.price?'$'+g.price:'try on'}</div></div>`).join('');
+       <div class=gt>${(g.title||'').slice(0,18)}</div><div class=gp>${g.price?'$'+g.price:'try on'}</div></div>`;}).join('');
+  if(BROWSE_IMG&&scrollToTile(BROWSE_IMG)) ; else if(WORN) scrollToTile(WORN.img);   // keep the current item in view
 }
+/* ---------- selection state: BROWSING (cursor) vs WEARING (applied) ----------
+   Two distinct things kept in sync everywhere (bottom strip, top-left rail, the
+   persistent "Now wearing" chip), driven from any source — tile click, hand control,
+   keyboard, or the agent. The horizontal menu always scrolls to the current item. */
+let WORN=null, BROWSE_IMG=null;
+function tileFor(img){return [...document.querySelectorAll('#garments .gcard')].find(c=>c.getAttribute('data-img')===img)||null;}
+function scrollToTile(img){const t=img&&tileFor(img);if(t){t.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});return true;}return false;}
+function markStrip(){document.querySelectorAll('#garments .gcard').forEach(c=>{const im=c.getAttribute('data-img');
+  c.classList.toggle('worn',!!(WORN&&WORN.img===im));c.classList.toggle('browsing',BROWSE_IMG===im);});}
+function renderNowWearing(){
+  const el=$('nowwearing');if(!el)return;
+  if(WORN&&WORN.img){
+    const im=$('nw-img');im.src=WORN.img+(WORN.img.includes('?')?'&':'?')+'width=120';im.style.visibility='visible';
+    $('nw-title').textContent=WORN.title||'eyewear';
+    $('nw-brand').textContent=[WORN.brand,WORN.price?('$'+WORN.price):''].filter(Boolean).join(' · ');
+    el.classList.add('on');
+  }else el.classList.remove('on');
+}
+function setWorn(it){
+  if(!it||!it.img)return;
+  WORN={img:it.img,title:it.title||'',brand:it.brand||'',price:it.price||'',store:it.store||STORE};
+  renderNowWearing();markStrip();
+}
+function clearWorn(goLive){
+  WORN=null;renderNowWearing();markStrip();
+  if(goLive){try{clearAllOv();}catch(e){} if(typeof setCanvas==='function')setCanvas('live');}
+}
+function scrollToWorn(){if(WORN)setBrowse(WORN.img,{scroll:true});}
+function setBrowse(img,opt){
+  opt=opt||{};if(!img)return;BROWSE_IMG=img;markStrip();
+  if(opt.scroll!==false&&!scrollToTile(img)&&GCAT!=='all'){GCAT='all';renderCats();renderItems();}  // not in this filter → widen + re-find
+  if(opt.sync)fetch('/gesture/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({img,store:STORE})}).catch(()=>{});
+}
+/* keyboard browse: ← → move the cursor through the menu (scrolls the GUI), ⏎ tries it on */
+document.addEventListener('keydown',e=>{
+  if($('tryonbar')&&$('tryonbar').style.display==='none')return;
+  if(/INPUT|TEXTAREA|SELECT/.test((e.target&&e.target.tagName)||''))return;
+  const cards=[...document.querySelectorAll('#garments .gcard')];if(!cards.length)return;
+  if(e.key==='ArrowRight'||e.key==='ArrowLeft'){
+    e.preventDefault();let idx=cards.findIndex(c=>c.getAttribute('data-img')===BROWSE_IMG);
+    if(idx<0)idx=e.key==='ArrowRight'?-1:cards.length;
+    idx=Math.max(0,Math.min(cards.length-1,idx+(e.key==='ArrowRight'?1:-1)));
+    setBrowse(cards[idx].getAttribute('data-img'),{scroll:true,sync:true});
+  }else if(e.key==='Enter'&&BROWSE_IMG){const c=tileFor(BROWSE_IMG);if(c){e.preventDefault();c.click();}}
+});
 function vStore(name){document.querySelectorAll('.storebtn').forEach(b=>b.classList.toggle('on',b.id==='store-'+name));
   loadStore(name);}
 /* ONE unified try-on: glasses → Gemini canonical + live AR; garments → generative */
 async function vTryItem(i){
   const g=CATALOG[STORE]&&CATALOG[STORE].items[i];if(!g)return;$('garmenturl').value=g.img;
+  setBrowse(g.img,{scroll:true,sync:true});                         // move the cursor to it everywhere
+  setWorn({img:g.img,title:g.title,brand:g.brand,price:g.price,store:STORE});
   if(STORE==='eyewear')vTryEyewear(g.img,g.title,g.ar); else vTryOnWith(g.img,g.title);
 }
 /* premium processing loader on the main canvas (shared by tap + agent), with a
@@ -1367,11 +1448,12 @@ async function vTryEyewear(url,label,ar){
   vShowFitting('Tailoring '+(label?label.split(/[·,]/)[0].trim():'your frames'),'fitting them to your face…');
   setCanvas('live');
   window.__curEyewear={img:url,title:label||'',ar:!!ar,brand:(SPONSORS.eyewear&&SPONSORS.eyewear.name)||'Ralba Optical'};
+  setWorn({img:url,title:label||'',ar:!!ar,brand:(SPONSORS.eyewear&&SPONSORS.eyewear.name)||'Ralba Optical',store:'eyewear'});
   try{
     const r=await fetch('/eyewear/try',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({image:url,label:label||''})}).then(r=>r.json());
     if(r.status==='success'){toast('👓 '+(label||'eyewear')+(r.fitted?' — tailored':''));pollOverlays();}
-    else toast('eyewear: '+(r.error||'failed'));
+    else{toast('eyewear: '+(r.error||'failed'));}
   }catch(e){toast('eyewear try-on failed');}
   vHideFitting();
 }
@@ -1410,6 +1492,8 @@ function showCatalog(d){
        <div class=gt>${(g.title||'').slice(0,18)}</div><div class=gp>${g.price?'$'+g.price:'try on'}</div></div>`).join('');
 }
 function vTryMatch(i){const m=window.__matches;if(!m||!m.items[i])return;const g=m.items[i];$('garmenturl').value=g.img;
+  setBrowse(g.img,{scroll:true,sync:true});
+  setWorn({img:g.img,title:g.title,brand:g.brand,price:g.price,store:m.store});
   if(m.store==='eyewear')vTryEyewear(g.img,g.title,g.ar); else vTryOnWith(g.img,g.title);
 }
 function vUpload(){$('garmentfile').click();}

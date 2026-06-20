@@ -133,6 +133,19 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         """Live browse state for the canvas side-rails (polled fast while active)."""
         return JSONResponse(pipe.gestures.state())
 
+    @app.post("/gesture/select")
+    async def gesture_select(req: Request):
+        """Move the browse cursor to a clicked catalogue item (img) so the rails + the
+        bottom strip stay in sync. Optional `store` switches stores if needed."""
+        b = await req.json()
+        return JSONResponse(pipe.set_gesture_current(b.get("img", ""), b.get("store") or None))
+
+    @app.post("/gesture/step")
+    async def gesture_step(req: Request):
+        """Move the browse cursor by ±N (keyboard / UI Prev-Next)."""
+        b = await req.json()
+        return JSONResponse(pipe.step_gesture(int(b.get("d", 1))))
+
     @app.post("/filter")
     async def filter_route(req: Request):
         """Apply an AR face filter directly (UI chip; the agent can also do this)."""
