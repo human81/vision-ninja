@@ -67,6 +67,12 @@ seg = [
 voice = [
     "faster-whisper>=1.0",
 ]
+# Local MEDICAL-image model (google/medgemma-4b-it via transformers/MPS). torch +
+# transformers are already core; this adds the loader deps.
+med = [
+    "accelerate>=1.0",
+    "pillow>=10.0",
+]
 # Build-time only (proto compilation).
 build = [
     "grpcio-tools>=1.66",

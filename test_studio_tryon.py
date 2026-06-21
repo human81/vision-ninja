@@ -703,6 +703,16 @@ def offline():
         if _pe is None: os.environ.pop("STUDIO_LOCAL_ENDPOINT", None)
         else: os.environ["STUDIO_LOCAL_ENDPOINT"] = _pe
 
+    # ---- LOCAL MEDICAL vision: MedGemma 4B (on-device transformers/MPS, $0) ----
+    from occ.studio import medgemma as _MG
+    check("medgemma: routes only medical models (medgemma-* yes; gemma/gemini no)",
+          _MG.is_medgemma("medgemma-4b-it") and not _MG.is_medgemma("gemma-4-12b-it")
+          and not _MG.is_medgemma("gemini-2.5-flash"))
+    check("medgemma: selectable in the Vision dropdown", "medgemma-4b-it" in MODEL_OPTIONS["vision"])
+    check("medgemma: priced at $0 (on-device)", usd_micros_for("medgemma-4b-it", 50000, 50000) == 0)
+    check("medgemma: describe('') is graceful and does NOT trigger a model load",
+          _MG.describe(b"") == "")
+
 
 # ----------------------------- ONLINE -----------------------------
 def _get(path):

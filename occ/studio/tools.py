@@ -777,6 +777,20 @@ def describe_image(question: str = "", which: str = "frame", image: str = "") ->
     q = question or ("Describe this image in 1-2 sentences. Note notable objects, "
                      "any text, colors, and activity.")
     model = ctx().settings.model_for("vision")
+    from . import medgemma as _MG
+    if _MG.is_medgemma(model):                            # MEDICAL images → MedGemma 4B (MPS, $0)
+        if _MG.available():
+            text = _MG.describe(jpg, question) or "(no findings)"
+            ctx().ledger.record("agent_brain", model=model, input_tokens=300,
+                                output_tokens=120, label="vision·medgemma")
+        else:
+            text = ("MedGemma isn't ready — accept the license at "
+                    "huggingface.co/google/medgemma-4b-it, run `hf auth login`, and "
+                    "install the [med] extra. First use downloads ~8GB.")
+        if ctx().brain:
+            ctx().brain.remember("last_look", text[:160])
+        return _lib({"status": "success", "kind": "image", "output": out, "text": text,
+                     "caption": text[:140]}, tags=["vision", "medical"], source=which)
     from . import local_llm as _L
     if _L.is_local_model(model) and _L.health():          # LOCAL Gemma vision ($0, offline)
         try:

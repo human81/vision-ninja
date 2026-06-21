@@ -42,7 +42,8 @@ MODEL_OPTIONS = {
     # offline. Picking one here routes the agent/vision to the local endpoint (see local_llm).
     "agent": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash",
               "gemini-2.5-flash-lite", "gemma-4-12b-it", "gemma-4-e2b-it"],
-    "vision": ["gemini-2.5-flash", "gemini-2.5-pro", "gemma-4-12b-it"],
+    # medgemma-4b-it = on-device MEDICAL-image model (transformers/MPS, $0); see medgemma.py.
+    "vision": ["gemini-2.5-flash", "gemini-2.5-pro", "gemma-4-12b-it", "medgemma-4b-it"],
     "image_edit": ["gemini-2.5-flash-image", "gemini-3.1-flash-image"],
     # Nano Banana Pro (gemini-3-pro-image) + Nano Banana 2 (gemini-3.1-flash-image), both GA.
     "image_pro": ["gemini-3-pro-image", "gemini-3-pro-image-preview",
