@@ -37,6 +37,94 @@ def is_medgemma(model) -> bool:
     return bool(model) and "medgemma" in str(model).lower()
 
 
+# The out-of-box "powers" surfaced in the Medical dashboard (key → (label, prompt)).
+# vqa uses the user's own question; the rest are one-tap presets.
+TASKS = {
+    "findings": ("🩻 Findings",
+                 "Describe the salient findings in this medical image. Note the imaging "
+                 "modality and anatomy if identifiable."),
+    "report": ("📋 Structured report",
+               "Write a structured radiology-style report with two sections: FINDINGS "
+               "(systematic) and IMPRESSION (concise)."),
+    "modality": ("🔬 Modality & anatomy",
+                 "Identify the imaging modality, the body region / anatomy, and the view "
+                 "or projection if applicable."),
+    "abnormal": ("⚠️ Abnormalities",
+                 "Are there any abnormalities? List each one with its approximate "
+                 "location, or state clearly if the image appears within normal limits."),
+    "differential": ("🧠 Differential",
+                     "Give a brief, cautious differential — what could explain these "
+                     "findings? Rank the most likely first."),
+    "measure": ("📐 Quantify",
+                "Note any measurable or gradable features (sizes, ratios, severity "
+                "grades) that are visible, with the usual caveats."),
+    "vqa": ("💬 Ask a question", ""),
+}
+
+# one-click EXAMPLE images per sub-expertise (public-domain, resolved from Wikimedia
+# Commons + cached on disk) — so each power is obvious with real medical imagery.
+EXAMPLE_QUERIES = {
+    "cxr": ("🫁 Chest X-ray", "chest radiograph"),
+    "ct": ("🧠 Brain CT/MRI", "computed tomography brain"),
+    "derm": ("🩹 Skin lesion", "melanoma skin lesion"),
+    "fundus": ("👁 Retina (fundus)", "fundus photograph retina"),
+    "histo": ("🧫 Histopathology", "histopathology micrograph"),
+}
+_EX_DIR = "out/studio/medical_examples"
+
+
+def example_image(key: str):
+    """Public-domain example image for a sub-expertise (Commons search → cached jpg bytes)."""
+    import urllib.parse
+    import urllib.request
+    import json as _json
+    q = EXAMPLE_QUERIES.get(key)
+    if not q:
+        return None
+    os.makedirs(_EX_DIR, exist_ok=True)
+    cache = os.path.join(_EX_DIR, key + ".jpg")
+    if os.path.exists(cache) and os.path.getsize(cache) > 1000:
+        return open(cache, "rb").read()
+    ua = {"User-Agent": "occ-studio-medgemma/1.0 (research; jeanlaboratories@gmail.com)"}
+    api = ("https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search"
+           "&gsrsearch=" + urllib.parse.quote(q[1]) + "&gsrnamespace=6&gsrlimit=10"
+           "&prop=imageinfo&iiprop=url|mime|size")
+    try:
+        j = _json.loads(urllib.request.urlopen(urllib.request.Request(api, headers=ua), timeout=20).read())
+        pages = [p for p in (j.get("query", {}).get("pages") or {}).values() if p.get("imageinfo")]
+        pages.sort(key=lambda p: p["imageinfo"][0].get("width", 0), reverse=True)
+        import cv2
+        import numpy as np
+        for p in pages:
+            ii = p["imageinfo"][0]
+            if ii.get("mime") not in ("image/jpeg", "image/png"):
+                continue
+            raw = urllib.request.urlopen(urllib.request.Request(ii["url"], headers=ua), timeout=30).read()
+            arr = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+            if arr is None:
+                continue
+            h, w = arr.shape[:2]
+            s = 1024 / max(h, w)
+            if s < 1:
+                arr = cv2.resize(arr, (int(w * s), int(h * s)))
+            jpg = cv2.imencode(".jpg", arr, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+            open(cache, "wb").write(jpg)
+            return jpg
+    except Exception:
+        return None
+    return None
+
+
+# specialty presets prime the question box for common domains
+SPECIALTIES = {
+    "cxr": ("🫁 Chest X-ray", "Read this chest radiograph."),
+    "derm": ("🩹 Dermatology", "Describe this skin lesion (morphology, colour, borders)."),
+    "fundus": ("👁 Retina / fundus", "Assess this fundus image for retinopathy features."),
+    "histo": ("🧫 Histopathology", "Describe this histopathology field (tissue, features)."),
+    "ct": ("🧠 CT / MRI", "Describe this cross-sectional (CT/MRI) slice."),
+}
+
+
 def _load():
     global _STATE
     with _LOCK:
@@ -49,7 +137,7 @@ def _load():
             dt = torch.bfloat16 if dev == "mps" else torch.float32
             proc = AutoProcessor.from_pretrained(model_id())
             model = AutoModelForImageTextToText.from_pretrained(
-                model_id(), torch_dtype=dt).to(dev).eval()
+                model_id(), dtype=dt).to(dev).eval()
             _STATE = (model, proc, dev)
         except Exception:
             _STATE = "off"
@@ -61,6 +149,59 @@ def available() -> bool:
     """True if MedGemma is loaded/loadable. NOTE: triggers the (cached) load + ~8GB
     download on first call — only call when the user actually selected it."""
     return _load() is not None
+
+
+def loaded() -> bool:
+    """Is the model resident in memory right now? Never triggers a load."""
+    return isinstance(_STATE, tuple)
+
+
+def _cached() -> bool:
+    """Are the weights already downloaded? (No load.)"""
+    try:
+        from huggingface_hub import constants
+        d = os.path.join(constants.HF_HUB_CACHE, "models--" + model_id().replace("/", "--"))
+        return os.path.isdir(d) and any(os.scandir(d))
+    except Exception:
+        return False
+
+
+def status() -> dict:
+    """Dashboard status WITHOUT forcing a load: loaded / ready (downloaded) /
+    needs-download / error, plus the task + specialty menus."""
+    try:
+        import torch  # noqa: F401
+        from transformers import AutoModelForImageTextToText  # noqa: F401
+        deps = True
+    except Exception:
+        deps = False
+    if loaded():
+        state = "loaded"
+    elif _STATE == "off":
+        state = "error"
+    elif not deps:
+        state = "needs-deps"
+    elif _cached():
+        state = "ready"
+    else:
+        state = "needs-download"
+    return {"model": model_id(), "state": state, "loaded": loaded(), "deps": deps,
+            "tasks": [{"key": k, "label": v[0]} for k, v in TASKS.items()],
+            "specialties": [{"key": k, "label": v[0], "hint": v[1]} for k, v in SPECIALTIES.items()],
+            "examples": [{"key": k, "label": v[0]} for k, v in EXAMPLE_QUERIES.items()]}
+
+
+def analyze(jpg: bytes, task: str = "findings", question: str = "") -> str:
+    """Run a preset 'power' (or a free-text question) on a medical image."""
+    label, preset = TASKS.get(task, TASKS["findings"])
+    q = question.strip()
+    if task == "vqa":
+        prompt = q or "What can you tell me about this medical image?"
+    elif q:
+        prompt = preset + " Also: " + q
+    else:
+        prompt = preset
+    return describe(jpg, prompt)
 
 
 def describe(jpg: bytes, prompt: str = "") -> str:

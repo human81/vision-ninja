@@ -1039,7 +1039,7 @@ async function pollModels(){try{let s=await(await fetch('/settings')).json();
     let os=(opts[t]||[cur[t]]).map(o=>{const loc=/gemma/i.test(o);   // gemma* + medgemma → local
       return `<option value="${o}" ${o===cur[t]?'selected':''}>${loc?(o+' · local · $0'):o}</option>`;}).join('');
     return `<div class=mrow><label>${TASK_LABEL[t]}</label><select data-task="${t}">${os}</select></div>`;
-  }).join('')+'<div class=muted style="font-size:10px;margin-top:6px">↳ Gemma 4 runs locally on this Mac via <code>litert-lm serve</code> (:9379) — $0, private, offline. Falls back to Gemini/sim if it’s not running.</div>';}catch(e){}}
+  }).join('')+'<div class=muted style="font-size:10px;margin-top:6px">↳ Gemma 4 runs locally on this Mac via <code>litert-lm serve</code> (:9379) — $0, private, offline. Falls back to Gemini/sim if it’s not running. · <a href="/medical" target=_blank>🩺 Medical dashboard (MedGemma)</a></div>';}catch(e){}}
 window.saveModels=async()=>{let models={};document.querySelectorAll('#models select').forEach(s=>models[s.dataset.task]=s.value);
   await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({models})});toast('model configuration saved');};
 const TASK_MODEL={detect:'yolo11n.pt',segment:'yolo11n-seg.pt',pose:'yolo11n-pose.pt',obb:'yolo11n-obb.pt',classify:'yolo11n-cls.pt'};

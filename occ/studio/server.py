@@ -332,6 +332,52 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     def eyewear_lab_page():
         return (Path(__file__).with_name("eyewear_lab.html")).read_text()
 
+    # ---------- Medical dashboard: MedGemma 4B (on-device, $0) ----------
+    @app.get("/medical", response_class=HTMLResponse)
+    def medical_page():
+        return (Path(__file__).with_name("medgemma_ui.html")).read_text()
+
+    @app.get("/medgemma/status")
+    def medgemma_status():
+        from . import medgemma as MG
+        return JSONResponse(MG.status())                  # never forces a load
+
+    @app.get("/medgemma/example/{key}")
+    async def medgemma_example(key: str):
+        """A public-domain example image for a sub-expertise (cached). For the dashboard."""
+        import asyncio as _aio
+        from . import medgemma as MG
+        jpg = await _aio.get_event_loop().run_in_executor(None, MG.example_image, key)
+        if not jpg:
+            return Response(status_code=404)
+        return Response(jpg, media_type="image/jpeg")
+
+    @app.post("/medgemma/analyze")
+    async def medgemma_analyze(req: Request):
+        """Run a MedGemma 'power' on an uploaded/URL image or the live frame. Body:
+        {image?, task, question?, which?}. The SAME engine the agent's medical_image tool uses."""
+        import asyncio as _aio
+        from . import medgemma as MG
+        from .tools import _frame_jpg, _save_png
+        b = await req.json()
+        jpg, frame = _frame_jpg(b.get("which", "frame"), b.get("image", ""))
+        if jpg is None:
+            return JSONResponse({"status": "error", "error": "no image"}, status_code=400)
+        if not await _aio.get_event_loop().run_in_executor(None, MG.available):
+            return JSONResponse({"status": "error", "state": MG.status()["state"],
+                "error": "MedGemma not ready — accept the license + install [med] (first use ~8GB)."},
+                status_code=503)
+        out = _save_png(frame, "medical")
+        text = await _aio.get_event_loop().run_in_executor(
+            None, lambda: MG.analyze(jpg, task=b.get("task", "findings"), question=b.get("question", "")))
+        try:
+            ctx().ledger.record("agent_brain", model="medgemma-4b-it",
+                                input_tokens=300, output_tokens=140, label="medical")
+        except Exception:
+            pass
+        return JSONResponse({"status": "success", "text": text, "image": "/download/" + Path(out).name,
+                             "disclaimer": "Decision-support only — not a diagnosis. Consult a clinician."})
+
     @app.post("/tryon")
     async def tryon_route(req: Request):
         """Garment virtual try-on on the live frame (you). garment = URL / data URI."""

@@ -712,6 +712,19 @@ def offline():
     check("medgemma: priced at $0 (on-device)", usd_micros_for("medgemma-4b-it", 50000, 50000) == 0)
     check("medgemma: describe('') is graceful and does NOT trigger a model load",
           _MG.describe(b"") == "")
+    # AGENTIC + unified: medical analysis is a TOOL the one agent (Gemma 4) calls
+    check("medgemma: agentic — medical_image is a registered tool",
+          "medical_image" in {f.__name__ for f in T.ALL_TOOLS})
+    check("medgemma: the local agent (Gemma 4) can call medical_image",
+          "medical_image" in _L.LOCAL_CORE_TOOLS)
+    _mst = _MG.status()
+    check("medgemma: status() reports state + powers + examples WITHOUT loading the model",
+          _mst.get("state") in ("loaded", "ready", "needs-download", "needs-deps", "error")
+          and len(_mst.get("tasks", [])) >= 5 and len(_mst.get("examples", [])) >= 4
+          and not _MG.loaded())
+    check("medgemma: per-expertise examples + task presets defined",
+          set(_MG.EXAMPLE_QUERIES) >= {"cxr", "derm", "fundus", "histo"}
+          and "report" in _MG.TASKS and "vqa" in _MG.TASKS)
 
 
 # ----------------------------- ONLINE -----------------------------
@@ -747,6 +760,15 @@ def online():
     lab_html = urllib.request.urlopen(STUDIO_URL + "/eyewear/lab", timeout=8).read().decode()
     check("GET /eyewear/lab renders the dashboard",
           "Try-on Lab" in lab_html and "pipeline" in lab_html.lower())
+    # MedGemma medical dashboard
+    med_html = urllib.request.urlopen(STUDIO_URL + "/medical", timeout=8).read().decode()
+    check("GET /medical renders the MedGemma dashboard",
+          "MedGemma" in med_html and "Decision-support" in med_html)
+    _ms = _get("/medgemma/status")
+    check("GET /medgemma/status (no forced load) lists model + powers + examples",
+          _ms.get("model") and len(_ms.get("tasks", [])) >= 5 and len(_ms.get("examples", [])) >= 4)
+    _excode = urllib.request.urlopen(STUDIO_URL + "/medgemma/example/cxr", timeout=25).getcode()
+    check("GET /medgemma/example serves a per-expertise sample image", _excode == 200)
     check("lab dashboard exposes the per-stage Nano Banana enhance button",
           "Nano Banana this step" in lab_html and "enhanceStage" in lab_html)
     for _ep in ("/eyewear/lab/enhance", "/eyewear/lab/apply"):  # guarded against missing args

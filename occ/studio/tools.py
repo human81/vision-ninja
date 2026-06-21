@@ -825,6 +825,35 @@ def describe_image(question: str = "", which: str = "frame", image: str = "") ->
                  "caption": text[:140]}, tags=["vision"], source=which)
 
 
+def medical_image(question: str = "", task: str = "findings", which: str = "frame",
+                  image: str = "") -> dict:
+    """MEDICAL image analysis with MedGemma 4B — on-device (Apple Silicon), $0, private.
+    Reads X-rays, CT/MRI slices, dermatology, fundus/retina and histopathology images:
+    findings, modality+anatomy, abnormalities, a structured report, or a free-text
+    question. Use for anything clinical/medical. DECISION-SUPPORT ONLY — never a diagnosis;
+    it defers to a qualified clinician. `task` ∈ findings|report|modality|abnormal|
+    differential|measure|vqa. `image` = data URI / path / URL, or which='frame'."""
+    jpg, frame = _frame_jpg(which, image)
+    if jpg is None:
+        return {"status": "error", "error": "no image to analyze", "ui": "medical"}
+    out = _save_png(frame, "medical")
+    from . import medgemma as MG
+    if not MG.available():
+        return {"status": "error", "ui": "medical",
+                "error": "MedGemma isn't ready — accept the license at "
+                         "huggingface.co/google/medgemma-4b-it, `hf auth login`, "
+                         "install the [med] extra (first use downloads ~8GB)."}
+    text = MG.analyze(jpg, task=task or "findings", question=question)
+    if ctx().brain:
+        ctx().brain.remember("last_medical", text[:160])
+    ctx().ledger.record("agent_brain", model="medgemma-4b-it", input_tokens=300,
+                        output_tokens=140, label="medical")
+    return _lib({"status": "success", "kind": "image", "output": out, "text": text,
+                 "caption": text[:140], "ui": "medical", "disclaimer":
+                 "Decision-support only — not a diagnosis. Consult a qualified clinician."},
+                tags=["vision", "medical"], source=which)
+
+
 def nano_banana(prompt: str, which: str = "frame", image: str = "") -> dict:
     """NANO-BANANA image edit: transform a frame with Gemini's image model — restyle,
     add/remove things, change time-of-day/weather, recolor. Works on the live frame
@@ -1661,7 +1690,7 @@ ALL_TOOLS = [
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays, go_live,
     apply_face_filter, try_eyewear, set_lens_tint, lens_reflection, lens_movie, shop_search, try_product, gesture_browse, live_control,
-    analyze_scene, analyze_image, describe_image, display_media, test_image,
+    analyze_scene, analyze_image, describe_image, medical_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, eyewear_film, extend_video, narrate, generate_music,
     search_library, list_library, show_media, save_to_library,
