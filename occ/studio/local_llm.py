@@ -37,8 +37,31 @@ def endpoint() -> str:
     return os.environ.get("STUDIO_LOCAL_ENDPOINT", "http://localhost:9379/v1").rstrip("/")
 
 
-def _model_id(model: str | None) -> str:
-    return os.environ.get("STUDIO_LOCAL_MODEL") or (model or "gemma-4-12b-it")
+_RESOLVED: dict = {}
+
+
+def _served_model(model: str | None) -> str:
+    """The exact model id to send. LiteRT-LM registers a base id plus a `<id>,gpu` variant;
+    the Gemma builds are GPU(Metal)-only on Apple Silicon, so we PREFER the `,gpu` variant
+    when the server advertises it. STUDIO_LOCAL_MODEL overrides this entirely. Cached per
+    (endpoint, base)."""
+    override = os.environ.get("STUDIO_LOCAL_MODEL")
+    if override:
+        return override
+    base = model or "gemma-4-12b-it"
+    key = (endpoint(), base)
+    if key in _RESOLVED:
+        return _RESOLVED[key]
+    pick = base
+    try:
+        ids = [d.get("id", "") for d in (_req("/models", timeout=3).get("data") or [])]
+        pick = (next((i for i in ids if i == base + ",gpu"), None)   # prefer GPU/Metal
+                or (base if base in ids else None)
+                or next((i for i in ids if i.startswith(base)), base))
+    except Exception:
+        pass
+    _RESOLVED[key] = pick
+    return pick
 
 
 def _req(path: str, payload=None, timeout=120):
@@ -65,7 +88,7 @@ def health(timeout: float = 2.0) -> bool:
 def chat(messages, tools=None, model=None, temperature: float = 0.4, timeout: int = 120) -> dict:
     """One OpenAI chat-completions call against the local server. Returns the raw JSON
     (choices[].message may carry .content and/or .tool_calls)."""
-    payload = {"model": _model_id(model), "messages": messages, "temperature": temperature}
+    payload = {"model": _served_model(model), "messages": messages, "temperature": temperature}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"

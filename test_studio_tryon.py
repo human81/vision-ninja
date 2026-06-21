@@ -614,8 +614,14 @@ def offline():
     _stg = StudioSettings(); _stg.models = dict(_stg.models); _stg.models["agent"] = "gemma-4-12b-it"
     check("gemma: StudioAgent.mode() → 'local' when Gemma is selected",
           _agent.StudioAgent(_stg).mode() == "local")
-    check("gemma: health() is False (graceful) when litert-lm serve isn't running",
+    _dead0 = os.environ.get("STUDIO_LOCAL_ENDPOINT")
+    os.environ["STUDIO_LOCAL_ENDPOINT"] = "http://127.0.0.1:9/v1"        # discard port — nothing listens
+    check("gemma: health() is False (graceful) when the local server isn't reachable",
           _L.health(timeout=1) is False)
+    if _dead0 is None:
+        os.environ.pop("STUDIO_LOCAL_ENDPOINT", None)
+    else:
+        os.environ["STUDIO_LOCAL_ENDPOINT"] = _dead0
     # mock the litert-lm OpenAI endpoint → prove the client does tool-calling + vision
     import http.server as _hs, threading as _th
     class _Mock(_hs.BaseHTTPRequestHandler):
