@@ -776,10 +776,22 @@ def describe_image(question: str = "", which: str = "frame", image: str = "") ->
     out = _save_png(frame, "look")
     q = question or ("Describe this image in 1-2 sentences. Note notable objects, "
                      "any text, colors, and activity.")
+    model = ctx().settings.model_for("vision")
+    from . import local_llm as _L
+    if _L.is_local_model(model) and _L.health():          # LOCAL Gemma vision ($0, offline)
+        try:
+            text = _L.vision_describe(jpg, q, model=model) or "(no description)"
+            ctx().ledger.record("agent_brain", model=model, input_tokens=320,
+                                output_tokens=90, label="vision·local")
+        except Exception as e:
+            text = f"(local vision error: {e})"
+        if ctx().brain:
+            ctx().brain.remember("last_look", text[:160])
+        return _lib({"status": "success", "kind": "image", "output": out, "text": text,
+                     "caption": text[:140]}, tags=["vision"], source=which)
     if _has_key():
         from . import genmedia
         try:
-            model = ctx().settings.model_for("vision")
             text, r = genmedia.describe(jpg, q, model=model)
             um = getattr(r, "usage_metadata", None)
             ctx().ledger.record("agent_brain", model=model,

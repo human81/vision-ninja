@@ -595,6 +595,62 @@ def offline():
     check("agent (no-key) routes 'show me X' → live_control search",
           any(a[0] == "live_control" and a[1].get("query") for a in acts), acts)
 
+    # ---- LOCAL GEMMA backend (LiteRT-LM) — cut cost by running the brain on this Mac ----
+    from occ.studio import local_llm as _L
+    from occ.studio.settings import MODEL_OPTIONS, StudioSettings
+    from occ.studio.neurons import usd_micros_for
+    check("gemma: selectable in the agent + vision dropdowns",
+          any("gemma" in m for m in MODEL_OPTIONS["agent"]) and
+          any("gemma" in m for m in MODEL_OPTIONS["vision"]))
+    check("gemma: routes to LOCAL (gemma-* → local endpoint, gemini → cloud)",
+          _L.is_local_model("gemma-4-12b-it") and not _L.is_local_model("gemini-2.5-flash"))
+    check("gemma: priced at $0 (runs locally)",
+          usd_micros_for("gemma-4-12b-it", 50000, 50000) == 0 and
+          usd_micros_for("gemini-2.5-flash", 50000, 50000) > 0)
+    _sch = _L.chat_tools_schema()
+    check("gemma: all tools exposed as OpenAI chat-completions function schemas",
+          len(_sch) > 30 and all(s.get("type") == "function" and s["function"].get("name")
+                                 and "parameters" in s["function"] for s in _sch))
+    _stg = StudioSettings(); _stg.models = dict(_stg.models); _stg.models["agent"] = "gemma-4-12b-it"
+    check("gemma: StudioAgent.mode() → 'local' when Gemma is selected",
+          _agent.StudioAgent(_stg).mode() == "local")
+    check("gemma: health() is False (graceful) when litert-lm serve isn't running",
+          _L.health(timeout=1) is False)
+    # mock the litert-lm OpenAI endpoint → prove the client does tool-calling + vision
+    import http.server as _hs, threading as _th
+    class _Mock(_hs.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def _send(self, obj):
+            b = json.dumps(obj).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.end_headers(); self.wfile.write(b)
+        def do_GET(self): self._send({"data": [{"id": "gemma-4-12b-it"}]})    # /models → health
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0)); body = json.loads(self.rfile.read(n) or b"{}")
+            if body.get("tools"):                                            # tool-calling round
+                msg = {"tool_calls": [{"id": "c1", "type": "function",
+                       "function": {"name": "live_control", "arguments": '{"action":"next"}'}}]}
+            else:
+                msg = {"content": "the road ahead"}                          # plain / vision round
+            self._send({"choices": [{"message": msg}], "usage": {"prompt_tokens": 5, "completion_tokens": 3}})
+    _srv = _hs.HTTPServer(("127.0.0.1", 0), _Mock); _port = _srv.server_address[1]
+    _th.Thread(target=_srv.serve_forever, daemon=True).start()
+    _prev = os.environ.get("STUDIO_LOCAL_ENDPOINT")
+    os.environ["STUDIO_LOCAL_ENDPOINT"] = f"http://127.0.0.1:{_port}/v1"
+    try:
+        check("gemma: health() detects a running litert-lm serve endpoint", _L.health(timeout=2))
+        _r = _L.chat([{"role": "user", "content": "next"}], tools=_sch, model="gemma-4-12b-it")
+        _tc = (_r["choices"][0]["message"].get("tool_calls") or [])
+        check("gemma: chat() drives tools via the OpenAI function API",
+              bool(_tc) and _tc[0]["function"]["name"] == "live_control")
+        _txt = _L.vision_describe(b"\xff\xd8\xff\xe0jpeg", "what is this?", model="gemma-4-12b-it")
+        check("gemma: vision_describe() returns text (multimodal, local)",
+              isinstance(_txt, str) and len(_txt) > 0, _txt)
+    finally:
+        _srv.shutdown()
+        if _prev is None: os.environ.pop("STUDIO_LOCAL_ENDPOINT", None)
+        else: os.environ["STUDIO_LOCAL_ENDPOINT"] = _prev
+
 
 # ----------------------------- ONLINE -----------------------------
 def _get(path):

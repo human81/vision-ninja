@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import json
 import os
 import re
 
@@ -749,13 +750,90 @@ class ADKRunner:
         yield {"type": "done", "data": {}}
 
 
+class LocalRunner:
+    """Drives the Ninja with a LOCAL Gemma model via the LiteRT-LM OpenAI endpoint
+    (litert-lm serve). Same tools, same NDJSON frames as ADK — but $0, private and
+    offline. Tool-calling uses the OpenAI chat-completions function API (LiteRT-LM
+    constrained decoding); the deterministic SimRunner stays as the safety net."""
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.history: list[dict] = []          # short rolling memory across turns
+
+    async def stream(self, message: str):
+        from . import local_llm as L
+        loop = asyncio.get_event_loop()
+        model = self.settings.model_for("agent")
+        brain = ctx().brain.prompt_context() if ctx().brain else ""
+        sys = SYSTEM_PROMPT.format(brain=brain)
+        msgs = ([{"role": "system", "content": sys}] + self.history
+                + [{"role": "user", "content": message}])
+        tools = L.chat_tools_schema()
+        streamed: list[str] = []
+        for _round in range(6):                # cap tool-call rounds per turn
+            try:
+                resp = await loop.run_in_executor(None, lambda: L.chat(msgs, tools=tools, model=model))
+            except Exception as e:
+                yield {"type": "log", "data": {"text": f"local brain error: {e}"}}
+                raise
+            msg = ((resp.get("choices") or [{}])[0]).get("message", {}) or {}
+            usage = resp.get("usage") or {}
+            if ctx().ledger:                   # local = $0; recorded for transparency
+                ctx().ledger.record("agent_brain", model=model,
+                                    input_tokens=int(usage.get("prompt_tokens", 0) or 0),
+                                    output_tokens=int(usage.get("completion_tokens", 0) or 0),
+                                    label="local turn")
+            tcs = msg.get("tool_calls") or []
+            if tcs:
+                msgs.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tcs})
+                for tc in tcs:
+                    fnc = tc.get("function", {}) or {}
+                    name = fnc.get("name", "")
+                    try:
+                        args = json.loads(fnc.get("arguments") or "{}")
+                    except Exception:
+                        args = {}
+                    if name not in T.TOOLS_BY_NAME:
+                        msgs.append({"role": "tool", "tool_call_id": tc.get("id", name),
+                                     "content": json.dumps({"status": "error", "error": "unknown tool"})})
+                        continue
+                    f = fitting_on(name)
+                    if f:
+                        yield f
+                    yield {"type": "log", "data": {"text": f"{name} …"}}
+                    try:
+                        res = await loop.run_in_executor(None, lambda: T.TOOLS_BY_NAME[name](**args))
+                    except Exception as e:
+                        res = {"status": "error", "error": f"{type(e).__name__}: {e}"}
+                    for fr in frames_for(name, res):
+                        yield fr
+                    msgs.append({"role": "tool", "tool_call_id": tc.get("id", name),
+                                 "content": json.dumps(res, default=str)[:4000]})
+                continue                        # let the model react to the tool results
+            text = msg.get("content") or ""
+            if text:
+                for chunk in re.findall(r"\S+\s*", text):
+                    streamed.append(chunk)
+                    yield {"type": "text_delta", "data": {"text": chunk}}
+            break
+        final = "".join(streamed)
+        self.history += [{"role": "user", "content": message}, {"role": "assistant", "content": final}]
+        self.history = self.history[-12:]
+        yield {"type": "final", "data": {"text": final}}
+        yield {"type": "done", "data": {}}
+
+
 class StudioAgent:
     def __init__(self, settings):
         self.settings = settings
         self._adk = None
+        self._local = None
         self._sim = SimRunner()
 
     def mode(self) -> str:
+        from . import local_llm as L
+        if L.is_local_model(self.settings.model_for("agent")):
+            return "local"
         if _HAS_KEY and self.settings.simulation != "zero":
             return "adk"
         return "sim"
@@ -787,7 +865,25 @@ class StudioAgent:
             task = message if not message.startswith("data:") else "[shared image]"
             ctx().brain.set_task(task[:200])
         self._maybe_clear_overlays(message)
-        if self.mode() == "adk":
+        m = self.mode()
+        if m == "local":
+            from . import local_llm as L
+            if L.health():
+                try:
+                    if self._local is None:
+                        self._local = LocalRunner(self.settings)
+                    async for f in self._local.stream(message):
+                        yield f
+                    return
+                except Exception as e:                 # local hiccup → graceful fallback
+                    yield {"type": "log", "data": {"text": f"local brain fell back: {e}"}}
+            else:
+                yield {"type": "log", "data": {"text":
+                    "Gemma is selected but the local server isn't running — start it with "
+                    "`litert-lm serve` (or pick a Gemini model). Using "
+                    + ("the cloud brain." if _HAS_KEY else "the offline sim brain.")}}
+            m = "adk" if (_HAS_KEY and self.settings.simulation != "zero") else "sim"
+        if m == "adk":
             try:
                 if self._adk is None:
                     self._adk = ADKRunner(self.settings)

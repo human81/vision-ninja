@@ -118,6 +118,9 @@ TOKEN_PRICES_USD = {
     "gemini-2.5-flash-lite": (0.10, 0.40),
     "gemini-2.5-pro": (1.25, 10.0),
     "gemini-2.0-flash": (0.15, 0.60),
+    # Gemma 4 runs LOCALLY (LiteRT-LM on Apple Silicon) → $0 marginal cost.
+    "gemma-4-12b-it": (0.0, 0.0),
+    "gemma-4-e2b-it": (0.0, 0.0),
 }
 
 
