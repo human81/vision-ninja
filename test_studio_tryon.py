@@ -657,6 +657,52 @@ def offline():
         if _prev is None: os.environ.pop("STUDIO_LOCAL_ENDPOINT", None)
         else: os.environ["STUDIO_LOCAL_ENDPOINT"] = _prev
 
+    # ---- FREE LOCAL VOICE (3rd Live backend): Whisper STT + local Gemma + OS TTS ----
+    from occ.studio import voice_local as VL
+    check("voice: VAD distinguishes speech from silence",
+          VL._rms((np.ones(1600) * 4000).astype(np.int16).tobytes()) > VL._SPEECH_RMS
+          and VL._rms(np.zeros(1600, np.int16).tobytes()) < VL._SPEECH_RMS)
+    check("voice: transcribe('') is graceful (no crash without audio)", VL.transcribe(b"") == "")
+    import http.server as _hs2, threading as _th2, asyncio as _aio2
+    class _Brain(_hs2.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def _s(self, o):
+            b = json.dumps(o).encode(); self.send_response(200)
+            self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(b)
+        def do_GET(self): self._s({"data": [{"id": "gemma-4-12b-it"}]})
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0)); body = json.loads(self.rfile.read(n) or b"{}")
+            if (body.get("messages") or [{}])[-1].get("role") == "tool":     # after the tool result → speak
+                msg = {"content": "Here's the next pair."}
+            else:                                                            # first → call a tool
+                msg = {"tool_calls": [{"id": "c1", "type": "function",
+                       "function": {"name": "live_control", "arguments": '{"action":"next"}'}}]}
+            self._s({"choices": [{"message": msg}], "usage": {"prompt_tokens": 4, "completion_tokens": 3}})
+    _bsrv = _hs2.HTTPServer(("127.0.0.1", 0), _Brain); _bport = _bsrv.server_address[1]
+    _th2.Thread(target=_bsrv.serve_forever, daemon=True).start()
+    _pe = os.environ.get("STUDIO_LOCAL_ENDPOINT"); os.environ["STUDIO_LOCAL_ENDPOINT"] = f"http://127.0.0.1:{_bport}/v1"
+    class _FakeWS:
+        def __init__(self, inbox): self.inbox = list(inbox); self.sent = []
+        async def send_text(self, s): self.sent.append(json.loads(s))
+        async def receive_text(self):
+            if self.inbox: return self.inbox.pop(0)
+            raise RuntimeError("closed")
+    try:
+        _ws = _FakeWS(['{"type":"text","text":"show me the next pair"}', '{"type":"end"}'])
+        _loop = _aio2.new_event_loop()
+        _loop.run_until_complete(VL.LocalVoiceBridge(StudioSettings()).run(_ws))
+        _loop.close()
+        _types = [f.get("type") for f in _ws.sent]
+        _utext = any(f.get("type") == "transcript" and f.get("role") == "user" for f in _ws.sent)
+        _tool = any(f.get("type") == "tool" and f.get("name") == "live_control" for f in _ws.sent)
+        _spoke = any(f.get("type") == "speak" and f.get("text") for f in _ws.sent)
+        check("voice: LocalVoiceBridge text turn → user transcript + tool dispatch + spoken reply",
+              _utext and _tool and _spoke and "turn_complete" in _types, _types)
+    finally:
+        _bsrv.shutdown()
+        if _pe is None: os.environ.pop("STUDIO_LOCAL_ENDPOINT", None)
+        else: os.environ["STUDIO_LOCAL_ENDPOINT"] = _pe
+
 
 # ----------------------------- ONLINE -----------------------------
 def _get(path):
@@ -853,9 +899,9 @@ def ui():
         ww = pg.eval_on_selector("#wrap", "e=>Math.round(e.getBoundingClientRect().width)")
         check("video fills the canvas width", iw >= ww - 2, f"img {iw}px / wrap {ww}px")
         # Live Voice backend selector (Gemini ↔ OpenAI Realtime for Creole)
-        check("voice backend selector present",
+        check("voice backend selector present (incl. free local)",
               pg.eval_on_selector_all("#vbackend option", "e=>e.map(o=>o.value).join(',')")
-              == "gemini,openai")
+              == "gemini,openai,local")
         check("gesture-browse button present", pg.is_visible("#vgest"))
         # Meet-style extras: fill-the-canvas toggle + self-view PiP
         pg.click("#fillbtn"); pg.wait_for_timeout(150)

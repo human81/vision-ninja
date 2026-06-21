@@ -628,7 +628,10 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     async def ws_live(ws: WebSocket):
         await ws.accept()
         backend = (ws.query_params.get("backend") or "gemini").lower()
-        if backend == "openai":
+        if backend == "local":
+            from .voice_local import LocalVoiceBridge       # $0 — whisper + local Gemma, no key
+            bridge = LocalVoiceBridge(settings)
+        elif backend == "openai":
             if not os.environ.get("OPENAI_API_KEY"):
                 await ws.send_text(json.dumps({"type": "error",
                     "message": "OpenAI Realtime needs OPENAI_API_KEY"}))

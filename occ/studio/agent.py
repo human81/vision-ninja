@@ -768,7 +768,7 @@ class LocalRunner:
         sys = SYSTEM_PROMPT.format(brain=brain)
         msgs = ([{"role": "system", "content": sys}] + self.history
                 + [{"role": "user", "content": message}])
-        tools = L.chat_tools_schema()
+        tools = L.chat_tools_schema(L._local_tool_names())   # curated core → fast on a local 12B
         streamed: list[str] = []
         for _round in range(6):                # cap tool-call rounds per turn
             try:

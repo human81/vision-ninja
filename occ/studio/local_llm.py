@@ -105,13 +105,37 @@ def vision_describe(image_jpg: bytes, prompt: str, model=None, timeout: int = 12
     return ((r.get("choices") or [{}])[0].get("message", {}).get("content") or "").strip()
 
 
-def chat_tools_schema() -> list[dict]:
-    """All studio tools as OpenAI chat-completions function schemas (reuses the realtime
-    schema builder, reshaped to the chat-completions `{type:function, function:{…}}`)."""
+# A curated CORE for the local model: sending all ~64 tool schemas to a 12B on every round
+# bloats the prompt and tanks latency. These cover the common voice/chat intents (browse,
+# try-on, filters, scene, overlays, a little media). Override/expand via STUDIO_LOCAL_TOOLS
+# (comma list, or "all"). The cloud backends still get the full set.
+LOCAL_CORE_TOOLS = {
+    "live_control", "gesture_browse", "shop_search", "try_eyewear", "try_product",
+    "virtual_try_on", "apply_face_filter", "analyze_scene", "describe_image",
+    "create_overlay", "clear_overlays", "set_render", "set_detection", "nano_banana",
+    "generate_video", "set_lens_tint", "snapshot", "go_live",
+    # NB: 'plan'/'narrate' deliberately excluded — they add a reasoning round (slow on a
+    # local 12B) without acting. The local model acts directly.
+}
+
+
+def _local_tool_names() -> set | None:
+    env = os.environ.get("STUDIO_LOCAL_TOOLS")
+    if env:
+        return None if env.strip().lower() == "all" else {t.strip() for t in env.split(",") if t.strip()}
+    return set(LOCAL_CORE_TOOLS)
+
+
+def chat_tools_schema(only=None) -> list[dict]:
+    """Studio tools as OpenAI chat-completions function schemas (reuses the realtime schema
+    builder, reshaped to `{type:function, function:{…}}`). `only` = a set of tool names to
+    include; None = all of them."""
     from . import tools as T
     from .live_openai import _tool_schema
     out = []
     for fn in T.ALL_TOOLS:
+        if only is not None and fn.__name__ not in only:
+            continue
         s = _tool_schema(fn)
         out.append({"type": "function", "function": {
             "name": s["name"], "description": s["description"], "parameters": s["parameters"]}})

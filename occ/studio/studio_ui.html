@@ -535,9 +535,10 @@
               <button id=vdetect class=vbtn onclick="vToggleDetect()" title="Detection · tracking · occupancy">🔎</button>
               <button id=vinfo class=vbtn onclick="vTogglePanel('ovpanel',this)" title="Overlays & settings">⚙</button>
               <span class=vsep></span>
-              <select id=vbackend onchange="vSetBackend(this.value)" title="Live Voice model — OpenAI is best at Haitian Creole">
+              <select id=vbackend onchange="vSetBackend(this.value)" title="Live Voice backend — Local runs free on this Mac (Whisper + Gemma)">
                 <option value=gemini>🜂 Gemini</option>
                 <option value=openai>🗣 Creole</option>
+                <option value=local>🦙 Local · $0</option>
               </select>
               <button id=vstop class="vbtn end" onclick="vStop()" title="End session">⏹</button>
             </div>
@@ -1050,7 +1051,8 @@ const VOICE={live:null,cam:null,actx:null,pctx:null,worklet:null,micStream:null,
   backend:'gemini',on:{mic:false,cam:false,screen:false}};
 function vSetBackend(be){
   VOICE.backend=be;
-  toast(be==='openai'?'Live Voice → OpenAI Realtime (Creole-strong)':'Live Voice → Gemini Live');
+  toast(be==='local'?'Live Voice → 🦙 Local (Whisper + Gemma) · $0 · needs litert-lm serve'
+        :be==='openai'?'Live Voice → OpenAI Realtime (Creole-strong)':'Live Voice → Gemini Live');
   // reconnect on the new backend if a session is live
   if(VOICE.live){try{VOICE.live.close();}catch(e){}VOICE.live=null;
     if(VOICE.on.mic||VOICE.on.cam||VOICE.on.screen)vEnsureLive().then(()=>vStatus('listening…','live'));}}
@@ -1075,6 +1077,7 @@ function vEnsureLive(){
 function vOnLive(m){const t=m.type;
   if(t==='ready')return;
   if(t==='audio'){vPlay(m.data);vStatus('speaking…','speaking');return;}
+  if(t==='speak'){vSpeak(m.text);return;}                       // 🦙 local backend → on-device TTS
   if(t==='transcript'){vTranscript(m.role,m.text);return;}
   if(t==='interrupted'){vStopPlayback();return;}
   if(t==='turn_complete'){VOICE.botMsg=null;VOICE.userMsg=null;if(VOICE.on.mic)vStatus('listening…','live');return;}
@@ -1109,6 +1112,15 @@ function vPlay(b64){
 }
 function vStopPlayback(){VOICE.srcs.forEach(n=>{try{n.stop();}catch(e){}});VOICE.srcs.clear();
   if(VOICE.pctx)VOICE.playHead=VOICE.pctx.currentTime;}
+/* 🦙 local backend: speak the reply with the OS voice (on-device, $0) */
+function vSpeak(text){
+  if(!text||!window.speechSynthesis)return;
+  try{window.speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text);u.rate=1.04;
+    u.onstart=()=>vStatus('speaking…','speaking');
+    u.onend=()=>{if(VOICE.on.mic)vStatus('listening…','live');};
+    window.speechSynthesis.speak(u);
+  }catch(e){}}
 
 /* mic capture (pcm16 16k via AudioWorklet) */
 const VWORKLET="class R extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c){const p=new Int16Array(c.length);"
