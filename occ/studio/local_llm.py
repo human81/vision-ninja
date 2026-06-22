@@ -103,14 +103,35 @@ def chat(messages, tools=None, model=None, temperature: float = 0.4, timeout: in
         return _req("/chat/completions", payload, timeout=timeout)
 
 
+_VISION_SUPPORTED = None        # None=untested, True/False after the first image request
+
+
+def vision_supported() -> bool | None:
+    """Whether the local model accepts IMAGES — many litert-lm Gemma builds are TEXT-ONLY
+    (image → 500 'Failed to create conversation'). None until first tried."""
+    return _VISION_SUPPORTED
+
+
 def vision_describe(image_jpg: bytes, prompt: str, model=None, timeout: int = 120) -> str:
-    """Multimodal describe via the local Gemma (image + prompt → text)."""
+    """Multimodal describe via the local model (image + prompt → text). Returns '' if the
+    local build is text-only (cached after the first failure, so callers fall back to cloud
+    without re-hitting a 500)."""
+    global _VISION_SUPPORTED
+    if _VISION_SUPPORTED is False:
+        return ""
     uri = "data:image/jpeg;base64," + base64.b64encode(image_jpg).decode()
     msgs = [{"role": "user", "content": [
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": uri}}]}]
-    r = chat(msgs, model=model, timeout=timeout)
-    return ((r.get("choices") or [{}])[0].get("message", {}).get("content") or "").strip()
+    try:
+        r = chat(msgs, model=model, timeout=timeout)
+        txt = ((r.get("choices") or [{}])[0].get("message", {}).get("content") or "").strip()
+        if txt:
+            _VISION_SUPPORTED = True
+        return txt
+    except Exception:
+        _VISION_SUPPORTED = False    # text-only build → callers fall back to cloud vision
+        return ""
 
 
 # A curated CORE for the local model: sending all ~64 tool schemas to a 12B on every round
