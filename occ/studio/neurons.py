@@ -122,6 +122,7 @@ TOKEN_PRICES_USD = {
     "gemma-4-12b-it": (0.0, 0.0),
     "gemma-4-e2b-it": (0.0, 0.0),
     "medgemma-4b-it": (0.0, 0.0),       # local medical vision (transformers/MPS) → $0
+    "gemma-3-4b-it": (0.0, 0.0),        # local general multimodal vision (transformers/MPS) → $0
     "qwen-image-edit": (0.0, 0.0),      # local image edit/gen (sd.cpp/Metal GGUF) → $0
 }
 

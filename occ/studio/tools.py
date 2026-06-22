@@ -791,6 +791,20 @@ def describe_image(question: str = "", which: str = "frame", image: str = "") ->
             ctx().brain.remember("last_look", text[:160])
         return _lib({"status": "success", "kind": "image", "output": out, "text": text,
                      "caption": text[:140]}, tags=["vision", "medical"], source=which)
+    from . import gemma_vision as _GV
+    if _GV.is_gemma_vision(model):                        # LOCAL multimodal Gemma (MPS, $0)
+        if _GV.available():
+            text = _GV.describe(jpg, question) or "(no description)"
+            ctx().ledger.record("agent_brain", model=model, input_tokens=300,
+                                output_tokens=110, label="vision·gemma3")
+        else:
+            text = ("Local Gemma vision isn't ready — accept the gemma-3-4b-it license at "
+                    "huggingface.co/google/gemma-3-4b-it, `hf auth login`, install the [med] "
+                    "extra. First use downloads ~8GB.")
+        if ctx().brain:
+            ctx().brain.remember("last_look", text[:160])
+        return _lib({"status": "success", "kind": "image", "output": out, "text": text,
+                     "caption": text[:140]}, tags=["vision"], source=which)
     from . import local_llm as _L
     if _L.is_local_model(model):                          # local Gemma selected for vision
         lt = ""

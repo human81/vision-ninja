@@ -748,6 +748,17 @@ def offline():
           "lightning" in _qs and _qs.get("steps") in (4, 20)
           and (_qs["steps"] == 4) == _qs["lightning"])
 
+    # ---- LOCAL general vision: gemma-3-4b-it multimodal (transformers/MPS, $0) ----
+    from occ.studio import gemma_vision as _GV
+    check("gemma-vision: routes only gemma-3* (not the text-only 12B brain, medgemma, gemini)",
+          _GV.is_gemma_vision("gemma-3-4b-it") and not _GV.is_gemma_vision("gemma-4-12b-it")
+          and not _GV.is_gemma_vision("medgemma-4b-it") and not _GV.is_gemma_vision("gemini-2.5-flash"))
+    check("gemma-vision: gemma-3-4b-it is the Vision option (12B text-brain removed from vision)",
+          "gemma-3-4b-it" in MODEL_OPTIONS["vision"] and "gemma-4-12b-it" not in MODEL_OPTIONS["vision"])
+    check("gemma-vision: priced at $0 (on-device)", usd_micros_for("gemma-3-4b-it", 50000, 50000) == 0)
+    check("gemma-vision: describe('') is graceful and does NOT trigger a model load",
+          _GV.describe(b"") == "" and not _GV.loaded())
+
 
 # ----------------------------- ONLINE -----------------------------
 def _get(path):
