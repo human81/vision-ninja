@@ -37,10 +37,29 @@ _LORA_SUBDIR = "lora/Qwen-Image-Edit-2509"
 _LIGHTNING_LORA = "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16"   # 4-step few-step distill
 
 
+# Prefer the sd.cpp-COMPATIBLE unsloth GGUFs (the QuantStack one renders blank on sd.cpp).
+# 2509 matches the Lightning LoRA; fall back across versions, then QuantStack as last resort.
+_DIFFUSION_CANDIDATES = [
+    "qwen-image-edit-2509-Q4_K_M.gguf",   # unsloth 2509 (matches the Lightning LoRA)
+    "qwen-image-edit-2511-Q4_K_M.gguf",   # unsloth 2511
+    "qwen-image-edit-Q4_K_M.gguf",        # unsloth original
+    "Qwen_Image_Edit-Q4_K_M.gguf",        # QuantStack (blank on sd.cpp — last resort)
+]
+
+
+def _diffusion_path() -> str:
+    d = _dir()
+    for f in _DIFFUSION_CANDIDATES:
+        p = os.path.join(d, f)
+        if os.path.exists(p) and os.path.getsize(p) > 1_000_000:
+            return p
+    return os.path.join(d, _DIFFUSION_CANDIDATES[0])
+
+
 def _weights():
     d = _dir()
     return {
-        "diffusion": os.path.join(d, "Qwen_Image_Edit-Q4_K_M.gguf"),
+        "diffusion": _diffusion_path(),
         "vae": os.path.join(d, "split_files/vae/qwen_image_vae.safetensors"),
         "llm": os.path.join(d, "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"),
     }
