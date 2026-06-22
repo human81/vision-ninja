@@ -797,6 +797,8 @@ def online():
     med_html = urllib.request.urlopen(STUDIO_URL + "/medical", timeout=8).read().decode()
     check("GET /medical renders the MedGemma dashboard",
           "MedGemma" in med_html and "Decision-support" in med_html)
+    _idx_html = urllib.request.urlopen(STUDIO_URL + "/", timeout=8).read().decode()
+    check("studio header links to the Medical dashboard", 'href="/medical"' in _idx_html)
     _ms = _get("/medgemma/status")
     check("GET /medgemma/status (no forced load) lists model + powers + examples",
           _ms.get("model") and len(_ms.get("tasks", [])) >= 5 and len(_ms.get("examples", [])) >= 4)
