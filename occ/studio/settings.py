@@ -44,12 +44,13 @@ MODEL_OPTIONS = {
               "gemini-2.5-flash-lite", "gemma-4-12b-it", "gemma-4-e2b-it"],
     # medgemma-4b-it = on-device MEDICAL-image model (transformers/MPS, $0); see medgemma.py.
     "vision": ["gemini-2.5-flash", "gemini-2.5-pro", "gemma-4-12b-it", "medgemma-4b-it"],
-    "image_edit": ["gemini-2.5-flash-image", "gemini-3.1-flash-image"],
+    # qwen-image-edit = LOCAL 4-bit edit on Apple Silicon (sd.cpp/Metal, $0); see qwen_image.py.
+    "image_edit": ["gemini-2.5-flash-image", "gemini-3.1-flash-image", "qwen-image-edit"],
     # Nano Banana Pro (gemini-3-pro-image) + Nano Banana 2 (gemini-3.1-flash-image), both GA.
     "image_pro": ["gemini-3-pro-image", "gemini-3-pro-image-preview",
                   "gemini-3.1-flash-image", "gemini-2.5-flash-image"],
     "image_gen": ["imagen-4.0-generate-001", "imagen-4.0-fast-generate-001",
-                  "imagen-3.0-generate-002"],
+                  "imagen-3.0-generate-002", "qwen-image-edit"],   # qwen = local $0 generation
     "video": ["veo-3.0-fast-generate-001", "veo-3.0-generate-001",
               "veo-2.0-generate-001"],
 }

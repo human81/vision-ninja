@@ -69,6 +69,11 @@ def describe(jpg: bytes, prompt: str, model: str = VISION_MODEL):
 def edit_image(jpgs: list[bytes], prompt: str, model: str = IMAGE_MODEL):
     """nano-banana: edit/compose from one or more input images. Returns
     (out_png_bytes | None, text, response)."""
+    from . import qwen_image as _Q
+    if _Q.is_qwen_model(model) and _Q.available():       # LOCAL Qwen-Image-Edit (4-bit, $0)
+        png = _Q.edit(jpgs[0] if jpgs else b"", prompt)
+        if png:
+            return png, "", None                         # else fall through to cloud
     from google.genai import types
     parts = [prompt] + [types.Part.from_bytes(data=b, mime_type="image/jpeg") for b in jpgs]
     r = _client().models.generate_content(model=model, contents=parts)
@@ -145,6 +150,14 @@ def image(prompt: str, model: str = IMAGE_MODEL):
 
 def imagen(prompt: str, model: str = "imagen-4.0-generate-001", aspect: str = "16:9"):
     """Text -> image via IMAGEN (photoreal). Returns (png_bytes | None, error)."""
+    from . import qwen_image as _Q
+    if _Q.is_qwen_model(model):                          # LOCAL Qwen-Image generation (4-bit, $0)
+        if _Q.available():
+            wh = {"1:1": (1024, 1024), "16:9": (1280, 720), "9:16": (720, 1280)}.get(aspect, (1024, 1024))
+            png = _Q.generate(prompt, wh[0], wh[1])
+            if png:
+                return png, ""
+        return None, "qwen-image (local) not ready — build sd.cpp + download the GGUF weights"
     from google.genai import types
     try:
         r = _client().models.generate_images(

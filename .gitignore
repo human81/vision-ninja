@@ -21,3 +21,4 @@ out/
 # Local editor/tool state
 .claude/settings.local.json
 .DS_Store
+vendor/

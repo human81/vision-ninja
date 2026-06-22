@@ -1036,7 +1036,7 @@ const TASK_LABEL={agent:'Agent Root (brain)',vision:'Vision / Understanding',
 async function pollModels(){try{let s=await(await fetch('/settings')).json();
   let opts=s.model_options||{},cur=s.models||{};
   $('models').innerHTML=Object.keys(TASK_LABEL).map(t=>{
-    let os=(opts[t]||[cur[t]]).map(o=>{const loc=/gemma/i.test(o);   // gemma* + medgemma → local
+    let os=(opts[t]||[cur[t]]).map(o=>{const loc=/gemma|qwen-image/i.test(o);   // gemma/medgemma/qwen → local
       return `<option value="${o}" ${o===cur[t]?'selected':''}>${loc?(o+' · local · $0'):o}</option>`;}).join('');
     return `<div class=mrow><label>${TASK_LABEL[t]}</label><select data-task="${t}">${os}</select></div>`;
   }).join('')+'<div class=muted style="font-size:10px;margin-top:6px">↳ Gemma 4 runs locally on this Mac via <code>litert-lm serve</code> (:9379) — $0, private, offline. Falls back to Gemini/sim if it’s not running. · <a href="/medical" target=_blank>🩺 Medical dashboard (MedGemma)</a></div>';}catch(e){}}

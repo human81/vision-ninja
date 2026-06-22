@@ -726,6 +726,22 @@ def offline():
           set(_MG.EXAMPLE_QUERIES) >= {"cxr", "derm", "fundus", "histo"}
           and "report" in _MG.TASKS and "vqa" in _MG.TASKS)
 
+    # ---- LOCAL image edit/gen: Qwen-Image-Edit (4-bit GGUF · sd.cpp/Metal, $0) ----
+    from occ.studio import qwen_image as _Q
+    check("qwen: routes only qwen-image* models (not gemini-image / imagen)",
+          _Q.is_qwen_model("qwen-image-edit") and not _Q.is_qwen_model("gemini-2.5-flash-image")
+          and not _Q.is_qwen_model("imagen-4.0-generate-001"))
+    check("qwen: selectable in image_edit + image_gen dropdowns",
+          "qwen-image-edit" in MODEL_OPTIONS["image_edit"] and "qwen-image-edit" in MODEL_OPTIONS["image_gen"])
+    check("qwen: priced at $0 (local Metal)", usd_micros_for("qwen-image-edit", 100, 100) == 0)
+    _qs = _Q.status()
+    check("qwen: status()/available() report readiness without crashing or doing work",
+          isinstance(_Q.available(), bool) and "weights" in _qs and "engine" in _qs
+          and set(_qs["weights"]) == {"diffusion", "vae", "llm"})
+    check("qwen: Lightning few-step LoRA is auto-detected (4 steps when present)",
+          "lightning" in _qs and _qs.get("steps") in (4, 20)
+          and (_qs["steps"] == 4) == _qs["lightning"])
+
 
 # ----------------------------- ONLINE -----------------------------
 def _get(path):
