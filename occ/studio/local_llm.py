@@ -23,10 +23,17 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import urllib.request
 
 # model ids (dropdown values) that route to the LOCAL LiteRT-LM endpoint
 LOCAL_PREFIXES = ("gemma",)
+
+# LiteRT-LM's Metal engine is NOT concurrency-safe — two overlapping inference requests
+# collide on a GPU buffer ("already has an outstanding map pending") and 500, which can
+# wedge the engine. Serialise all inference from the studio so voice + text + vision never
+# overlap on the local brain.
+_INFER_LOCK = threading.Lock()
 
 
 def is_local_model(model: str | None) -> bool:
@@ -92,7 +99,8 @@ def chat(messages, tools=None, model=None, temperature: float = 0.4, timeout: in
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
-    return _req("/chat/completions", payload, timeout=timeout)
+    with _INFER_LOCK:                         # one inference at a time (Metal isn't concurrency-safe)
+        return _req("/chat/completions", payload, timeout=timeout)
 
 
 def vision_describe(image_jpg: bytes, prompt: str, model=None, timeout: int = 120) -> str:

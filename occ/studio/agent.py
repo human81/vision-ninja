@@ -750,6 +750,22 @@ class ADKRunner:
         yield {"type": "done", "data": {}}
 
 
+# COMPACT system prompt for the LOCAL Gemma path. The full Vision-Ninja SYSTEM_PROMPT
+# (~1800 tokens) overflows the litert-lm Gemma context window when combined with the tool
+# schemas — which wedges the Metal engine (a 500 'send_message failed' that persists until
+# restart). This compact prompt + capped history keeps the local request within budget.
+LOCAL_SYSTEM_PROMPT = (
+    "You are the Vision Ninja — a voice/chat agent for a live vision studio. When the user "
+    "asks you to DO something (try on eyewear or apparel, apply an AR face filter, analyze "
+    "the scene or a MEDICAL image, browse or search the catalog, add an overlay), CALL the "
+    "matching tool instead of just talking. Keep spoken replies short and warm.{brain}")
+
+
+def _local_system(brain: str) -> str:
+    b = ("\nContext: " + brain[:300]) if brain else ""    # keep the brain note small
+    return LOCAL_SYSTEM_PROMPT.format(brain=b)
+
+
 class LocalRunner:
     """Drives the Ninja with a LOCAL Gemma model via the LiteRT-LM OpenAI endpoint
     (litert-lm serve). Same tools, same NDJSON frames as ADK — but $0, private and
@@ -765,8 +781,8 @@ class LocalRunner:
         loop = asyncio.get_event_loop()
         model = self.settings.model_for("agent")
         brain = ctx().brain.prompt_context() if ctx().brain else ""
-        sys = SYSTEM_PROMPT.format(brain=brain)
-        msgs = ([{"role": "system", "content": sys}] + self.history
+        sys = _local_system(brain)                           # compact prompt → fits litert-lm context
+        msgs = ([{"role": "system", "content": sys}] + self.history[-4:]
                 + [{"role": "user", "content": message}])
         tools = L.chat_tools_schema(L._local_tool_names())   # curated core → fast on a local 12B
         streamed: list[str] = []

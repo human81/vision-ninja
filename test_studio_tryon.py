@@ -662,6 +662,12 @@ def offline():
     check("voice: VAD distinguishes speech from silence",
           VL._rms((np.ones(1600) * 4000).astype(np.int16).tobytes()) > VL._SPEECH_RMS
           and VL._rms(np.zeros(1600, np.int16).tobytes()) < VL._SPEECH_RMS)
+    # the local prompt must stay COMPACT — the full cloud SYSTEM_PROMPT overflows litert-lm's
+    # Gemma context + wedges the Metal engine (500 'send_message failed'). Keep local << cloud.
+    from occ.studio.agent import _local_system, SYSTEM_PROMPT as _FULLP
+    _lp = _local_system("x" * 5000)                          # even a big brain stays bounded
+    check("voice/local: compact local system prompt is far smaller than the cloud prompt",
+          len(_lp) < 800 and len(_lp) < len(_FULLP) // 3 and "tool" in _lp.lower())
     check("voice: transcribe('') is graceful (no crash without audio)", VL.transcribe(b"") == "")
     import http.server as _hs2, threading as _th2, asyncio as _aio2
     class _Brain(_hs2.BaseHTTPRequestHandler):

@@ -169,7 +169,7 @@ class LocalVoiceBridge:
     async def _turn(self, ws, user_text: str):
         """One reasoning turn on the LOCAL Gemma brain: tools + a spoken reply."""
         from . import local_llm as L
-        from .agent import SYSTEM_PROMPT, frames_for, fitting_on
+        from .agent import _local_system, frames_for, fitting_on
         from . import tools as T
         c = _ctx()
         await self._send(ws, {"type": "transcript", "role": "user", "text": user_text})
@@ -185,8 +185,8 @@ class LocalVoiceBridge:
         if not L.is_local_model(model):
             model = "gemma-4-12b-it"
         brain = c.brain.prompt_context() if (c and c.brain) else ""
-        msgs = ([{"role": "system", "content": SYSTEM_PROMPT.format(brain=brain)}]
-                + self.history + [{"role": "user", "content": user_text}])
+        msgs = ([{"role": "system", "content": _local_system(brain)}]   # compact → fits litert context
+                + self.history[-4:] + [{"role": "user", "content": user_text}])
         tools = L.chat_tools_schema(L._local_tool_names())   # curated core → fast on a local 12B
         reply = ""
         try:
