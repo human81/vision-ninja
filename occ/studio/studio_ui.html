@@ -365,6 +365,10 @@
   .srcrow{display:flex;justify-content:space-between;align-items:center;gap:6px;
     border-bottom:1px dashed var(--line);padding:7px 0;font-size:12px}
   .srcrow .u{color:var(--cyan)}.srcrow small{color:var(--mut)}
+  .ordbadge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+    padding:2px 6px;border-radius:5px;color:#fff;vertical-align:middle}
+  .srcrow a{font-size:11px;padding:3px 9px;background:#141c29;border:1px solid var(--line);
+    color:var(--cyan);border-radius:6px;text-decoration:none;white-space:nowrap}
   .srcrow button{font-size:11px;padding:3px 9px;background:#141c29;border:1px solid var(--line);
     color:var(--fg);border-radius:6px;cursor:pointer}
   .mrow{margin:9px 0}.mrow label{display:block;font-size:11px;color:var(--mut);margin-bottom:3px}
@@ -665,6 +669,7 @@
         <button data-tab=graph>Graph</button>
         <button data-tab=library>Library</button>
         <button data-tab=sources>Sources</button>
+        <button data-tab=orders>Orders</button>
         <button data-tab=models>Models</button>
         <button data-tab=code>Code</button>
       </div>
@@ -704,6 +709,13 @@
         <input class=srch id=srcname placeholder="name (optional)" style=margin-top:-4px>
         <button class=savebtn style=margin-top:0 onclick=addSource()>+ Save live source</button>
         <div id=srcgrid style=margin-top:10px></div>
+      </div>
+      <div class=pane id=pane-orders>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div class=muted style=font-size:11px id=ordmeta>Orders placed through the studio (Stripe Checkout).</div>
+          <button class=savebtn style="margin:0;padding:4px 10px" onclick=pollOrders()>↻</button>
+        </div>
+        <div id=ordgrid></div>
       </div>
       <div class=pane id=pane-models>
         <div class=muted style=font-size:11px;margin-bottom:6px>YOLO vision task on the live video (Ultralytics).</div>
@@ -879,6 +891,7 @@ function refreshPanel(p){
   else if(p==='library'){pollLibrary('');}
   else if(p==='sources'){pollSources();}
   else if(p==='settings'||p==='models'){pollMode();pollModels();}
+  else if(p==='checkout'){pollOrders();}
   pollUsage();
 }
 
@@ -889,6 +902,7 @@ function switchTab(name){if(!name)return;
   if(name==='graph')drawGraph();
   if(name==='library')pollLibrary($('libq').value);
   if(name==='sources')pollSources();
+  if(name==='orders')pollOrders();
   if(name==='models')pollModels();
   if(name==='code')pollOverlays();}
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
@@ -1032,6 +1046,22 @@ function renderSources(items){
   ).join('')||'<span class=muted>no saved live sources — add an RTSP or YouTube-live URL above</span>';
 }
 async function pollSources(){try{let r=await(await fetch('/sources')).json();renderSources(r.items);}catch(e){}}
+/* ---- order history (Stripe Checkout sessions) ---- */
+function renderOrders(orders,ready){
+  const meta=$('ordmeta');
+  if(meta)meta.textContent=ready?((orders.length||0)+' order(s) · Stripe test / sandbox')
+    :'Checkout not configured — add STRIPE_SECRET_KEY to .env';
+  $('ordgrid').innerHTML=(orders||[]).map(o=>{
+    const titles=(o.items||[]).map(i=>i.title).filter(Boolean).join(', ')||'order';
+    const amt=o.amount?((o.amount/100).toFixed(2)+' '+(o.currency||'').toUpperCase()):'';
+    const paid=o.status==='paid';
+    const badge=`<span class=ordbadge style="background:${paid?'#1c5e38':'#5a4a14'}">${paid?'✓ paid':o.status}</span>`;
+    const pay=(!paid&&o.url)?`<a href="${o.url}" target=_blank title="Resume checkout">Pay ↗</a>`:'';
+    const sid=(o.session_id||'').slice(0,16);
+    return `<div class=srcrow><span><b class=u>${titles}</b> ${badge}<br><small>${amt} · ${sid}…</small></span><span>${pay}</span></div>`;
+  }).join('')||'<span class=muted>no orders yet — try something on, then click 🛒 Buy (or say “buy these”)</span>';
+}
+async function pollOrders(){try{let r=await(await fetch('/checkout/orders')).json();renderOrders(r.orders,r.ready);}catch(e){}}
 window.addSource=async()=>{let url=$('srcurl').value.trim();if(!url)return;
   await fetch('/sources',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,name:$('srcname').value.trim()})});
   $('srcurl').value='';$('srcname').value='';pollSources();};
@@ -1433,6 +1463,7 @@ function openCheckout(d){
   toast((d.test_mode?'🧪 TEST checkout — ':'🛒 ')+(d.item||'order')+(d.price_display?(' · '+d.price_display):''));
   const w=window.open(d.url,'_blank');
   if(!w)toast('Pop-up blocked — allow pop-ups, or open: '+d.url);
+  try{pollOrders();switchTab('orders');}catch(e){}   // surface the new order in the panel
 }
 function setWorn(it){
   if(!it||!it.img)return;
