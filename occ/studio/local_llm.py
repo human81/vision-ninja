@@ -141,7 +141,7 @@ def vision_describe(image_jpg: bytes, prompt: str, model=None, timeout: int = 12
 # try-on, filters, scene, overlays, a little media). Override/expand via STUDIO_LOCAL_TOOLS
 # (comma list, or "all"). The cloud backends still get the full set.
 LOCAL_CORE_TOOLS = {
-    "live_control", "gesture_browse", "shop_search", "try_eyewear", "try_product",
+    "live_control", "gesture_browse", "shop_search", "try_eyewear", "try_jewelry", "try_product",
     "virtual_try_on", "apply_face_filter", "analyze_scene", "describe_image", "medical_image",
     "create_overlay", "clear_overlays", "set_render", "set_detection", "nano_banana",
     "generate_video", "set_lens_tint", "snapshot", "go_live",

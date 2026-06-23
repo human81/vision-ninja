@@ -1011,6 +1011,60 @@ def filter_eyewear(ctx):
             ctx.warp(refl, q)
 
 
+# ============================== jewelry try-on ===============================
+from . import jewelry as _jewelry          # pure helpers (presets + procedural gold assets)
+
+_JEWELRY = {"rgba": None, "kind": "nose_ring", "label": "", "anchors": [], "src": None}
+_JEWELRY_LOCK = _threading.Lock()
+
+
+def set_current_jewelry(rgba, kind="nose_ring", label="", src=None):
+    """Select a jewelry piece to try on live. kind ∈ jewelry.KINDS (nose_ring, earrings,
+    studs, septum, lip_ring, necklace). rgba=None → the procedural gold asset for that kind."""
+    k = _jewelry.resolve_kind(kind)
+    preset = _jewelry.PRESETS[k]
+    if rgba is None or len(rgba) == 0:
+        rgba = _jewelry.default_asset(k)
+    with _JEWELRY_LOCK:
+        _JEWELRY.update({"rgba": rgba, "kind": k, "label": label or preset["label"],
+                         "anchors": preset["anchors"], "src": src})
+    return k
+
+
+def clear_jewelry():
+    with _JEWELRY_LOCK:
+        _JEWELRY.update({"rgba": None, "anchors": []})
+
+
+def filter_jewelry(ctx):
+    """Live try-on of the selected JEWELRY (set_current_jewelry) — nose ring (Tupac),
+    earrings, septum, lip ring or necklace — stickered to the right face landmark(s),
+    scaled to the face and following head tilt. A pair (earrings) hides the side that
+    turns away from camera."""
+    with _JEWELRY_LOCK:
+        rgba = _JEWELRY["rgba"]; anchors = list(_JEWELRY["anchors"])
+        kind = _JEWELRY.get("kind") or "nose_ring"
+    if rgba is None or len(rgba) == 0 or not anchors:
+        k = _jewelry.resolve_kind(kind)        # overlay active w/o a selection → default preset
+        rgba = _jewelry.default_asset(k); anchors = _jewelry.PRESETS[k]["anchors"]
+    for f in ctx.faces:
+        a = np.radians(f.roll); ca, sa = np.cos(a), np.sin(a)
+        ex = np.array([ca, sa]); ey = np.array([-sa, ca])     # face-local axes in image space
+        eye = max(1.0, f.eye_dist); fw = max(1.0, f.face_w); yaw = f.yaw
+        for spec in anchors:
+            side = spec.get("side")
+            if side and abs(yaw) > 22 and ((yaw > 0 and side == "r") or (yaw < 0 and side == "l")):
+                continue                                       # that side rotated away
+            base = fw if spec.get("unit") == "facew" else eye
+            c = f.p(spec["at"]) + (ex * spec["dx"] + ey * spec["dy"]) * eye
+            ctx.sticker(rgba, c, spec["size"] * base, angle=f.roll if spec.get("roll") else 0.0)
+
+
+def load_jewelry_rgba(raw):
+    """Product image BYTES → clean RGBA via the same rembg matte eyewear uses. None on fail."""
+    return load_eyewear_rgba(raw) if raw else None
+
+
 # ================================ the filters =================================
 def filter_sunglasses(ctx):
     for f in ctx.faces:
@@ -1185,6 +1239,9 @@ def _src(fn):
 FACE_FILTERS = {
     "eyewear": ("Live try-on of the selected eyewear product, warped to your eyes.",
                 filter_eyewear, _src(filter_eyewear)),
+    "jewelry": ("Live try-on of the selected jewelry (nose ring, earrings, septum, lip "
+                "ring, necklace), anchored to your face landmarks and scaled to your face.",
+                filter_jewelry, _src(filter_jewelry)),
     "ninja_mask": ("🥷 Black ninja hood with eye slit + red headband (Vision Ninja).",
                    filter_ninja_mask, _src(filter_ninja_mask)),
     "sunglasses": ("Realistic sunglasses tracked to your eyes (follows head pose).",

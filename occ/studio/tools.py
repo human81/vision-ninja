@@ -629,6 +629,36 @@ def try_eyewear(image: str = "", label: str = "") -> dict:
             "fitted": fitted, "ui": "overlays"}
 
 
+def try_jewelry(kind: str = "nose_ring", image: str = "", label: str = "") -> dict:
+    """LIVE JEWELRY TRY-ON: put jewelry on the person in the live video, tracked to dense
+    facial landmarks and following head tilt. `kind`: nose_ring (Tupac's nostril hoop),
+    earrings, studs, septum, lip_ring, or necklace. `image` = a product image URL / path /
+    data-URI (e.g. an Amazon nose-ring hero shot) — cut out via segmentation; omit it to
+    use a clean gold preset. Use when the user asks to try on a nose ring / earrings /
+    necklace / piercing / any jewelry."""
+    from .face_filters import set_current_jewelry, load_jewelry_rgba
+    from . import jewelry as _j
+    k = _j.resolve_kind(kind)
+    rgba = None
+    if image:
+        rgba = load_jewelry_rgba(_fetch_bytes(image))
+        if rgba is None:
+            return {"status": "error", "error": "could not load jewelry image", "ui": "overlays"}
+    set_current_jewelry(rgba, kind=k, label=label, src=image)
+    try:
+        ctx().overlays.clear()
+        ctx().overlays.add_builtin("jewelry")
+        ctx().pipe.set_render_flags(draw_boxes=False, draw_labels=False, draw_counts=False)
+    except Exception as e:
+        return {"status": "error", "error": f"{type(e).__name__}: {e}", "ui": "overlays"}
+    _meter("overlay", units={"overlay_frames": 1}, label=f"try_jewelry:{k}")
+    if image:
+        from . import commerce as _com
+        _com.set_last({"title": label or _j.PRESETS[k]["label"], "img": image, "store": "jewelry"})
+    return {"status": "success", "name": "jewelry", "kind": k,
+            "label": label or _j.PRESETS[k]["label"], "fitted": bool(image), "ui": "overlays"}
+
+
 def set_lens_tint(tint: str = "auto", opacity: int = 0) -> dict:
     """Recolour the live glasses' LENSES (the lenses are fully rebuilt, so any original
     arm/reflection is gone). tint: 'auto' (match the original frame's lenses), 'clear'
@@ -1788,7 +1818,7 @@ ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render, set_detection,
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays, go_live,
-    apply_face_filter, try_eyewear, set_lens_tint, lens_reflection, lens_movie, shop_search, try_product, gesture_browse, live_control,
+    apply_face_filter, try_eyewear, try_jewelry, set_lens_tint, lens_reflection, lens_movie, shop_search, try_product, gesture_browse, live_control,
     checkout, shipping_profile, list_orders,
     analyze_scene, analyze_image, describe_image, medical_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
