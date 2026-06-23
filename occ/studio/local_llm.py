@@ -41,7 +41,9 @@ def is_local_model(model: str | None) -> bool:
 
 
 def endpoint() -> str:
-    return os.environ.get("STUDIO_LOCAL_ENDPOINT", "http://localhost:9379/v1").rstrip("/")
+    # 127.0.0.1 (not "localhost") so the brain call never does a DNS/name lookup — that
+    # resolution can fail with gaierror when wifi is off on some macOS network states.
+    return os.environ.get("STUDIO_LOCAL_ENDPOINT", "http://127.0.0.1:9379/v1").rstrip("/")
 
 
 _RESOLVED: dict = {}
@@ -143,6 +145,7 @@ LOCAL_CORE_TOOLS = {
     "virtual_try_on", "apply_face_filter", "analyze_scene", "describe_image", "medical_image",
     "create_overlay", "clear_overlays", "set_render", "set_detection", "nano_banana",
     "generate_video", "set_lens_tint", "snapshot", "go_live",
+    "checkout", "shipping_profile", "list_orders",       # agentic purchase (Stripe Checkout)
     # NB: 'plan'/'narrate' deliberately excluded — they add a reasoning round (slow on a
     # local 12B) without acting. The local model acts directly.
 }

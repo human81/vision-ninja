@@ -186,6 +186,9 @@
   #nowwearing .nw-x{width:20px;height:20px;border-radius:50%;border:1px solid var(--line);
     background:rgba(255,255,255,.06);color:#cdd9ea;cursor:pointer;font-size:11px;line-height:1;flex:none}
   #nowwearing .nw-x:hover{border-color:#ff7a7a;color:#ff7a7a}
+  #nowwearing .nw-buy{flex:none;border:0;border-radius:7px;padding:5px 9px;font-size:11px;font-weight:700;
+    cursor:pointer;background:linear-gradient(180deg,#6c77ff,#4b54e6);color:#fff;white-space:nowrap}
+  #nowwearing .nw-buy:hover{filter:brightness(1.12)}
   /* premium "processing" loader on the main canvas */
   #fitloader{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
     z-index:7;background:radial-gradient(130% 120% at 50% 38%,rgba(10,16,26,.45),rgba(3,6,11,.88));
@@ -557,6 +560,7 @@
           <div id=nowwearing onclick="if(event.target.className!=='nw-x')scrollToWorn()" title="Currently worn — click to find it in the menu">
             <img id=nw-img onerror="this.style.visibility='hidden'">
             <div class=nw-l><div class=nw-k>Now wearing</div><div class=nw-t id=nw-title>—</div><div class=nw-b id=nw-brand></div></div>
+            <button class=nw-buy onclick="doCheckout(event)" title="Buy these — secure Stripe checkout">🛒 Buy</button>
             <button class=nw-x onclick="clearWorn(true)" title="Take them off (back to live)">✕</button>
           </div>
           <button id=fillbtn class=cornicon onclick="toggleFill()" title="Fill / fit the canvas">⤢</button>
@@ -774,6 +778,7 @@ function handleFrame(f){
   else if(f.type==='library'){renderLib(d.items);if(d.query!==undefined)$('libq').value=d.query;switchTab('library');}
   else if(f.type==='sources'){renderSources(d.items);switchTab('sources');}
   else if(f.type==='ui_action'){driveUI(d);}
+  else if(f.type==='checkout'){openCheckout(d);}
   else if(f.type==='catalog'){showCatalog(d);}
   else if(f.type==='fitting'){if(d.on){vShowFitting(d.title,null);}else vHideFitting();}
   else if(f.type==='filming'){if(d.on){vShowFilm(d.brand);}else vHideFilm();}
@@ -1036,6 +1041,7 @@ window.rmSource=async(id)=>{await fetch('/sources/remove',{method:'POST',headers
 const TASK_LABEL={agent:'Agent Root — brain · text + tools',vision:'Vision — sees images',
   image_edit:'Image Editing (nano-banana)',image_gen:'Image Generation',video:'Video Generation (Veo)'};
 async function pollModels(){try{let s=await(await fetch('/settings')).json();
+  if(s.offline)vLockOffline();
   let opts=s.model_options||{},cur=s.models||{};
   $('models').innerHTML=Object.keys(TASK_LABEL).map(t=>{
     let os=(opts[t]||[cur[t]]).map(o=>{const loc=/gemma|qwen-image/i.test(o);   // gemma/medgemma/qwen → local
@@ -1058,6 +1064,17 @@ function vSetBackend(be){
   // reconnect on the new backend if a session is live
   if(VOICE.live){try{VOICE.live.close();}catch(e){}VOICE.live=null;
     if(VOICE.on.mic||VOICE.on.cam||VOICE.on.screen)vEnsureLive().then(()=>vStatus('listening…','live'));}}
+/* STUDIO_OFFLINE=1 → cloud BIDI (Gemini/OpenAI) can't reach the network; lock Live Voice to
+   the on-device 🦙 backend (Whisper STT + local Gemma + on-device TTS), all $0/offline. */
+function vLockOffline(){
+  const sel=$('vbackend');
+  if(sel){sel.value='local';
+    ['gemini','openai'].forEach(v=>{const o=sel.querySelector('option[value='+v+']');
+      if(o){o.disabled=true;o.textContent=o.textContent.replace(/$/,' · needs wifi');}});}
+  VOICE.backend='local';
+  if(!VOICE._offlineLocked){VOICE._offlineLocked=true;
+    toast('Offline mode → Live Voice locked to 🦙 Local · cloud BIDI needs internet');}
+}
 function vStatus(t,dot){$('vstatus').textContent=t;$('vdot').className='vdot'+(dot?' '+dot:'');}
 function b64FromBuf(buf){const b=new Uint8Array(buf);let s='';const C=0x8000;
   for(let i=0;i<b.length;i+=C)s+=String.fromCharCode.apply(null,b.subarray(i,i+C));return btoa(s);}
@@ -1088,7 +1105,7 @@ function vOnLive(m){const t=m.type;
   if(t==='tool'){const d=m.data||{};vStatus('▸ '+(d.name||'tool'),'live');
     if(d.name==='create_overlay'&&d.ok){switchTab('code');pollOverlays();}return;}
   // fitting loader + shopped catalog must work over the BIDI voice path too
-  if(['fitting','filming','play_audio','catalog','refresh','canvas','ui_action','library','sources','export','timeline','scene'].includes(t)){handleFrame(m);}
+  if(['fitting','filming','play_audio','catalog','refresh','canvas','ui_action','checkout','library','sources','export','timeline','scene'].includes(t)){handleFrame(m);}
 }
 function vTranscript(role,text){if(!text)return;
   // transcripts stream as deltas — accumulate each side into ONE bubble per turn
@@ -1115,10 +1132,18 @@ function vPlay(b64){
 function vStopPlayback(){VOICE.srcs.forEach(n=>{try{n.stop();}catch(e){}});VOICE.srcs.clear();
   if(VOICE.pctx)VOICE.playHead=VOICE.pctx.currentTime;}
 /* 🦙 local backend: speak the reply with the OS voice (on-device, $0) */
+function vLocalVoice(){
+  // Chrome's DEFAULT voices ("Google …") stream from the network → silent offline.
+  // Prefer an on-device (localService) English voice so TTS works with wifi off.
+  const vs=(window.speechSynthesis.getVoices()||[]);
+  return vs.find(v=>v.localService&&/en[-_]/i.test(v.lang))
+      || vs.find(v=>v.localService) || null;
+}
 function vSpeak(text){
   if(!text||!window.speechSynthesis)return;
   try{window.speechSynthesis.cancel();
     const u=new SpeechSynthesisUtterance(text);u.rate=1.04;
+    const lv=vLocalVoice();if(lv)u.voice=lv;            // on-device voice → audio survives offline
     u.onstart=()=>vStatus('speaking…','speaking');
     u.onend=()=>{if(VOICE.on.mic)vStatus('listening…','live');};
     window.speechSynthesis.speak(u);
@@ -1391,6 +1416,23 @@ function renderNowWearing(){
     $('nw-brand').textContent=[WORN.brand,WORN.price?('$'+WORN.price):''].filter(Boolean).join(' · ');
     el.classList.add('on');
   }else el.classList.remove('on');
+}
+/* ---- agentic checkout: Buy → Stripe hosted page (card + shipping on Stripe, $0 in test mode) ---- */
+async function doCheckout(ev){
+  if(ev&&ev.stopPropagation)ev.stopPropagation();
+  toast('Creating secure checkout…');
+  try{
+    const r=await fetch('/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    const d=await r.json();
+    if(d.status==='success'&&d.url)openCheckout(d);
+    else toast('Checkout: '+(d.error||'not ready'));
+  }catch(e){toast('Checkout failed: '+e);}
+}
+function openCheckout(d){
+  if(!d||!d.url){toast('Checkout: '+((d&&d.error)||'no link'));return;}
+  toast((d.test_mode?'🧪 TEST checkout — ':'🛒 ')+(d.item||'order')+(d.price_display?(' · '+d.price_display):''));
+  const w=window.open(d.url,'_blank');
+  if(!w)toast('Pop-up blocked — allow pop-ups, or open: '+d.url);
 }
 function setWorn(it){
   if(!it||!it.img)return;

@@ -133,11 +133,13 @@ def _load():
         try:
             import torch
             from transformers import AutoModelForImageTextToText, AutoProcessor
+            from .offline import offline
+            lfo = offline()                                  # cache-only when wifi is off
             dev = "mps" if torch.backends.mps.is_available() else "cpu"
             dt = torch.bfloat16 if dev == "mps" else torch.float32
-            proc = AutoProcessor.from_pretrained(model_id())
+            proc = AutoProcessor.from_pretrained(model_id(), local_files_only=lfo)
             model = AutoModelForImageTextToText.from_pretrained(
-                model_id(), dtype=dt).to(dev).eval()
+                model_id(), dtype=dt, local_files_only=lfo).to(dev).eval()
             _STATE = (model, proc, dev)
         except Exception:
             _STATE = "off"

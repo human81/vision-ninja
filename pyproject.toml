@@ -73,6 +73,10 @@ med = [
     "accelerate>=1.0",
     "pillow>=10.0",
 ]
+# Agentic checkout — Stripe Checkout Sessions (test or live).
+pay = [
+    "stripe>=9.0",
+]
 # Build-time only (proto compilation).
 build = [
     "grpcio-tools>=1.66",

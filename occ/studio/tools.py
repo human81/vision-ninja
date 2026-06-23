@@ -502,6 +502,8 @@ def try_product(query: str = "", image: str = "") -> dict:
     res["product"] = _slim(best)
     res["alternatives"] = [_slim(m) for m in matches[1:5]]
     res["catalog"] = {"store": best["store"], "matches": [_slim(m) for m in matches[:12]]}
+    from . import commerce as _com
+    _com.set_last(best)                                 # so `checkout` can buy it with no args
     return res
 
 
@@ -639,6 +641,83 @@ def set_lens_tint(tint: str = "auto", opacity: int = 0) -> dict:
     return {"status": "success" if ok else "error", "tint": tint or "auto",
             "opacity": opacity, "ui": "overlays",
             "error": "" if ok else "put some glasses on first"}
+
+
+# ---------- checkout: turn a try-on into a real (test-mode) purchase ----------
+def _cart_item(query: str = "") -> dict | None:
+    """Resolve the thing to buy: an explicit query → catalog; else the last tried-on
+    product; else the live eyewear selection (matched back to the catalog for its price)."""
+    if query:
+        m = _search_catalog(query, store=_guess_store(query)) or _search_catalog(query)
+        return _slim(m[0]) if m else None
+    from . import commerce as _com
+    if _com.last():
+        return dict(_com.last())
+    try:                                                # fall back to the live glasses selection
+        from .face_filters import _EYEWEAR
+        lbl, src = _EYEWEAR.get("label", ""), _EYEWEAR.get("src", "")
+        if lbl or src:
+            for it in _search_catalog(lbl or "") or []:
+                if it.get("img") == src or it.get("title", "").lower() == lbl.lower():
+                    return _slim(it)
+            if lbl:
+                return {"title": lbl, "img": src or "", "price": "", "store": "eyewear"}
+    except Exception:
+        pass
+    return None
+
+
+def checkout(query: str = "", quantity: int = 1) -> dict:
+    """COMPLETE A PURCHASE of the tried-on product (or `query`) via Stripe Checkout.
+    Builds the cart from the product the user is wearing / last shopped (or finds
+    `query` in the catalog), creates a hosted Stripe Checkout Session, and returns a
+    secure pay URL where the shopper enters their CARD + SHIPPING on Stripe's page
+    (we never see the card). Test mode → no real money. Tell the user the item, price,
+    and that the checkout opened. Use when they say buy/order/purchase/checkout."""
+    from . import commerce as _com
+    ok, why = _com.ready()
+    if not ok:
+        return {"status": "error", "error": why, "ui": "checkout"}
+    item = _cart_item(query)
+    if not item:
+        return {"status": "error", "ui": "checkout",
+                "error": "nothing to buy yet — try a product on (or name one) first"}
+    item["qty"] = max(1, int(quantity or 1))
+    res = _com.create_checkout([item])
+    if not res.get("ok"):
+        return {"status": "error", "error": res.get("error", "checkout failed"), "ui": "checkout"}
+    _meter("snapshot", units={"ops": 1}, label="checkout")
+    if ctx().brain:
+        ctx().brain.remember("last_checkout", f"{item.get('title','')} → {res['id']}")
+    amt = f"{res['amount']/100:.2f} {res['currency'].upper()}"
+    return {"status": "success", "ui": "checkout", "url": res["url"], "session_id": res["id"],
+            "amount": res["amount"], "currency": res["currency"], "test_mode": res["test_mode"],
+            "item": item.get("title", ""), "price_display": amt,
+            "text": (f"Checkout ready for {item.get('title','item')} — {amt}"
+                     + (" (TEST mode, no real charge)" if res["test_mode"] else "")
+                     + ". Opening Stripe's secure page to enter card + shipping.")}
+
+
+def shipping_profile(name: str = "", email: str = "", phone: str = "",
+                     address: str = "", country: str = "") -> dict:
+    """Save the shopper's SHIPPING details (name/email/phone/address/country) locally to
+    PREFILL checkout — this is PII only, NOT card data (cards are entered on Stripe's page,
+    never here). Returns the stored profile. Call before checkout if the user gives details."""
+    from . import commerce as _com
+    p = _com.save_profile({"name": name or None, "email": email or None,
+                           "phone": phone or None, "address": address or None,
+                           "country": country or None})
+    return {"status": "success", "ui": "checkout", "profile": p,
+            "text": "Saved your shipping details — they'll prefill at checkout."}
+
+
+def list_orders() -> dict:
+    """List recent ORDERS placed through the studio (Stripe Checkout sessions) with their
+    status (created / paid), item, amount and currency. Use when the user asks about their
+    purchases / order history."""
+    from . import commerce as _com
+    orders = _com.list_orders()
+    return {"status": "success", "ui": "checkout", "orders": orders, "count": len(orders)}
 
 
 # ---------- perception / the agent's eyes ----------
@@ -806,6 +885,7 @@ def describe_image(question: str = "", which: str = "frame", image: str = "") ->
         return _lib({"status": "success", "kind": "image", "output": out, "text": text,
                      "caption": text[:140]}, tags=["vision"], source=which)
     from . import local_llm as _L
+    from .offline import offline as _offline
     if _L.is_local_model(model):                          # local Gemma selected for vision
         lt = ""
         try:
@@ -820,8 +900,9 @@ def describe_image(question: str = "", which: str = "frame", image: str = "") ->
                 ctx().brain.remember("last_look", lt[:160])
             return _lib({"status": "success", "kind": "image", "output": out, "text": lt,
                          "caption": lt[:140]}, tags=["vision"], source=which)
-        model = "gemini-2.5-flash"                        # litert Gemma is text-only → cloud vision
-    if _has_key():
+        if not _offline():
+            model = "gemini-2.5-flash"                    # litert Gemma is text-only → cloud vision
+    if _has_key() and not _offline():                     # offline → local detection fallback, never cloud
         from . import genmedia
         try:
             text, r = genmedia.describe(jpg, q, model=model)
@@ -1708,6 +1789,7 @@ ALL_TOOLS = [
     draw_zone, draw_line, clear_annotations,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays, go_live,
     apply_face_filter, try_eyewear, set_lens_tint, lens_reflection, lens_movie, shop_search, try_product, gesture_browse, live_control,
+    checkout, shipping_profile, list_orders,
     analyze_scene, analyze_image, describe_image, medical_image, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, eyewear_film, extend_video, narrate, generate_music,

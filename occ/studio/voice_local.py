@@ -42,8 +42,10 @@ def _whisper():
         return _WHISPER
     try:
         from faster_whisper import WhisperModel
+        from .offline import offline
         name = os.environ.get("STUDIO_WHISPER_MODEL", "base.en")
-        _WHISPER = WhisperModel(name, device="cpu", compute_type="int8")
+        _WHISPER = WhisperModel(name, device="cpu", compute_type="int8",
+                                local_files_only=offline())
     except Exception:
         _WHISPER_OFF = True
         _WHISPER = None

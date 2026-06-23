@@ -50,6 +50,9 @@ def _client():
 
 def prewarm():
     """Create the client on the main thread at startup (if a key is present)."""
+    from .offline import offline
+    if offline():                      # airplane mode → never build the cloud client
+        return
     if has_key():
         try:
             _client()

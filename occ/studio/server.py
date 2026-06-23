@@ -395,6 +395,82 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
             res["url"] = "/download/" + Path(out).name
         return JSONResponse(res)
 
+    # ---------- agentic checkout: Stripe Checkout (test mode) ----------
+    @app.post("/checkout")
+    async def checkout_route(req: Request):
+        """Create a Stripe Checkout Session for the tried-on product (or {query}).
+        Returns the hosted pay URL — the shopper enters card + shipping on Stripe."""
+        from .tools import checkout as _checkout
+        import asyncio as _aio
+        import functools as _ft
+        b = await req.json()
+        res = await _aio.get_event_loop().run_in_executor(None, _ft.partial(
+            _checkout, query=b.get("query", ""), quantity=int(b.get("quantity", 1) or 1)))
+        return JSONResponse(res, status_code=200 if res.get("status") == "success" else 400)
+
+    @app.get("/checkout/orders")
+    def checkout_orders():
+        from . import commerce
+        return JSONResponse({"orders": commerce.list_orders(), "ready": commerce.ready()[0]})
+
+    @app.post("/stripe/webhook")
+    async def stripe_webhook(req: Request):
+        """Stripe → us: mark the order paid on checkout.session.completed."""
+        from . import commerce
+        payload = await req.body()
+        sig = req.headers.get("stripe-signature", "")
+        secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+        try:
+            import stripe
+            if secret:
+                event = stripe.Webhook.construct_event(payload, sig, secret)
+            else:                                   # no secret configured → trust body (dev only)
+                event = json.loads(payload)
+        except Exception as e:
+            return JSONResponse({"error": f"bad webhook: {e}"}, status_code=400)
+        etype = event["type"] if isinstance(event, dict) else event.type
+        obj = (event["data"]["object"] if isinstance(event, dict) else event.data.object)
+        if etype == "checkout.session.completed":
+            ship = (obj.get("shipping_details") or obj.get("customer_details") or {}) \
+                if isinstance(obj, dict) else {}
+            commerce.mark_paid(obj["id"] if isinstance(obj, dict) else obj.id, shipping=ship)
+        return JSONResponse({"received": True})
+
+    @app.get("/checkout/return", response_class=HTMLResponse)
+    def checkout_return(session_id: str = "", status: str = ""):
+        """Landing page Stripe redirects to after pay/cancel; confirms + records the order."""
+        from . import commerce
+        paid, item, amount, ccy = False, "", 0, ""
+        if status == "cancel":
+            msg = "Checkout cancelled — nothing was charged."
+        elif session_id:
+            try:
+                import stripe
+                stripe.api_key = commerce.api_key()
+                s = stripe.checkout.Session.retrieve(session_id)
+                paid = s.get("payment_status") == "paid"
+                amount, ccy = (s.get("amount_total") or 0), (s.get("currency") or "")
+                ship = s.get("shipping_details") or s.get("customer_details") or {}
+                if paid:
+                    commerce.mark_paid(session_id, shipping=ship)
+                rec = next((o for o in commerce.list_orders() if o["session_id"] == session_id), {})
+                item = "; ".join(i.get("title", "") for i in rec.get("items", [])) or "your order"
+                msg = (f"✅ Payment received — {item}." if paid
+                       else "Payment not completed yet.")
+            except Exception as e:
+                msg = f"Could not confirm the order: {e}"
+        else:
+            msg = "No checkout session."
+        amt = f"{amount/100:.2f} {ccy.upper()}" if amount else ""
+        return ("<!doctype html><meta charset=utf-8><title>Order</title>"
+                "<style>body{font:16px/1.6 system-ui;background:#0b0b0d;color:#eee;"
+                "display:grid;place-items:center;height:100vh;margin:0;text-align:center}"
+                ".c{max-width:460px;padding:32px;background:#16161a;border-radius:16px}"
+                "a{color:#7cc4ff}</style><div class=c><h2>🥷 Vision Ninja Studio</h2>"
+                f"<p>{msg}</p>{('<p style=\"opacity:.7\">'+amt+'</p>') if amt else ''}"
+                f"{'<p style=\"opacity:.6;font-size:13px\">TEST mode — no real charge.</p>' if commerce.test_mode() else ''}"
+                "<p><a href=\"/\">← Back to the studio</a></p></div>")
+
     @app.get("/scene")
     def scene():
         return JSONResponse(pipe.scene())
@@ -480,6 +556,8 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         d = settings.to_dict()
         d["agent_mode"] = agent.mode()
         d["has_key"] = _HAS_KEY
+        from .offline import offline as _offline
+        d["offline"] = _offline()      # UI locks Live Voice to the local backend when True
         return JSONResponse(d)
 
     @app.post("/settings")
@@ -674,6 +752,13 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     async def ws_live(ws: WebSocket):
         await ws.accept()
         backend = (ws.query_params.get("backend") or "gemini").lower()
+        from .offline import offline as _offline
+        if _offline() and backend != "local":
+            # Airplane mode: cloud backends (Gemini/OpenAI) need DNS → gaierror offline.
+            # Force the on-device backend regardless of what the (cached) page requested.
+            await ws.send_text(json.dumps({"type": "log", "data": {"text":
+                "offline mode → using 🦙 Local voice (cloud BIDI needs internet)"}}))
+            backend = "local"
         if backend == "local":
             from .voice_local import LocalVoiceBridge       # $0 — whisper + local Gemma, no key
             bridge = LocalVoiceBridge(settings)

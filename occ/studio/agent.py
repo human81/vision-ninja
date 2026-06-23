@@ -230,6 +230,11 @@ def frames_for(name: str, res) -> list[dict]:
                                          "detail": res.get("error", "")}})
     if res.get("ui"):
         out.append({"type": "refresh", "data": {"panel": res["ui"]}})
+    if name == "checkout" and res.get("url"):   # open Stripe's hosted pay page on the client
+        out.append({"type": "checkout", "data": {
+            "url": res["url"], "item": res.get("item", ""),
+            "price_display": res.get("price_display", ""),
+            "test_mode": res.get("test_mode", False), "session_id": res.get("session_id", "")}})
     if name in ("create_overlay", "toggle_overlay", "remove_overlay", "clear_overlays",
                 "clear_annotations", "apply_face_filter", "try_eyewear", "try_product"):
         out.append({"type": "refresh", "data": {"panel": "overlays"}})
@@ -898,7 +903,9 @@ class StudioAgent:
                     "Gemma is selected but the local server isn't running — start it with "
                     "`litert-lm serve` (or pick a Gemini model). Using "
                     + ("the cloud brain." if _HAS_KEY else "the offline sim brain.")}}
-            m = "adk" if (_HAS_KEY and self.settings.simulation != "zero") else "sim"
+            from .offline import offline as _offline
+            m = ("adk" if (_HAS_KEY and not _offline() and self.settings.simulation != "zero")
+                 else "sim")                               # offline → local sim brain, never cloud
         if m == "adk":
             try:
                 if self._adk is None:

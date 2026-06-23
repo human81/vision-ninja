@@ -18,3 +18,8 @@ browser UI through tools + conversation. Mirrors the Momentum architecture:
 """
 
 STUDIO_DIR = "out/studio"
+
+# Honour STUDIO_OFFLINE=1 before any transformers / huggingface_hub import, so local
+# model loads are cache-only (no network round-trip that hangs when wifi is off).
+from . import offline as _offline  # noqa: E402
+_offline.apply()
