@@ -52,6 +52,21 @@ def _side(a, b, p) -> float:
     return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
 
 
+def _segments_cross(p0, p1, a, b) -> bool:
+    """True iff the MOVEMENT segment p0->p1 actually intersects the line SEGMENT a->b
+    (proper straddle test), NOT merely the infinite line. This is the correctness fix:
+    the old code counted a crossing whenever the anchor flipped side of the *infinite*
+    line, so an object passing the line's extension (or anywhere on the far side) was
+    miscounted. Both segments must straddle each other for a real crossing."""
+    d1 = _side(a, b, p0)
+    d2 = _side(a, b, p1)
+    if (d1 > 0) == (d2 > 0):                 # both movement ends on the same side → no cross
+        return False
+    d3 = _side(p0, p1, a)
+    d4 = _side(p0, p1, b)
+    return (d3 > 0) != (d4 > 0)              # AND the line's endpoints straddle the movement
+
+
 def _seg_dist2(a, b, p) -> float:
     dx, dy = b[0] - a[0], b[1] - a[1]
     L2 = dx * dx + dy * dy
@@ -81,7 +96,7 @@ class GeometryEngine:
         self._line_counts: dict[str, dict[str, Counter]] = {
             ln.id: {"positive": Counter(), "negative": Counter()}
             for ln in annotations.lines()}
-        self._prev_side: dict[tuple[str, int], float] = {}
+        self._prev_pos: dict[int, tuple[float, float]] = {}   # track id -> last anchor (px)
         self._zone_enter: dict[tuple[str, int], float] = {}
         self._track_start: dict[int, float] = {}
 
@@ -102,6 +117,9 @@ class GeometryEngine:
 
         zones_px = {z.id: self._to_px(z.vertices, w, h) for z in self.ann.zones()}
         lines_px = {ln.id: self._to_px(ln.vertices, w, h) for ln in self.ann.lines()}
+        # a single detection step can't move a real object across most of the frame —
+        # a jump that large is a tracker id-swap/teleport, not a crossing, so ignore it.
+        max_jump2 = 0.25 * (w * w + h * h)
 
         for i in range(len(det)):
             tid = int(tids[i])
@@ -112,17 +130,22 @@ class GeometryEngine:
             p = anchors[i]
             self._track_start.setdefault(tid, t)
 
-            # --- lines (2-pt or polyline) ---
-            for ln in self.ann.lines():
-                s = _poly_side(lines_px[ln.id], p)
-                key = (ln.id, tid)
-                prev = self._prev_side.get(key)
-                if prev is not None and prev != 0 and s != 0 and (prev > 0) != (s > 0):
-                    if prev < 0 < s:
-                        self._line_counts[ln.id]["positive"][cls] += 1
-                    else:
-                        self._line_counts[ln.id]["negative"][cls] += 1
-                self._prev_side[key] = s
+            # --- lines (2-pt or polyline): count a crossing ONLY when the object's
+            #     movement (prev anchor -> current anchor) actually intersects the line
+            #     segment, with right-hand-rule direction from the side it ends on. ---
+            p0 = self._prev_pos.get(tid)
+            if p0 is not None and (p[0] - p0[0]) ** 2 + (p[1] - p0[1]) ** 2 <= max_jump2:
+                for ln in self.ann.lines():
+                    verts = lines_px[ln.id]
+                    for j in range(len(verts) - 1):
+                        a, b = verts[j], verts[j + 1]
+                        if _segments_cross(p0, p, a, b):
+                            if _side(a, b, p) > 0:               # ended on the positive side
+                                self._line_counts[ln.id]["positive"][cls] += 1
+                            else:
+                                self._line_counts[ln.id]["negative"][cls] += 1
+                            break                                # one crossing per line per step
+            self._prev_pos[tid] = (float(p[0]), float(p[1]))
 
             # --- zones ---
             for z in self.ann.zones():
@@ -138,9 +161,10 @@ class GeometryEngine:
                     self._zone_enter.pop(key, None)
 
         # prune state for tracks that disappeared
-        for d in (self._zone_enter, self._prev_side):
-            for k in [k for k in d if k[1] not in live]:
-                del d[k]
+        for k in [k for k in self._zone_enter if k[1] not in live]:
+            del self._zone_enter[k]
+        for tid in [t_ for t_ in self._prev_pos if t_ not in live]:
+            del self._prev_pos[tid]
         for tid in [t_ for t_ in self._track_start if t_ not in live]:
             del self._track_start[tid]
 
