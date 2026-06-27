@@ -75,6 +75,8 @@ def node_for_checkpoint(cp: str) -> str:
 # Detection points scale with model tier — the lever the agent trades for speed.
 _DETECT_POINTS = {"yolo11n.pt": 1.0, "yolo11s.pt": 2.0, "yolo11m.pt": 4.0,
                   "yolo11l.pt": 7.0, "yolo11x.pt": 12.0,
+                  "yolo26n.pt": 1.0, "yolo26s.pt": 2.0, "yolo26m.pt": 4.0,
+                  "yolo26l.pt": 7.0, "yolo26x.pt": 12.0,
                   "rfdetr": 6.0, "owlv2": 20.0}
 
 

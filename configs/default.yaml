@@ -13,7 +13,8 @@ source:
 
 detector:
   backend: "yolo"                     # yolo | rfdetr (Phase 3)
-  model: "yolo11n.pt"                 # 💰 n < s < m < l < x  (speed → accuracy). Auto-downloaded.
+  model: "yolo26n.pt"                 # 💰 n < s < m < l < x  (speed → accuracy). Auto-downloaded.
+                                      #    (yolo26 = newest gen; yolo11*.pt still work as overrides)
   device: "mps"                       # mps | cpu | cuda
   half: true                          # 💰 FP16 on MPS — faster, lower memory
   imgsz: 640                          # 💰 inference resolution (lower = faster)
