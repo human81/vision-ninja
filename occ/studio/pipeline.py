@@ -367,13 +367,23 @@ class StudioPipeline:
                 time.sleep(0.2)
 
     def _set_placeholder(self, title: str, sub: str = ""):
-        """Render a status card so the canvas shows state, never a frozen frame."""
-        img = np.full((360, 640, 3), 22, np.uint8)
-        cv2.putText(img, title, (28, 168), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                    (90, 200, 255), 2, cv2.LINE_AA)
+        """Render a status card so the canvas shows state, never a frozen frame. Match the
+        last live frame's dimensions so a card<->video transition never changes the stream's
+        aspect ratio (which makes the displayed image jump vertically under object-fit)."""
+        with self._lock:
+            last = self._frame_vis
+        if last is not None and getattr(last, "ndim", 0) == 3 and last.shape[0] > 1:
+            h, w = int(last.shape[0]), int(last.shape[1])     # match the live frame
+        else:
+            h, w = 720, 1280                                  # neutral 16:9 before any frame
+        img = np.full((h, w, 3), 22, np.uint8)
+        fs = max(0.6, w / 1100.0)
+        cv2.putText(img, title, (int(w * 0.05), int(h * 0.47)), cv2.FONT_HERSHEY_SIMPLEX,
+                    fs, (90, 200, 255), max(1, round(fs * 2)), cv2.LINE_AA)
         if sub:
-            cv2.putText(img, sub[:54], (28, 205), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        (170, 170, 170), 1, cv2.LINE_AA)
+            cv2.putText(img, sub[:54], (int(w * 0.05), int(h * 0.47 + fs * 42)),
+                        cv2.FONT_HERSHEY_SIMPLEX, fs * 0.6, (170, 170, 170),
+                        max(1, round(fs)), cv2.LINE_AA)
         ok, buf = cv2.imencode(".jpg", img)
         with self._lock:
             if ok:
