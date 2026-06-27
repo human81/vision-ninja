@@ -159,6 +159,15 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         res["available"] = FACE_FILTERS_LIST
         return JSONResponse(res)
 
+    @app.post("/jewelry")
+    async def jewelry_route(req: Request):
+        """Try jewelry on the live face (UI chip; the agent can also via try_jewelry).
+        {kind: nose_ring|earrings|studs|septum|lip_ring|necklace, image?}."""
+        from .tools import try_jewelry
+        b = await req.json()
+        return JSONResponse(try_jewelry(kind=b.get("kind", "nose_ring"),
+                                        image=b.get("image", ""), label=b.get("label", "")))
+
     @app.get("/garments")
     def garments():
         """Default VTO catalog (sponsored). Falls back to an empty set."""

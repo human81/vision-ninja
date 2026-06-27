@@ -595,6 +595,13 @@
           <button onclick="vFilter('heart_eyes')" title="Heart eyes">❤️</button>
           <button onclick="vFilter('face_mesh')" title="Face mesh">🕸</button>
           <button onclick="vFilter('anonymize')" title="Blur / privacy">🔒</button>
+          <span class=fbl title="Jewelry — anchored to your face" style="margin-left:8px">💍</span>
+          <button onclick="vJewelry('nose_ring')" title="Nose ring — Tupac">Nose</button>
+          <button onclick="vJewelry('earrings')" title="Earrings">Ears</button>
+          <button onclick="vJewelry('studs')" title="Ear studs">Studs</button>
+          <button onclick="vJewelry('septum')" title="Septum ring">Septum</button>
+          <button onclick="vJewelry('lip_ring')" title="Lip ring">Lip</button>
+          <button onclick="vJewelry('necklace')" title="Necklace">Chain</button>
           <button onclick="vFilter('clear')" title="Clear">✖</button>
         </div>
         <div class=tryonwrap id=tryonbar style=display:none>
@@ -1080,7 +1087,7 @@ async function pollModels(){try{let s=await(await fetch('/settings')).json();
   }).join('')+'<div class=muted style="font-size:10px;margin-top:6px;line-height:1.5">↳ <b>Brain</b> = Gemma&nbsp;4&nbsp;<b>12B</b> (<code>gemma-4-12b-it</code>), local via <code>litert-lm serve</code> (:9379) — text&nbsp;+&nbsp;tools only (that build can’t see images). <b>Vision</b> = the 4B multimodal Gemma (<code>gemma-3-4b-it</code>) on MPS, so it actually sees you. Both $0, private, offline; fall back to Gemini/sim if not running. · <a href="/medical" target=_blank>🩺 Medical dashboard (MedGemma)</a></div>';}catch(e){}}
 window.saveModels=async()=>{let models={};document.querySelectorAll('#models select').forEach(s=>models[s.dataset.task]=s.value);
   await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({models})});toast('model configuration saved');};
-const TASK_MODEL={detect:'yolo11n.pt',segment:'yolo11n-seg.pt',pose:'yolo11n-pose.pt',obb:'yolo11n-obb.pt',classify:'yolo11n-cls.pt'};
+const TASK_MODEL={detect:'yolo26n.pt',segment:'yolo11n-seg.pt',pose:'yolo11n-pose.pt',obb:'yolo11n-obb.pt',classify:'yolo11n-cls.pt'};
 window.setTask=async(t)=>{await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({'detector.backend':'yolo','detector.model':TASK_MODEL[t]})});toast('vision task: '+t);pollConfig();};
 
 /* ---------------- BIDI Live Voice (Gemini Live + tools + overlays on YOU) ---------------- */
@@ -1388,6 +1395,18 @@ async function vFilter(name){
     else if(r.status==='success'){toast('try-on: '+name.replace('_',' '));switchTab('code');}
     else{toast('filter: '+(r.error||'failed'));}
   }catch(e){toast('filter failed');}
+  if(NLE.mode==='voice')setCanvas('live');
+  pollOverlays();
+}
+/* ---- jewelry try-on (one-tap): nose ring (Tupac), earrings, necklace… ---- */
+async function vJewelry(kind){
+  if(!VOICE.on.cam)toast('Tip: turn on 📷 so it lands on YOUR face');
+  try{
+    const r=await fetch('/jewelry',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({kind})}).then(r=>r.json());
+    if(r.status==='success')toast('💍 '+((r.label||kind).replace('_',' ')));
+    else toast('jewelry: '+(r.error||'failed'));
+  }catch(e){toast('jewelry failed');}
   if(NLE.mode==='voice')setCanvas('live');
   pollOverlays();
 }
