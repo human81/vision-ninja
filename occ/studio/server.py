@@ -112,7 +112,7 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     async def set_render_route(req: Request):
         b = await req.json()
         return pipe.set_render_flags(**{"draw_" + k: v for k, v in b.items()
-                                        if k in ("boxes", "labels", "trails", "counts")})
+                                        if k in ("boxes", "labels", "trails", "counts", "zones")})
 
     @app.post("/detection")
     async def set_detection_route(req: Request):

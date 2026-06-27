@@ -734,6 +734,14 @@
             <option value=obb>obb — oriented boxes (aerial)</option>
             <option value=classify>classify — whole-image label</option>
           </select></div>
+        <div class=mrow><label>Model Tier <span class=muted style="font-weight:400">— speed → accuracy 💰</span></label>
+          <select id=tiersel onchange="setTier(this.value)">
+            <option value=n>Nano (n) — fastest</option>
+            <option value=s>Small (s)</option>
+            <option value=m>Medium (m)</option>
+            <option value=l>Large (l)</option>
+            <option value=x>XL (x) — most accurate</option>
+          </select></div>
         <div class=muted style="font-size:11px;margin:10px 0 6px">AI model per capability — the agent + media tools use these.</div>
         <div id=models></div>
         <button class=savebtn onclick=saveModels()>Save model configuration</button>
@@ -944,6 +952,9 @@ async function pollConfig(){try{let c=await(await fetch('/config')).json();
     .map(([k,v])=>`<span>${k} <b>${v}</b></span>`).join('');
   let mdl=c['detector.model']||'',ts=$('tasksel');
   if(ts)ts.value=mdl.includes('-seg')?'segment':mdl.includes('-pose')?'pose':mdl.includes('-obb')?'obb':mdl.includes('-cls')?'classify':'detect';
+  CUR_TASK=ts?ts.value:'detect';
+  CUR_TIER=(mdl.match(/yolo\d+([nsmlx])/)||[])[1]||'n';
+  let tsel=$('tiersel');if(tsel)tsel.value=CUR_TIER;
   $('src').title=c['source.uri'];}catch(e){}}
 async function pollOverlays(){try{let o=await(await fetch('/overlays')).json();
   let active=o.overlays.map(v=>`<span class="chip ${v.enabled?'on':''}" onclick="toggleOv('${v.name}',${!v.enabled})">${v.enabled?'◉':'○'} ${v.name} <span class=x onclick="event.stopPropagation();rmOv('${v.name}')">✕</span></span>`).join('');
@@ -1087,8 +1098,16 @@ async function pollModels(){try{let s=await(await fetch('/settings')).json();
   }).join('')+'<div class=muted style="font-size:10px;margin-top:6px;line-height:1.5">↳ <b>Brain</b> = Gemma&nbsp;4&nbsp;<b>12B</b> (<code>gemma-4-12b-it</code>), local via <code>litert-lm serve</code> (:9379) — text&nbsp;+&nbsp;tools only (that build can’t see images). <b>Vision</b> = the 4B multimodal Gemma (<code>gemma-3-4b-it</code>) on MPS, so it actually sees you. Both $0, private, offline; fall back to Gemini/sim if not running. · <a href="/medical" target=_blank>🩺 Medical dashboard (MedGemma)</a></div>';}catch(e){}}
 window.saveModels=async()=>{let models={};document.querySelectorAll('#models select').forEach(s=>models[s.dataset.task]=s.value);
   await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({models})});toast('model configuration saved');};
-const TASK_MODEL={detect:'yolo26n.pt',segment:'yolo11n-seg.pt',pose:'yolo11n-pose.pt',obb:'yolo11n-obb.pt',classify:'yolo11n-cls.pt'};
-window.setTask=async(t)=>{await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({'detector.backend':'yolo','detector.model':TASK_MODEL[t]})});toast('vision task: '+t);pollConfig();};
+const TASK_SUFFIX={detect:'',segment:'-seg',pose:'-pose',obb:'-obb',classify:'-cls'};
+let CUR_TASK='detect',CUR_TIER='n';
+// detect rides YOLO26 (newest gen); other tasks stay on YOLO11 (those yolo26 variants aren't released yet)
+function yoloModel(task,tier){return (task==='detect'?'yolo26':'yolo11')+tier+(TASK_SUFFIX[task]||'')+'.pt';}
+async function applyDetector(){const m=yoloModel(CUR_TASK,CUR_TIER);
+  await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({'detector.backend':'yolo','detector.model':m})});
+  toast('detector → '+m);pollConfig();}
+window.setTask=(t)=>{CUR_TASK=t;applyDetector();};
+window.setTier=(t)=>{CUR_TIER=t;applyDetector();};
 
 /* ---------------- BIDI Live Voice (Gemini Live + tools + overlays on YOU) ---------------- */
 const VOICE={live:null,cam:null,actx:null,pctx:null,worklet:null,micStream:null,
@@ -1792,17 +1811,45 @@ function applyTimeline(d){ // agent-driven (Co-Director)
   // letterboxed/centered inside #wrap by object-fit), so zone/line coords map
   // to real pixels no matter the source resolution or aspect ratio.
   function vis(){const el=$('media').style.display!=='none'?$('media'):($('video').style.display!=='none'?$('video'):img);return el;}
+  function natSize(el){return el.tagName==='VIDEO'?[el.videoWidth,el.videoHeight]:[el.naturalWidth,el.naturalHeight];}
+  // CR = the ACTUAL displayed-image rectangle inside the canvas, in canvas px. Normalized
+  // (0..1) zone coords are image-space, so we must map through THIS rect — not the whole
+  // box — or the overlay drifts into the object-fit letterbox/crop and won't track resizes.
+  let CR={x:0,y:0,w:1,h:1},_natKey='';
+  function contentRect(el,bw,bh){
+    const [nw,nh]=natSize(el);
+    if(!nw||!nh)return{x:0,y:0,w:bw,h:bh,nw:0,nh:0};        // intrinsic size unknown → fill (safe)
+    const fit=(getComputedStyle(el).objectFit||'contain');
+    let s;
+    if(fit==='fill')return{x:0,y:0,w:bw,h:bh,nw,nh};         // stretched, no letterbox
+    else if(fit==='cover')s=Math.max(bw/nw,bh/nh);           // fills + crops (overflow clipped)
+    else if(fit==='none')s=1;
+    else if(fit==='scale-down')s=Math.min(1,Math.min(bw/nw,bh/nh));
+    else s=Math.min(bw/nw,bh/nh);                            // contain (default) → letterbox
+    const w=nw*s,h=nh*s;
+    return{x:(bw-w)/2,y:(bh-h)/2,w,h,nw,nh};
+  }
   function resize(){
     const el=vis(),wrap=cv.parentElement;
     const er=el.getBoundingClientRect(),wr=wrap.getBoundingClientRect();
     if(!er.width||!er.height)return;
     cv.style.left=(er.left-wr.left)+'px';cv.style.top=(er.top-wr.top)+'px';
     cv.style.width=er.width+'px';cv.style.height=er.height+'px';
-    cv.width=Math.round(er.width);cv.height=Math.round(er.height);
+    const W=Math.round(er.width),H=Math.round(er.height);
+    if(cv.width!==W)cv.width=W; if(cv.height!==H)cv.height=H;  // resizing the backing store clears it
+    CR=contentRect(el,W,H);
+    _natKey=el.tagName+CR.nw+'x'+CR.nh;
   }
   img.addEventListener('load',resize);window.addEventListener('resize',resize);
-  setTimeout(resize,300);setInterval(resize,1000);  // MJPEG size can change on source switch
-  const toPx=v=>[v[0]*cv.width,v[1]*cv.height],nrm=(x,y)=>[x/cv.width,y/cv.height],d2=(ax,ay,bx,by)=>(ax-bx)**2+(ay-by)**2;
+  try{new ResizeObserver(resize).observe(cv.parentElement);}catch(e){}  // any layout change
+  setTimeout(resize,150);
+  // backstop: MJPEG/video intrinsic size can change on a SOURCE switch with no resize/load
+  // event — recompute when the natural-size key changes (cheap; no work if unchanged).
+  setInterval(()=>{const el=vis(),[nw,nh]=natSize(el);if(el.tagName+nw+'x'+nh!==_natKey)resize();},400);
+  const clamp01=v=>v<0?0:v>1?1:v;
+  const toPx=v=>[CR.x+v[0]*CR.w,CR.y+v[1]*CR.h];
+  const nrm=(x,y)=>[clamp01((x-CR.x)/(CR.w||1)),clamp01((y-CR.y)/(CR.h||1))];
+  const d2=(ax,ay,bx,by)=>(ax-bx)**2+(ay-by)**2;
   function unitN(a,b){let dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy)||1;return[dy/L,-dx/L];}
   function hitVertex(x,y){let best=null,bd=SNAP*SNAP;shapes.forEach((s,si)=>s.vertices.forEach((v,vi)=>{let[px,py]=toPx(v);let d=d2(px,py,x,y);if(d<bd){bd=d;best=[si,vi];}}));return best;}
   function snapTarget(x,y){if(mode==='zone'&&draft.length>=3){let[fx,fy]=toPx(draft[0]);if(d2(fx,fy,x,y)<SNAP*SNAP)return{x:fx,y:fy,kind:'close'};}if(mode!=='idle'){let h=hitVertex(x,y);if(h){let[px,py]=toPx(shapes[h[0]].vertices[h[1]]);return{x:px,y:py,kind:'vertex'};}}return null;}
@@ -1824,7 +1871,11 @@ function applyTimeline(d){ // agent-driven (Co-Director)
   function tag(txt,x,y,col){ctx.font='12px system-ui';let w=ctx.measureText(txt).width;x=Math.min(Math.max(x,2),cv.width-w-8);y=Math.min(Math.max(y,14),cv.height-4);ctx.fillStyle='rgba(13,17,23,0.85)';ctx.fillRect(x-4,y-13,w+8,17);ctx.strokeStyle=col;ctx.lineWidth=1;ctx.strokeRect(x-4,y-13,w+8,17);ctx.fillStyle=col;ctx.fillText(txt,x,y);}
   function handles(pts,col){pts.forEach(p=>{ctx.fillStyle='#0d1117';ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fill();ctx.stroke();});}
   function plusMinus(pts){let j=pts.length>2?Math.floor(pts.length/2)-1:0,a=pts[j],b=pts[j+1];let mx=(a[0]+b[0])/2,my=(a[1]+b[1])/2,[nx,ny]=unitN(a,b),d=20;tag('+',mx+nx*d,my+ny*d,POS);tag('−',mx-nx*d,my-ny*d,NEG);}
-  function loupe(x,y){if(!img.naturalWidth)return;const R=52,z=4,half=R/z;const sx=img.naturalWidth/cv.width,sy=img.naturalHeight/cv.height,cx=cv.width-R-14,cy=R+14;ctx.save();ctx.imageSmoothingEnabled=false;ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.clip();ctx.drawImage(img,(x-half)*sx,(y-half)*sy,2*half*sx,2*half*sy,cx-R,cy-R,2*R,2*R);ctx.restore();ctx.strokeStyle=CUR;ctx.lineWidth=2;ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.stroke();ctx.strokeStyle=SNAPC;ctx.beginPath();ctx.moveTo(cx-9,cy);ctx.lineTo(cx+9,cy);ctx.moveTo(cx,cy-9);ctx.lineTo(cx,cy+9);ctx.stroke();}
+  function loupe(x,y){const el=vis(),[nw,nh]=natSize(el);if(!nw||CR.w<=0)return;const R=52,z=4,half=R/z;
+    const sx=nw/CR.w,sy=nh/CR.h,cx=cv.width-R-14,cy=R+14;            // canvas px → source px through CR
+    ctx.save();ctx.imageSmoothingEnabled=false;ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.clip();
+    ctx.drawImage(el,(x-CR.x-half)*sx,(y-CR.y-half)*sy,2*half*sx,2*half*sy,cx-R,cy-R,2*R,2*R);ctx.restore();
+    ctx.strokeStyle=CUR;ctx.lineWidth=2;ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.stroke();ctx.strokeStyle=SNAPC;ctx.beginPath();ctx.moveTo(cx-9,cy);ctx.lineTo(cx+9,cy);ctx.moveTo(cx,cy-9);ctx.lineTo(cx,cy+9);ctx.stroke();}
   function draw(){if(!cv.width)return;dash=(dash+0.5)%17;ctx.clearRect(0,0,cv.width,cv.height);
     shapes.forEach((s,si)=>{let pts=s.vertices.map(toPx),sel=si===selected,hov=si===hover;let col=sel?SC:(s.type==='active_zone'?ZC:LC);ctx.shadowColor=col;ctx.shadowBlur=sel?12:0;
       if(s.type==='active_zone'){ctx.fillStyle=col+(hov?'33':'22');ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.fill();ctx.strokeStyle=col;ctx.lineWidth=sel?3:2;ctx.setLineDash(sel?[10,7]:[]);ctx.lineDashOffset=-dash;ctx.stroke();ctx.setLineDash([]);}
@@ -1834,11 +1885,15 @@ function applyTimeline(d){ // agent-driven (Co-Director)
       if(mode==='zone'){if(cursor&&pts.length>=2){ctx.fillStyle=col+'22';ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.lineTo(...cursor);ctx.closePath();ctx.fill();}ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();if(cursor){ctx.setLineDash([8,6]);ctx.beginPath();ctx.moveTo(...pts[pts.length-1]);ctx.lineTo(...cursor);ctx.stroke();if(pts.length>=2){ctx.beginPath();ctx.moveTo(...cursor);ctx.lineTo(...pts[0]);ctx.stroke();}ctx.setLineDash([]);}if(pts.length>=3){ctx.strokeStyle=SNAPC;ctx.lineWidth=2;ctx.beginPath();ctx.arc(pts[0][0],pts[0][1],9,0,7);ctx.stroke();}}
       else{for(let j=0;j<pts.length-1;j++)direction(pts[j],pts[j+1]);ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();if(cursor){direction(pts[pts.length-1],cursor);ctx.setLineDash([8,6]);ctx.strokeStyle=col;ctx.beginPath();ctx.moveTo(...pts[pts.length-1]);ctx.lineTo(...cursor);ctx.stroke();ctx.setLineDash([]);let dx=cursor[0]-pts[pts.length-1][0],dy=cursor[1]-pts[pts.length-1][1];tag(Math.round(Math.hypot(dx,dy))+'px  '+Math.round(-Math.atan2(dy,dx)*180/Math.PI)+'°',cursor[0]+14,cursor[1]-12,col);}}
       pts.forEach(p=>{ctx.fillStyle=col;ctx.fillRect(p[0]-4,p[1]-4,8,8);});}
-    if(cursor){let[x,y]=cursor;if(mode!=='idle'){ctx.strokeStyle='rgba(230,237,243,0.30)';ctx.lineWidth=1;ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(cv.width,y);ctx.moveTo(x,0);ctx.lineTo(x,cv.height);ctx.stroke();ctx.setLineDash([]);ctx.strokeStyle=CUR;ctx.lineWidth=1;ctx.beginPath();ctx.arc(x,y,6,0,7);ctx.stroke();tag(Math.round(x)+','+Math.round(y)+'  ('+(x/cv.width).toFixed(3)+', '+(y/cv.height).toFixed(3)+')',x+14,y+20,CUR);}let sn=snapTarget(x,y);if(sn){ctx.strokeStyle=SNAPC;ctx.lineWidth=2;ctx.beginPath();ctx.arc(sn.x,sn.y,10,0,7);ctx.stroke();if(sn.kind==='close')tag('click to close',sn.x+14,sn.y-10,SNAPC);}if(mode!=='idle'||drag)loupe(x,y);}}
+    if(cursor){let[x,y]=cursor;if(mode!=='idle'){ctx.strokeStyle='rgba(230,237,243,0.30)';ctx.lineWidth=1;ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(cv.width,y);ctx.moveTo(x,0);ctx.lineTo(x,cv.height);ctx.stroke();ctx.setLineDash([]);ctx.strokeStyle=CUR;ctx.lineWidth=1;ctx.beginPath();ctx.arc(x,y,6,0,7);ctx.stroke();let nn=nrm(x,y);tag(Math.round(x)+','+Math.round(y)+'  ('+nn[0].toFixed(3)+', '+nn[1].toFixed(3)+')',x+14,y+20,CUR);}let sn=snapTarget(x,y);if(sn){ctx.strokeStyle=SNAPC;ctx.lineWidth=2;ctx.beginPath();ctx.arc(sn.x,sn.y,10,0,7);ctx.stroke();if(sn.kind==='close')tag('click to close',sn.x+14,sn.y-10,SNAPC);}if(mode!=='idle'||drag)loupe(x,y);}}
   function loop(){if(enabled&&cv.width)draw();else ctx.clearRect(0,0,cv.width,cv.height);requestAnimationFrame(loop);}
   requestAnimationFrame(loop);
   fetch('/annotations').then(r=>r.json()).then(a=>{shapes=(a||[]).map(s=>({type:s.type,id:s.id,vertices:s.vertices}));}).catch(()=>{});
-  window.setDrawEnabled=on=>{enabled=on;cv.style.pointerEvents=on?'auto':'none';if(!on){mode='idle';draft=[];}let t=document.querySelector('.drawbar button[data-tog]');if(t)t.classList.toggle('on',on);};
+  window.setDrawEnabled=on=>{enabled=on;cv.style.pointerEvents=on?'auto':'none';if(!on){mode='idle';draft=[];}
+    // While editing, the canvas IS the zone display — tell the server to stop baking zones/lines
+    // into the video so they don't appear twice (canvas overlay + baked overlay). Restore on exit.
+    fetch('/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({zones:!on})}).catch(()=>{});
+    let t=document.querySelector('.drawbar button[data-tog]');if(t)t.classList.toggle('on',on);};
   window.toggleDraw=()=>window.setDrawEnabled(!enabled);
   window.drawTool=t=>{window.setDrawEnabled(true);mode=t;draft=[];};
   window.drawFinish=()=>finish();
