@@ -28,6 +28,7 @@ class Annotation:
     type: str                                   # ZONE | LINE
     vertices: list[tuple[float, float]]         # normalized 0..1
     display_name: str = ""
+    dwell: float = 0.0                          # per-zone dwell threshold (s); 0 = engine default
 
     def to_proto(self) -> StreamAnnotation:
         sa = StreamAnnotation()
@@ -47,6 +48,7 @@ class Annotation:
             "id": self.id,
             "type": self.type,
             "display_name": self.display_name,
+            "dwell": float(self.dwell),
             "vertices": [[float(x), float(y)] for x, y in self.vertices],
         }
 
@@ -85,5 +87,6 @@ class AnnotationSet:
         anns = [Annotation(
             id=a["id"], type=a["type"],
             vertices=[tuple(v) for v in a["vertices"]],
-            display_name=a.get("display_name", "")) for a in raw.get("annotations", [])]
+            display_name=a.get("display_name", ""),
+            dwell=float(a.get("dwell", 0) or 0)) for a in raw.get("annotations", [])]
         return cls(annotations=anns, source=raw.get("source", ""))

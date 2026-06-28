@@ -27,8 +27,9 @@ class GeoStats:
     full_frame: Counter                                   # class_name -> count
     zone_counts: dict[str, Counter]                       # zone_id -> class -> count
     line_counts: dict[str, dict[str, Counter]]            # line_id -> {pos,neg} -> class -> count
-    dwell: list[tuple[str, str, float, float]]            # (track_id, zone_id, start, end)
+    dwell: list[tuple[str, str, float, float]]            # (track_id, zone_id, start, end) — over threshold
     track_start: dict[int, float] = field(default_factory=dict)
+    active_dwell: list[dict] = field(default_factory=list)  # LIVE dwell for the on-frame timer ring
 
 
 def _anchors(det: sv.Detections) -> np.ndarray:
@@ -88,6 +89,106 @@ def _poly_side(verts, p) -> float:
     return best_s
 
 
+class _DwellTracker:
+    """Robust per-occupant dwell timing that survives tracker ID CHANGES and brief
+    OCCLUSIONS / detection dropouts.
+
+    The bug with keying dwell on the raw track id: when the tracker drops a person for a
+    frame (occlusion, fast motion, a missed detection) it usually comes back with a NEW id,
+    so the timer resets to zero and the ring flickers. Here each occupant is a persistent
+    record re-associated every frame by, in order of strength:
+      1. same track id in the same zone (normal continuity), else
+      2. the nearest velocity-PREDICTED record in that zone, within a tolerance (this catches
+         the id swap — the person is still where physics says they should be).
+    Records LINGER for `grace_lost` seconds after they were last seen, so a lost-then-
+    reacquired person continues the SAME timer instead of restarting; the ring is held for
+    `ring_hold` seconds so it doesn't blink during a one-frame gap.
+    """
+
+    def __init__(self, grace_lost: float = 2.0, ring_hold: float = 0.5, match_frac: float = 0.10,
+                 gap_grow: float = 0.16, smooth: float = 0.5, confirm: int = 2):
+        self.grace_lost = grace_lost      # keep a record alive this long after last seen (occlusion)
+        self.ring_hold = ring_hold        # show the ring this long through a brief gap
+        self.match_frac = match_frac      # base re-assoc radius, fraction of frame diagonal
+        self.gap_grow = gap_grow          # radius GROWS with the occlusion gap (uncertainty)
+        self.smooth = smooth              # EMA on the anchor → steady ring + clean velocity
+        self.confirm = confirm            # frames a record must be seen before it's shown
+        self._rec: dict[int, dict] = {}
+        self._next = 1
+
+    def update(self, t: float, inside: list[dict], w: int, h: int):
+        """`inside` = [{tid, zone, thresh, anchor, bw, strict}] for every (track, zone) the
+        anchor is within (or just inside the hysteresis band). Associate each to a record via
+        a global cost assignment (predicted position + size + id continuity)."""
+        for did in [d for d, r in self._rec.items() if t - r["last"] > self.grace_lost]:
+            del self._rec[did]
+        diag = (w * w + h * h) ** 0.5
+        # candidate (record, detection) pairs with a combined cost; assign globally best-first
+        pairs = []
+        for idx, d in enumerate(inside):
+            for did, r in self._rec.items():
+                if r["zone"] != d["zone"]:
+                    continue
+                gap = max(0.0, t - r["last"])
+                rad = (self.match_frac + self.gap_grow * gap) * diag   # grows with the gap
+                px, py = self._predict(r, t)
+                dist = ((px - d["anchor"][0]) ** 2 + (py - d["anchor"][1]) ** 2) ** 0.5
+                if dist > rad:
+                    continue
+                cost = dist / rad
+                if r["bw"] > 1 and d["bw"] > 1:                        # people keep ~constant size
+                    cost += 0.6 * abs(r["bw"] - d["bw"]) / max(r["bw"], d["bw"])
+                if r["tid"] == d["tid"]:                               # same id = strong continuity
+                    cost -= 0.5
+                pairs.append((cost, did, idx))
+        pairs.sort(key=lambda x: x[0])
+        used_r, used_d = set(), set()
+        for cost, did, idx in pairs:
+            if did in used_r or idx in used_d:
+                continue
+            used_r.add(did); used_d.add(idx); self._touch(did, t, inside[idx])
+        for idx, d in enumerate(inside):                              # new record only if CLEARLY inside
+            if idx not in used_d and d.get("strict", True):
+                self._new(t, d)
+
+    def _new(self, t, d):
+        self._rec[self._next] = {"zone": d["zone"], "start": t, "last": t, "thresh": d["thresh"],
+                                 "pos": d["anchor"], "prev": d["anchor"], "prev_t": t,
+                                 "tid": d["tid"], "bw": d["bw"], "hits": 1}
+        self._next += 1
+
+    def _touch(self, did, t, d):
+        r = self._rec[did]
+        sx = self.smooth * d["anchor"][0] + (1 - self.smooth) * r["pos"][0]   # EMA-smoothed anchor
+        sy = self.smooth * d["anchor"][1] + (1 - self.smooth) * r["pos"][1]
+        if t > r["last"]:
+            r["prev"], r["prev_t"] = r["pos"], r["last"]
+        r["pos"], r["last"], r["tid"] = (sx, sy), t, d["tid"]
+        r["thresh"] = d["thresh"]
+        r["bw"] = 0.6 * r["bw"] + 0.4 * d["bw"]
+        r["hits"] += 1
+
+    def _predict(self, r, t):
+        dt = r["last"] - r["prev_t"]
+        if dt > 1e-3:
+            gap = min(max(0.0, t - r["last"]), 0.7)        # extrapolate a bit further through gaps
+            vx = (r["pos"][0] - r["prev"][0]) / dt
+            vy = (r["pos"][1] - r["prev"][1]) / dt
+            return (r["pos"][0] + vx * gap, r["pos"][1] + vy * gap)
+        return r["pos"]
+
+    def active(self, t: float) -> list[dict]:
+        """Records to score/draw now — seen within ring_hold and CONFIRMED (steady, no ghosts)."""
+        out = []
+        for did, r in self._rec.items():
+            if t - r["last"] <= self.ring_hold and r["hits"] >= self.confirm:
+                sec = t - r["start"]
+                out.append({"track": did, "zone": r["zone"], "seconds": round(sec, 2),
+                            "threshold": round(r["thresh"], 2), "anchor": r["pos"],
+                            "over": sec >= r["thresh"]})
+        return out
+
+
 class GeometryEngine:
     def __init__(self, annotations: AnnotationSet, min_dwell: float = 1.0):
         self.ann = annotations
@@ -97,8 +198,12 @@ class GeometryEngine:
             ln.id: {"positive": Counter(), "negative": Counter()}
             for ln in annotations.lines()}
         self._prev_pos: dict[int, tuple[float, float]] = {}   # track id -> last anchor (px)
-        self._zone_enter: dict[tuple[str, int], float] = {}
+        self._dwell = _DwellTracker()      # id-change / occlusion-robust per-occupant dwell
         self._track_start: dict[int, float] = {}
+
+    def reset_dwell(self):
+        """Clear all running dwell timers (every occupant's counter restarts from zero)."""
+        self._dwell = _DwellTracker()
 
     @staticmethod
     def _to_px(verts, w, h) -> np.ndarray:
@@ -113,6 +218,8 @@ class GeometryEngine:
         full = Counter(names)
         zone_counts: dict[str, Counter] = {z.id: Counter() for z in self.ann.zones()}
         dwell: list[tuple[str, str, float, float]] = []
+        active_dwell: list[dict] = []
+        inside_pairs: list[dict] = []      # (track, zone) anchor-inside pairs for dwell timing
         live: set[int] = set()
 
         zones_px = {z.id: self._to_px(z.vertices, w, h) for z in self.ann.zones()}
@@ -120,6 +227,9 @@ class GeometryEngine:
         # a single detection step can't move a real object across most of the frame —
         # a jump that large is a tracker id-swap/teleport, not a crossing, so ignore it.
         max_jump2 = 0.25 * (w * w + h * h)
+        diag = (w * w + h * h) ** 0.5
+        enter_band = 0.004 * diag      # must be clearly INSIDE to start a dwell (hysteresis)
+        leave_band = 0.02 * diag       # keep dwelling until clearly OUTSIDE — no edge flicker
 
         for i in range(len(det)):
             tid = int(tids[i])
@@ -147,22 +257,26 @@ class GeometryEngine:
                             break                                # one crossing per line per step
             self._prev_pos[tid] = (float(p[0]), float(p[1]))
 
-            # --- zones ---
+            # --- zones: occupancy + dwell candidates (with edge hysteresis & box size) ---
+            bw = float(det.xyxy[i][2] - det.xyxy[i][0])
             for z in self.ann.zones():
-                inside = cv2.pointPolygonTest(
-                    zones_px[z.id], (float(p[0]), float(p[1])), False) >= 0
-                key = (z.id, tid)
-                if inside:
+                sd = cv2.pointPolygonTest(zones_px[z.id], (float(p[0]), float(p[1])), True)  # signed dist
+                if sd >= 0:
                     zone_counts[z.id][cls] += 1
-                    start = self._zone_enter.setdefault(key, t)
-                    if t - start >= self.min_dwell:
-                        dwell.append((str(tid), z.id, start, t))
-                else:
-                    self._zone_enter.pop(key, None)
+                if sd >= -leave_band:          # within the keep-dwelling band → a candidate
+                    inside_pairs.append({"tid": tid, "zone": z.id,
+                                         "thresh": (getattr(z, "dwell", 0.0) or self.min_dwell),
+                                         "anchor": (float(p[0]), float(p[1])),
+                                         "bw": bw, "strict": sd >= enter_band})
 
-        # prune state for tracks that disappeared
-        for k in [k for k in self._zone_enter if k[1] not in live]:
-            del self._zone_enter[k]
+        # robust per-occupant dwell — re-associates the SAME person across id changes and
+        # brief occlusions, so the timer keeps counting instead of resetting/flickering.
+        self._dwell.update(t, inside_pairs, w, h)
+        active_dwell = self._dwell.active(t)
+        dwell = [(str(a["track"]), a["zone"], round(t - a["seconds"], 2), round(t, 2))
+                 for a in active_dwell if a["over"]]
+
+        # prune line-crossing state for tracks that disappeared
         for tid in [t_ for t_ in self._prev_pos if t_ not in live]:
             del self._prev_pos[tid]
         for tid in [t_ for t_ in self._track_start if t_ not in live]:
@@ -175,4 +289,5 @@ class GeometryEngine:
                          for lid, d in self._line_counts.items()},
             dwell=dwell,
             track_start=dict(self._track_start),
+            active_dwell=active_dwell,
         )

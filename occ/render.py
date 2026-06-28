@@ -28,6 +28,16 @@ class Renderer:
         self.base_thick = int(r.get("thickness", 2))
         self.trail = int(r.get("trail_length", 30))
         self._cache: dict[int, dict] = {}
+        self._cnt_state: dict[str, dict] = {}   # class -> {val, ttl}: a flicker-free count panel
+        self._cnt_max_rows = 0                   # high-water marks → the panel box only GROWS,
+        self._cnt_max_w = 0                      # never shrinks (constant height, expands for new labels)
+        # cold->hot ramp (TURBO) for the dwell ring gradient, precomputed (256 BGR colours)
+        self._turbo = cv2.applyColorMap(
+            np.arange(256, dtype=np.uint8).reshape(1, 256), cv2.COLORMAP_TURBO)[0]
+
+    def _hot(self, frac: float):
+        c = self._turbo[int(max(0.0, min(1.0, frac)) * 255)]
+        return (int(c[0]), int(c[1]), int(c[2]))
 
     # resolution scale factor (1.0 at 1080p, ~2.0 at 4K)
     def _scale(self, h: int) -> float:
@@ -176,16 +186,36 @@ class Renderer:
         s = self._scale(h)
         fs = 0.62 * s
         th = max(1, round(1.4 * s))
-        rows = ["FULL FRAME"] + [f"  {k}: {v}" for k, v in geo.full_frame.items()]
+        # FULL FRAME rows are rebuilt each frame from raw per-frame detections, which flicker
+        # (a class drops for a frame, the order changes). A label that DISAPPEARS makes the
+        # remaining rows re-pack and the panel reads as growing up/down. So once a class has
+        # been counted its row is STICKY for the session: it stays put (deterministic order),
+        # its value is held through brief dropouts (TTL) so the number doesn't blink, and it
+        # shows 0 — never vanishes — when the object is genuinely gone.
+        GRACE = 15
+        st = self._cnt_state
+        cur = geo.full_frame
+        for k, v in cur.items():
+            st[k] = {"val": int(v), "ttl": GRACE}
+        for k in st:
+            if k not in cur:
+                st[k]["ttl"] -= 1
+                if st[k]["ttl"] <= 0:
+                    st[k]["val"] = 0          # genuinely absent → show 0, but KEEP the label row
+        rows = ["FULL FRAME"] + [f"  {k}: {st[k]['val']}" for k in sorted(st)]
         for lid, d in geo.line_counts.items():
             rows.append(f"LINE {lid}: +{sum(d['positive'].values())}"
                         f" / -{sum(d['negative'].values())}")
         line_h = int(28 * s)
         pad = int(10 * s)
+        # Constant-height transparent panel: reserve the HIGH-WATER mark of rows + width so the
+        # box never shrinks frame-to-frame — it only GROWS when a new label needs more room.
         tw = max((cv2.getTextSize(r, FONT, fs, th)[0][0] for r in rows), default=0)
+        self._cnt_max_rows = max(self._cnt_max_rows, len(rows))
+        self._cnt_max_w = max(self._cnt_max_w, tw)
         x0, y0 = int(10 * s), int(64 * s)
-        x1 = x0 + tw + 2 * pad
-        y1 = y0 - line_h + line_h * len(rows) + pad
+        x1 = x0 + self._cnt_max_w + 2 * pad
+        y1 = y0 - line_h + line_h * self._cnt_max_rows + pad
         ov = frame.copy()
         cv2.rectangle(ov, (x0 - pad, y0 - line_h), (x1, y1), (0, 0, 0), -1)
         cv2.addWeighted(ov, 0.5, frame, 0.5, 0, frame)
@@ -194,6 +224,50 @@ class Renderer:
             col = (0, 220, 255) if r == "FULL FRAME" or r.startswith("LINE") else (255, 255, 255)
             cv2.putText(frame, r, (x0, y), FONT, fs, col, th, cv2.LINE_AA)
             y += line_h
+        return frame
+
+    def draw_dwell(self, frame, geo):
+        """A live dwell-timer RING over each occupant inside a zone, encoding dwell THREE ways:
+        the ring FILLS with progress, GROWS in size, and runs a cold→hot (blue→red) colour
+        gradient as the dwell climbs toward — and past — the zone's threshold. Over threshold it
+        completes into a full hot ring with a glow. You read 'how long' at a glance, no numbers."""
+        if geo is None or not self.cfg.get("draw_dwell", True):
+            return frame
+        active = getattr(geo, "active_dwell", None)
+        if not active:
+            return frame
+        h, w = frame.shape[:2]
+        # size as a FRACTION of frame height so it stays readable after the browser scales the
+        # (often 4K) frame down to fit the canvas.
+        base = max(16, int(h * 0.034))                           # ring radius ~3.4% of frame height
+        SEG = 30
+        for d in active:
+            frac = min(1.0, d["seconds"] / max(d["threshold"], 1e-6))
+            over = bool(d["over"])
+            R = int(base * (1.0 + 0.7 * frac))                   # SIZE grows with dwell
+            ax, ay = d["anchor"]
+            cx = int(min(max(ax, R + 2), w - R - 2))
+            cy = int(min(max(ay - R * 1.2, R + 2), h - R - 2))   # float just above the feet
+            th = max(3, int(R * 0.17))                           # ring thickness scales with R
+            ov = frame.copy()                                    # translucent dark disc backing
+            cv2.circle(ov, (cx, cy), int(R * 1.3), (10, 12, 16), -1)
+            cv2.addWeighted(ov, 0.58, frame, 0.42, 0, frame)
+            cv2.circle(frame, (cx, cy), R, (78, 78, 82), max(2, int(R * 0.06)), cv2.LINE_AA)  # track
+            filled = SEG if over else int(round(SEG * frac))     # progress = how much is drawn
+            for k in range(filled):                              # cold→hot GRADIENT along the arc
+                a0 = -90 + 360.0 * k / SEG
+                a1 = -90 + 360.0 * (k + 1) / SEG + 0.6
+                cv2.ellipse(frame, (cx, cy), (R, R), 0, a0, a1, self._hot(k / SEG), th, cv2.LINE_AA)
+            if over:                                             # hot glow ring when past threshold
+                cv2.circle(frame, (cx, cy), int(R * 1.13), self._hot(1.0), max(2, int(R * 0.06)), cv2.LINE_AA)
+            # big, outlined seconds label inside the ring — readable on any background
+            label = f"{d['seconds']:.1f}s"
+            fs = R / 38.0
+            tk = max(2, int(R * 0.07))
+            (tw, tH), _ = cv2.getTextSize(label, FONT, fs, tk)
+            tx, ty = cx - tw // 2, cy + tH // 2
+            cv2.putText(frame, label, (tx, ty), FONT, fs, (0, 0, 0), tk + max(3, int(R * 0.1)), cv2.LINE_AA)
+            cv2.putText(frame, label, (tx, ty), FONT, fs, (255, 255, 255), tk, cv2.LINE_AA)
         return frame
 
     def hud(self, frame: np.ndarray, text: str) -> np.ndarray:
