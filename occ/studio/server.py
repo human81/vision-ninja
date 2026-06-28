@@ -186,6 +186,15 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         except Exception:
             return JSONResponse({"sponsor": {}, "eyewear": []})
 
+    @app.get("/unrwly")
+    def unrwly():
+        """unrwly (Etsy) catalog — generative try-on of any item. Run scripts/fetch_unrwly.py."""
+        p = Path(__file__).with_name("unrwly.json")
+        try:
+            return JSONResponse(json.loads(p.read_text()))
+        except Exception:
+            return JSONResponse({"sponsor": {}, "garments": []})
+
     @app.post("/eyewear/try")
     async def eyewear_try(req: Request):
         """Real-time AR try-on: warp a product frame onto the live face. The first fit
@@ -520,6 +529,37 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     @app.post("/annotations/save")
     def save_ann():
         return {"saved": pipe.save_annotations()}
+
+    # ---------- annotation stabilization (pin zones/lines to the scene) ----------
+    @app.get("/stabilize")
+    def stabilize_status():
+        return JSONResponse(pipe.tracking_status())
+
+    @app.post("/stabilize")
+    async def stabilize_set(req: Request):
+        b = await req.json()
+        return JSONResponse(pipe.set_stabilize(bool(b.get("enabled", True)),
+                                               detector=b.get("detector") or None))
+
+    @app.post("/stabilize/anchor")
+    async def stabilize_anchor(req: Request):
+        b = await req.json() if req.headers.get("content-length") else {}
+        return JSONResponse(pipe.anchor_scene(detector=(b or {}).get("detector") or None))
+
+    @app.post("/camera_sim")
+    async def camera_sim_route(req: Request):
+        b = await req.json()
+        return JSONResponse(pipe.set_camera_sim(b.get("mode", "none"),
+                                                float(b.get("degrees", 0) or 0)))
+
+    @app.post("/dwell")
+    async def dwell_default(req: Request):
+        b = await req.json()
+        return JSONResponse(pipe.set_dwell_default(float(b.get("default", 1.0) or 0)))
+
+    @app.post("/dwell/reset")
+    def dwell_reset():
+        return JSONResponse(pipe.reset_dwell())
 
     # ---------- overlays ----------
     @app.get("/overlays")

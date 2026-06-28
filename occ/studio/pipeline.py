@@ -61,12 +61,103 @@ class StudioPipeline:
         self._detect_on = True             # YOLO detect + track + occupancy; OFF when you go live
         from .gestures import GestureBrowser
         self.gestures = GestureBrowser()   # hands-free store browsing (lazy mediapipe)
+        # feature-anchored annotation stabilization: pin zones/lines to the SCENE so they
+        # re-localize (right place + size) when the camera angle changes.
+        from ..stabilize import SceneStabilizer
+        self.stabilizer = SceneStabilizer()
+        self._stabilize = False
+        self._stab_every = 4               # re-register every N frames; hold H between
+        self._anchor_path = "out/studio/anchor.jpg"
+        self._anchor_meta = "out/studio/anchor.json"
+        self._cam_sim = "none"             # simulated camera move (flip/rotate) to test redraw
+        self._cam_sim_deg = 0.0
+        self._min_dwell = 1.0              # default dwell threshold (s) for zones w/o their own
+        self._dwell_reset = False          # one-shot flag: clear all running dwell timers
+        self._geo_engine = None            # live ref so dwell settings apply without a rebuild
+
+    def set_dwell_default(self, seconds: float) -> dict:
+        """Set the DEFAULT dwell threshold (seconds) — used by any zone without its own."""
+        self._min_dwell = max(0.0, float(seconds or 0))
+        if self._geo_engine is not None:
+            self._geo_engine.min_dwell = self._min_dwell
+        return {"default_dwell": self._min_dwell}
+
+    def reset_dwell(self) -> dict:
+        """Clear all running dwell timers — everyone's counter restarts from zero."""
+        self._dwell_reset = True
+        return {"ok": True, "default_dwell": self._min_dwell}
+
+    def set_camera_sim(self, mode: str = "none", degrees: float = 0.0) -> dict:
+        """Simulate a camera move on the live stream (flip ↕/↔, rotate 180, or rotate N°) so
+        you can SEE zones/lines redraw to the right place. modes: none|flipv|fliph|rotate180|
+        rotate (with `degrees`)."""
+        self._cam_sim = (mode or "none").lower()
+        self._cam_sim_deg = float(degrees or 0.0)
+        return {"camera_sim": self._cam_sim, "degrees": self._cam_sim_deg}
+
+    # ---- annotation stabilization (feature anchoring) ----
+    def anchor_scene(self, detector: str | None = None) -> dict:
+        """Snapshot the CURRENT view as the reference the zones/lines are pinned to. Call
+        after drawing (or re-drawing) annotations so they track the camera from here on."""
+        if detector:
+            self.stabilizer.set_detector(detector)
+        with self._lock:
+            frame = None if self._frame_clean is None else self._frame_clean.copy()
+            src = str(self.cfg.get("source.uri", ""))
+        if frame is None:
+            return {"ok": False, "error": "no live frame yet"}
+        ok = self.stabilizer.anchor(frame)
+        if ok:
+            try:
+                import os
+                import json as _json
+                os.makedirs("out/studio", exist_ok=True)
+                cv2.imwrite(self._anchor_path, frame)
+                with open(self._anchor_meta, "w") as f:
+                    _json.dump({"source": src, "detector": self.stabilizer.detector,
+                                "size": list(self.stabilizer.ref["size"])}, f)
+            except Exception:
+                pass
+        return {"ok": ok, **self.stabilizer.status()}
+
+    def set_stabilize(self, on: bool, detector: str | None = None) -> dict:
+        """Turn feature anchoring on/off. Turning ON anchors to the current view (reusing a
+        saved anchor for the same source if present), so existing zones stay pinned."""
+        if detector:
+            self.stabilizer.set_detector(detector)
+        if on and not self.stabilizer.anchored():
+            if not self._load_anchor():
+                self.anchor_scene()
+        self._stabilize = bool(on)
+        return {"enabled": self._stabilize, **self.stabilizer.status()}
+
+    def _load_anchor(self) -> bool:
+        """Re-anchor from the saved reference image IF it belongs to the current source."""
+        try:
+            import json as _json
+            import os
+            if not (os.path.exists(self._anchor_path) and os.path.exists(self._anchor_meta)):
+                return False
+            meta = _json.load(open(self._anchor_meta))
+            if meta.get("source") != str(self.cfg.get("source.uri", "")):
+                return False
+            img = cv2.imread(self._anchor_path)
+            if img is None:
+                return False
+            self.stabilizer.set_detector(meta.get("detector", "orb"))
+            return self.stabilizer.anchor(img)
+        except Exception:
+            return False
+
+    def tracking_status(self) -> dict:
+        return {"enabled": self._stabilize, **self.stabilizer.status()}
 
     # ---- annotations ----
     def set_annotations(self, items: list[dict]):
         anns = [Annotation(id=i.get("id") or f"a{n}", type=i["type"],
                            vertices=[tuple(v) for v in i["vertices"]],
-                           display_name=i.get("display_name", ""))
+                           display_name=i.get("display_name", ""),
+                           dwell=float(i.get("dwell", 0) or 0))
                 for n, i in enumerate(items)]
         with self._lock:
             self.annotations = AnnotationSet(annotations=anns)
@@ -86,7 +177,7 @@ class StudioPipeline:
     def annotation_dicts(self) -> list[dict]:
         with self._lock:
             return [{"id": a.id, "type": a.type, "display_name": a.display_name,
-                     "vertices": [[x, y] for x, y in a.vertices]}
+                     "dwell": a.dwell, "vertices": [[x, y] for x, y in a.vertices]}
                     for a in self.annotations.annotations]
 
     def save_annotations(self, path: str | None = None) -> str:
@@ -285,7 +376,8 @@ class StudioPipeline:
             with self._lock:
                 self._status = "running"
             self._set_placeholder("connecting…", os.path.basename(uri))
-            geo_engine = GeometryEngine(self.annotations)
+            geo_engine = GeometryEngine(self.annotations, min_dwell=self._min_dwell)
+            self._geo_engine = geo_engine
             seen_ann = self._ann_version
             last_tracked = sv.Detections.empty()
             last_raw = sv.Detections.empty()
@@ -301,8 +393,21 @@ class StudioPipeline:
                     ann = self.annotations
                     version = self._ann_version
                 if version != seen_ann:
-                    geo_engine = GeometryEngine(ann)
+                    geo_engine = GeometryEngine(ann, min_dwell=self._min_dwell)
+                    self._geo_engine = geo_engine
                     seen_ann = version
+                # simulated camera move (flip/rotate the stream) — transform the frame BEFORE
+                # detection so boxes/tracking align with the flipped/rotated view, and redraw
+                # the zones/lines by the SAME exact transform: a ground-truth demo of
+                # re-localization. (The feature stabilizer below handles REAL camera moves.)
+                ann_draw = ann
+                if self._cam_sim != "none":
+                    from ..stabilize import sim_transform, warp_annset
+                    Hh, Ww = frame.shape[0], frame.shape[1]
+                    T = sim_transform(self._cam_sim, Ww, Hh, self._cam_sim_deg)
+                    if T is not None:
+                        frame = cv2.warpPerspective(frame, T, (Ww, Hh))
+                        ann_draw = warp_annset(ann, T, Ww, Hh, Ww, Hh)
                 detect_on = self._detect_on
                 if not detect_on:             # going live: no YOLO detect/track/occupancy
                     last_raw = sv.Detections.empty()
@@ -313,12 +418,24 @@ class StudioPipeline:
                         last_tracked = trk.update(last_raw, frame)
                 tracked = (last_tracked if (detect_on and task != "classify")
                            else sv.Detections.empty())
+                # feature-anchored stabilization: re-register against the reference (every
+                # _stab_every frames; H holds between) and warp the zones/lines into the
+                # current view, so BOTH counting and drawing use the camera-corrected geometry.
+                if self._stabilize and self.stabilizer.anchored():
+                    if n % self._stab_every == 0:
+                        self.stabilizer.register(frame)
+                    if not self.stabilizer.lost:
+                        ann_draw = self.stabilizer.warp(ann, frame.shape[1], frame.shape[0])
+                geo_engine.ann = ann_draw          # same ids → per-track crossing state persists
+                if self._dwell_reset:                       # one-shot: clear running dwell timers
+                    geo_engine.reset_dwell()
+                    self._dwell_reset = False
                 geo = geo_engine.update(tracked, frame.shape[1], frame.shape[0], n / fps)
                 vis = renderer.draw(frame, tracked)
                 if detect_on and task != "detect":   # masks / keypoints / obb / classify label
                     vis = renderer.draw_task(vis, last_raw, task,
                                              getattr(det, "cls_label", None))
-                vis = renderer.draw_annotations(vis, ann, geo)
+                vis = renderer.draw_annotations(vis, ann_draw, geo)
                 if self.overlays:                       # the agent's dynamic overlays
                     self.overlays.run(vis, tracked, geo, n, raw=last_raw, clean=frame)
                 if self.gestures.active:                 # hands-free store browsing
@@ -327,6 +444,7 @@ class StudioPipeline:
                     except Exception:
                         pass
                 if detect_on:                            # no count overlay on a clean live/voice feed
+                    vis = renderer.draw_dwell(vis, geo)  # live dwell-timer rings
                     vis = renderer.draw_counts(vis, geo)
                 self._record_frame(vis, fps)
                 ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 72])

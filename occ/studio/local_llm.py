@@ -146,6 +146,9 @@ LOCAL_CORE_TOOLS = {
     "create_overlay", "clear_overlays", "set_render", "set_detection", "nano_banana",
     "generate_video", "set_lens_tint", "snapshot", "go_live",
     "checkout", "shipping_profile", "list_orders",       # agentic purchase (Stripe Checkout)
+    "draw_zone", "draw_line", "clear_annotations",       # the agent draws counting geometry
+    "stabilize_annotations", "reanchor_annotations", "annotation_tracking", "camera_sim",  # pin to scene
+    "set_dwell", "reset_dwell",                          # dwell duration: set default + reset timers
     # NB: 'plan'/'narrate' deliberately excluded — they add a reasoning round (slow on a
     # local 12B) without acting. The local model acts directly.
 }

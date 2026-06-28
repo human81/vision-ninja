@@ -112,7 +112,7 @@
   .drawbar button{background:#141c29;border:1px solid var(--line);color:var(--fg);
     border-radius:7px;padding:5px 10px;font-size:12px;cursor:pointer}
   .drawbar button:hover{border-color:#3a4658}
-  .drawbar button[data-tog].on,.drawbar button[data-frz].on{border-color:var(--cyan);color:var(--cyan)}
+  .drawbar button[data-tog].on,.drawbar button[data-frz].on,.drawbar button[data-pin].on,.drawbar button[data-cam].on{border-color:var(--cyan);color:var(--cyan)}
   .drawbar button[data-det].on{border-color:var(--danger);color:var(--danger)}
   /* Google-Meet-style floating control bar over the canvas: round icon buttons */
   .voicebar{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:9;
@@ -365,6 +365,21 @@
   .srcrow{display:flex;justify-content:space-between;align-items:center;gap:6px;
     border-bottom:1px dashed var(--line);padding:7px 0;font-size:12px}
   .srcrow .u{color:var(--cyan)}.srcrow small{color:var(--mut)}
+  .dwellbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  .dwellbar label{font-size:11px;color:var(--mut);display:flex;align-items:center;gap:4px}
+  .dwellbar input{width:54px;background:#0a0f17;border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:3px 6px;font-size:12px}
+  .dwellbar button{font-size:11px;padding:4px 10px;background:#141c29;border:1px solid var(--line);color:var(--fg);border-radius:6px;cursor:pointer}
+  .dwellbar button:hover{border-color:var(--cyan);color:var(--cyan)}
+  .annrow{border-bottom:1px dashed var(--line);padding:8px 0}
+  .annhead{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+  .annbadge{font-size:9px;font-weight:700;letter-spacing:.4px;padding:2px 6px;border-radius:5px;white-space:nowrap}
+  .annname{flex:1;min-width:60px;background:#0a0f17;border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:3px 7px;font-size:12px;font-weight:600}
+  .annlive{color:var(--cyan);font-size:10px;white-space:nowrap}
+  .annacts{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .annacts button{font-size:11px;padding:3px 8px;background:#141c29;border:1px solid var(--line);color:var(--fg);border-radius:6px;cursor:pointer}
+  .annacts button:hover{border-color:var(--accent)}.annacts .anndel:hover{border-color:#ff7a7a;color:#ff7a7a}
+  .anndlbl{display:flex;align-items:center;gap:3px;font-size:11px;color:var(--mut)}
+  .anndwell{width:48px;background:#0a0f17;border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:3px 5px;font-size:11px}
   .ordbadge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
     padding:2px 6px;border-radius:5px;color:#fff;vertical-align:middle}
   .srcrow a{font-size:11px;padding:3px 9px;background:#141c29;border:1px solid var(--line);
@@ -580,7 +595,15 @@
           <button onclick="drawFinish()">Finish</button>
           <button onclick="drawClear()">Clear</button>
           <button onclick="drawSave()">Save</button>
-          <span class=muted style=font-size:10px>click to add points · click 1st point closes a zone · drag a vertex · ⏎ finish · Esc cancel</span>
+          <span class=vsep></span>
+          <button data-pin onclick="togglePin()" title="Pin zones/lines to the SCENE — they re-localize when the camera moves (ORB feature anchoring)">📌 Pin to scene</button>
+          <span class=fbl title="Simulate a camera move to test redraw">🎥</span>
+          <button data-cam=flipv onclick="camSim('flipv')" title="Flip upside-down (click again to flip back)">↕</button>
+          <button data-cam=fliph onclick="camSim('fliph')" title="Mirror (click again to undo)">↔</button>
+          <button data-cam=rotate180 onclick="camSim('rotate180')" title="Rotate 180° (click again to undo)">180°</button>
+          <button data-cam=rotate onclick="camSim('rotate',camNextDeg())" title="Rotate +30° (⤺ reset to undo)">⟳</button>
+          <button onclick="camSim('none')" title="Reset camera">⤺ reset</button>
+          <span class=muted id=stabhint style=font-size:10px></span>
         </div>
         <div class=filterbar id=filterbar style=display:none>
           <span class=fbl title="Face try-on">😎</span>
@@ -609,6 +632,7 @@
             <span class=fbl title="Try-on store">🛍</span>
             <button id=store-apparel class="storebtn on" onclick="vStore('apparel')" title="Apparel · Mode Marco">👕</button>
             <button id=store-eyewear class=storebtn onclick="vStore('eyewear')" title="Eyewear · Ralba Optical">👓</button>
+            <button id=store-unrwly class=storebtn onclick="vStore('unrwly')" title="unrwly · Etsy (totes · hats · tees) — generative try-on">🛍</button>
             <input id=garmenturl placeholder="image URL…">
             <button onclick="vUpload()" title="Upload an image">📎</button>
             <button onclick="vTryOn()" class=accentbtn id=tryonbtn title="Try it on me">✨</button>
@@ -676,6 +700,7 @@
         <button data-tab=graph>Graph</button>
         <button data-tab=library>Library</button>
         <button data-tab=sources>Sources</button>
+        <button data-tab=zones>Zones</button>
         <button data-tab=orders>Orders</button>
         <button data-tab=models>Models</button>
         <button data-tab=code>Code</button>
@@ -716,6 +741,14 @@
         <input class=srch id=srcname placeholder="name (optional)" style=margin-top:-4px>
         <button class=savebtn style=margin-top:0 onclick=addSource()>+ Save live source</button>
         <div id=srcgrid style=margin-top:10px></div>
+      </div>
+      <div class=pane id=pane-zones>
+        <div class=muted style="font-size:11px;margin-bottom:8px">Zones &amp; lines drawn on the frame — rename, edit (drag vertices), redraw or delete. 📌 pin + 🎥 controls are in the draw bar under the video.</div>
+        <div class=dwellbar>
+          <label title="Default dwell threshold for zones without their own (the ⏱ field on a zone overrides this)">Default dwell ⏱ <input id=dwelldef type=number min=0 step=0.5 value=1 onchange="setDwellDefault(this.value)"> s</label>
+          <button onclick="resetDwell()" title="Restart every running dwell timer from zero">↺ Reset timers</button>
+        </div>
+        <div id=annlist></div>
       </div>
       <div class=pane id=pane-orders>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -917,6 +950,7 @@ function switchTab(name){if(!name)return;
   if(name==='graph')drawGraph();
   if(name==='library')pollLibrary($('libq').value);
   if(name==='sources')pollSources();
+  if(name==='zones')renderAnnList();
   if(name==='orders')pollOrders();
   if(name==='models')pollModels();
   if(name==='code')pollOverlays();}
@@ -1080,6 +1114,36 @@ function renderOrders(orders,ready){
   }).join('')||'<span class=muted>no orders yet — try something on, then click 🛒 Buy (or say “buy these”)</span>';
 }
 async function pollOrders(){try{let r=await(await fetch('/checkout/orders')).json();renderOrders(r.orders,r.ready);}catch(e){}}
+/* ---- annotations manager panel (zones + lines: rename, dwell, edit, redraw, delete) ---- */
+function renderAnnList(){
+  const el=$('annlist');if(!el||!window.annList)return;
+  const items=window.annList();
+  el.innerHTML=items.length?items.map(a=>{
+    const zone=a.type==='active_zone';
+    const badge=`<span class=annbadge style="background:${zone?'#5a4a14':'#14463a'};color:${zone?'#ffcf6b':'#5fe0b0'}">${zone?'▱ ZONE':'╱ LINE'}</span>`;
+    const set=zone
+      ?`<label class=anndlbl title="Dwell threshold (seconds): a track must stay this long before it counts as dwelling. 0 = default.">⏱<input class=anndwell type=number min=0 step=0.5 value="${a.dwell||''}" placeholder="def" onchange="annDwell(${a.i},this.value)"></label>`
+      :`<button onclick="annFlip(${a.i})" title="Flip the crossing direction (+/-)">⇄ dir</button>`;
+    return `<div class=annrow>
+      <div class=annhead>${badge}<input class=annname value="${(a.name||a.id).replace(/"/g,'&quot;')}" onchange="annRename(${a.i},this.value)" title="rename"><small class=annlive id="annlive-${a.id}"></small></div>
+      <div class=annacts>${set}
+        <button onclick="annSelect(${a.i})" title="Visual edit — drag its vertices on the video">✎ edit</button>
+        <button onclick="annRedraw(${a.i})" title="Redraw from scratch (keeps the name)">↻ redraw</button>
+        <button onclick="annDelete(${a.i})" title="Delete" class=anndel>✕</button></div></div>`;
+  }).join(''):'<span class=muted>no zones or lines yet — use ✏ Draw → + Zone / + Line under the video</span>';
+  updateAnnLive();
+}
+window.renderAnnList=renderAnnList;
+async function updateAnnLive(){
+  let st;try{st=await(await fetch('/stats')).json();}catch(e){return;}
+  const zc=st.zones||{},lc=st.lines||{},dw=st.dwell||[];
+  (window.annList?window.annList():[]).forEach(a=>{const el=document.getElementById('annlive-'+a.id);if(!el)return;
+    if(a.type==='active_zone'){const c=zc[a.id]||0,d=dw.filter(x=>x.zone===a.id).length;el.textContent='● '+c+' inside'+(d?(' · '+d+' dwelling'):'');}
+    else{const l=lc[a.id]||{};el.textContent='+'+(l.positive||0)+' / -'+(l.negative||0)+' crossings';}});
+}
+setInterval(()=>{const p=document.getElementById('pane-zones');if(p&&p.classList.contains('active'))updateAnnLive();},1200);
+async function setDwellDefault(v){try{const r=await(await fetch('/dwell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({default:parseFloat(v)||0})})).json();toast('default dwell '+(r.default_dwell)+'s');}catch(e){}}
+async function resetDwell(){try{await fetch('/dwell/reset',{method:'POST'});toast('↺ dwell timers reset to zero');}catch(e){}}
 window.addSource=async()=>{let url=$('srcurl').value.trim();if(!url)return;
   await fetch('/sources',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,name:$('srcname').value.trim()})});
   $('srcurl').value='';$('srcname').value='';pollSources();};
@@ -1437,6 +1501,8 @@ const STORES={
   eyewear:{ep:'/eyewear',key:'eyewear',defcat:'ar',
     cats:[['ar','✨ Live AR'],['aviator','Aviator'],['round','Round'],['wayfarer','Wayfarer'],
           ['cat-eye','Cat-eye'],['rectangle','Rectangle'],['browline','Browline'],['all','All']]},
+  unrwly:{ep:'/unrwly',key:'garments',defcat:'all',
+    cats:[['all','All'],['unrwly','unrwly']]},
 };
 let STORE='apparel',CATALOG={},GCAT='top';
 async function loadGarments(){ if(!CATALOG.apparel)await loadStore('apparel'); }
@@ -1805,7 +1871,7 @@ function applyTimeline(d){ // agent-driven (Co-Director)
 /* ---------------- manual draw editor on the LIVE canvas ---------------- */
 (function(){
   const img=$('img'),cv=$('drawcv'),ctx=cv.getContext('2d');
-  let mode='idle',draft=[],shapes=[],cursor=null,drag=null,hover=-1,selected=-1,dash=0,enabled=false;
+  let mode='idle',draft=[],shapes=[],cursor=null,drag=null,hover=-1,selected=-1,dash=0,enabled=false,pendingName='';
   const SNAP=12,ZC='#ffb400',LC='#3fb950',SC='#36d7e0',POS='#3fb950',NEG='#f85149',CUR='#e6edf3',SNAPC='#ff5cf0';
   // keep the draw canvas exactly overlaying the *displayed* image (which is
   // letterboxed/centered inside #wrap by object-fit), so zone/line coords map
@@ -1855,8 +1921,10 @@ function applyTimeline(d){ // agent-driven (Co-Director)
   function snapTarget(x,y){if(mode==='zone'&&draft.length>=3){let[fx,fy]=toPx(draft[0]);if(d2(fx,fy,x,y)<SNAP*SNAP)return{x:fx,y:fy,kind:'close'};}if(mode!=='idle'){let h=hitVertex(x,y);if(h){let[px,py]=toPx(shapes[h[0]].vertices[h[1]]);return{x:px,y:py,kind:'vertex'};}}return null;}
   function inPoly(verts,x,y){let inside=false;for(let i=0,j=verts.length-1;i<verts.length;j=i++){let[xi,yi]=toPx(verts[i]),[xj,yj]=toPx(verts[j]);if(((yi>y)!=(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))inside=!inside;}return inside;}
   function hoverShape(x,y){for(let i=0;i<shapes.length;i++){let s=shapes[i];if(s.type==='active_zone'&&s.vertices.length>=3&&inPoly(s.vertices,x,y))return i;for(let j=0;j<s.vertices.length-1;j++){let a=toPx(s.vertices[j]),b=toPx(s.vertices[j+1]);let dx=b[0]-a[0],dy=b[1]-a[1],L2=dx*dx+dy*dy||1,t=Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/L2));if(d2(x,y,a[0]+t*dx,a[1]+t*dy)<100)return i;}}return -1;}
-  function finish(){if(mode==='zone'&&draft.length>=3||mode==='line'&&draft.length>=2){shapes.push({type:mode==='zone'?'active_zone':'crossing_line',id:(mode==='zone'?'zone':'line')+shapes.length,vertices:draft});selected=shapes.length-1;draft=[];mode='idle';return post();}draft=[];mode='idle';}
-  function post(){return fetch('/annotations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(shapes)}).then(()=>{try{pollConfig();}catch(e){}});}
+  function finish(){if(mode==='zone'&&draft.length>=3||mode==='line'&&draft.length>=2){shapes.push({type:mode==='zone'?'active_zone':'crossing_line',id:(mode==='zone'?'zone':'line')+shapes.length,name:pendingName||'',vertices:draft});pendingName='';selected=shapes.length-1;draft=[];mode='idle';return post();}draft=[];mode='idle';}
+  function post(){return fetch('/annotations',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(shapes.map(s=>({type:s.type,id:s.id,vertices:s.vertices,display_name:s.name||'',dwell:s.dwell||0})))})
+    .then(()=>{try{pollConfig();window.renderAnnList&&window.renderAnnList();}catch(e){}});}
   const evp=e=>{let r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top];};
   cv.addEventListener('mousemove',e=>{if(!enabled)return;let[x,y]=evp(e);cursor=[x,y];if(drag)shapes[drag[0]].vertices[drag[1]]=nrm(x,y);else if(mode==='idle')hover=hoverShape(x,y);});
   cv.addEventListener('mouseleave',()=>{cursor=null;});
@@ -1880,7 +1948,7 @@ function applyTimeline(d){ // agent-driven (Co-Director)
     shapes.forEach((s,si)=>{let pts=s.vertices.map(toPx),sel=si===selected,hov=si===hover;let col=sel?SC:(s.type==='active_zone'?ZC:LC);ctx.shadowColor=col;ctx.shadowBlur=sel?12:0;
       if(s.type==='active_zone'){ctx.fillStyle=col+(hov?'33':'22');ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.fill();ctx.strokeStyle=col;ctx.lineWidth=sel?3:2;ctx.setLineDash(sel?[10,7]:[]);ctx.lineDashOffset=-dash;ctx.stroke();ctx.setLineDash([]);}
       else{ctx.shadowBlur=0;for(let j=0;j<pts.length-1;j++)direction(pts[j],pts[j+1]);ctx.shadowBlur=sel?12:0;ctx.strokeStyle=col;ctx.lineWidth=sel?3:2;ctx.setLineDash(sel?[10,7]:[]);ctx.lineDashOffset=-dash;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();ctx.setLineDash([]);ctx.shadowBlur=0;plusMinus(pts);}
-      ctx.shadowBlur=0;handles(pts,col);tag(s.id,pts[0][0]+8,pts[0][1]-6,col);});
+      ctx.shadowBlur=0;handles(pts,col);tag(s.name||s.id,pts[0][0]+8,pts[0][1]-6,col);});
     if(draft.length){let pts=draft.map(toPx),col=mode==='zone'?ZC:LC;
       if(mode==='zone'){if(cursor&&pts.length>=2){ctx.fillStyle=col+'22';ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.lineTo(...cursor);ctx.closePath();ctx.fill();}ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();if(cursor){ctx.setLineDash([8,6]);ctx.beginPath();ctx.moveTo(...pts[pts.length-1]);ctx.lineTo(...cursor);ctx.stroke();if(pts.length>=2){ctx.beginPath();ctx.moveTo(...cursor);ctx.lineTo(...pts[0]);ctx.stroke();}ctx.setLineDash([]);}if(pts.length>=3){ctx.strokeStyle=SNAPC;ctx.lineWidth=2;ctx.beginPath();ctx.arc(pts[0][0],pts[0][1],9,0,7);ctx.stroke();}}
       else{for(let j=0;j<pts.length-1;j++)direction(pts[j],pts[j+1]);ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();if(cursor){direction(pts[pts.length-1],cursor);ctx.setLineDash([8,6]);ctx.strokeStyle=col;ctx.beginPath();ctx.moveTo(...pts[pts.length-1]);ctx.lineTo(...cursor);ctx.stroke();ctx.setLineDash([]);let dx=cursor[0]-pts[pts.length-1][0],dy=cursor[1]-pts[pts.length-1][1];tag(Math.round(Math.hypot(dx,dy))+'px  '+Math.round(-Math.atan2(dy,dx)*180/Math.PI)+'°',cursor[0]+14,cursor[1]-12,col);}}
@@ -1888,7 +1956,7 @@ function applyTimeline(d){ // agent-driven (Co-Director)
     if(cursor){let[x,y]=cursor;if(mode!=='idle'){ctx.strokeStyle='rgba(230,237,243,0.30)';ctx.lineWidth=1;ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(cv.width,y);ctx.moveTo(x,0);ctx.lineTo(x,cv.height);ctx.stroke();ctx.setLineDash([]);ctx.strokeStyle=CUR;ctx.lineWidth=1;ctx.beginPath();ctx.arc(x,y,6,0,7);ctx.stroke();let nn=nrm(x,y);tag(Math.round(x)+','+Math.round(y)+'  ('+nn[0].toFixed(3)+', '+nn[1].toFixed(3)+')',x+14,y+20,CUR);}let sn=snapTarget(x,y);if(sn){ctx.strokeStyle=SNAPC;ctx.lineWidth=2;ctx.beginPath();ctx.arc(sn.x,sn.y,10,0,7);ctx.stroke();if(sn.kind==='close')tag('click to close',sn.x+14,sn.y-10,SNAPC);}if(mode!=='idle'||drag)loupe(x,y);}}
   function loop(){if(enabled&&cv.width)draw();else ctx.clearRect(0,0,cv.width,cv.height);requestAnimationFrame(loop);}
   requestAnimationFrame(loop);
-  fetch('/annotations').then(r=>r.json()).then(a=>{shapes=(a||[]).map(s=>({type:s.type,id:s.id,vertices:s.vertices}));}).catch(()=>{});
+  fetch('/annotations').then(r=>r.json()).then(a=>{shapes=(a||[]).map(s=>({type:s.type,id:s.id,name:s.display_name||'',dwell:s.dwell||0,vertices:s.vertices}));try{window.renderAnnList&&window.renderAnnList();}catch(e){}}).catch(()=>{});
   window.setDrawEnabled=on=>{enabled=on;cv.style.pointerEvents=on?'auto':'none';if(!on){mode='idle';draft=[];}
     // While editing, the canvas IS the zone display — tell the server to stop baking zones/lines
     // into the video so they don't appear twice (canvas overlay + baked overlay). Restore on exit.
@@ -1899,6 +1967,33 @@ function applyTimeline(d){ // agent-driven (Co-Director)
   window.drawFinish=()=>finish();
   window.drawClear=()=>{shapes=[];draft=[];mode='idle';selected=-1;post();};
   window.drawSave=()=>fetch('/annotations/save',{method:'POST'}).then(()=>toast('annotations saved to disk'));
+  /* ---- annotations manager (used by the Zones panel) ---- */
+  window.annList=()=>shapes.map((s,i)=>({i,id:s.id,type:s.type,name:s.name||'',dwell:s.dwell||0,pts:(s.vertices||[]).length}));
+  window.annRename=(i,name)=>{if(shapes[i]){shapes[i].name=(name||'').slice(0,40);post();}};
+  window.annDwell=(i,sec)=>{if(shapes[i]){shapes[i].dwell=Math.max(0,parseFloat(sec)||0);post();}};
+  window.annFlip=(i)=>{if(shapes[i]&&shapes[i].type==='crossing_line'){shapes[i].vertices=shapes[i].vertices.slice().reverse();post();toast('flipped line direction');}};
+  window.annSelect=(i)=>{window.setDrawEnabled(true);mode='idle';selected=i;draft=[];toast('editing '+(shapes[i]?(shapes[i].name||shapes[i].id):'')+' — drag its vertices');};
+  window.annDelete=(i)=>{if(i<0||i>=shapes.length)return;const nm=shapes[i].name||shapes[i].id;shapes.splice(i,1);if(selected>=shapes.length)selected=-1;post();toast('deleted '+nm);};
+  window.annRedraw=(i)=>{const s=shapes[i];if(!s)return;pendingName=s.name||'';const isZone=s.type==='active_zone';shapes.splice(i,1);if(selected>=shapes.length)selected=-1;post();window.setDrawEnabled(true);mode=isZone?'zone':'line';draft=[];selected=-1;toast('redraw '+(pendingName||(isZone?'zone':'line'))+' — click new points, ⏎ to finish');};
+  /* pin zones/lines to the SCENE (feature anchoring) + simulate a camera move to test redraw */
+  let PIN=false;
+  window.togglePin=async()=>{PIN=!PIN;
+    try{const r=await fetch('/stabilize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:PIN})}).then(r=>r.json());
+      PIN=!!r.enabled;let b=document.querySelector('.drawbar button[data-pin]');if(b)b.classList.toggle('on',PIN);
+      toast(PIN?('📌 Pinned to the scene · '+(r.detector||'orb')+' anchoring'):'Unpinned — back to fixed frame coords');
+    }catch(e){toast('pin failed');}};
+  window._camMode='none';
+  window.camNextDeg=()=>{window._camdeg=((window._camdeg||0)+30)%360;return window._camdeg;};
+  window.camSim=async(mode,deg)=>{
+    // ↕ ↔ 180° are toggles: clicking the active one returns to the original orientation
+    if(mode!=='rotate'&&mode!=='none'&&window._camMode===mode)mode='none';
+    if(mode==='none')window._camdeg=0;
+    window._camMode=mode;
+    try{await fetch('/camera_sim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode,degrees:deg||0})});
+      document.querySelectorAll('.drawbar button[data-cam]').forEach(b=>b.classList.toggle('on',b.dataset.cam===mode));
+      toast(mode==='none'?'🎥 camera reset':('🎥 '+mode+(mode==='rotate'?(' '+(deg||0)+'°'):'')+' — zones follow'));}catch(e){}};
+  setInterval(async()=>{if(!PIN)return;try{const s=await fetch('/stabilize').then(r=>r.json());let h=$('stabhint');
+    if(h)h.textContent=s.enabled?('· '+(s.tracking?('tracking ✓ conf '+s.confidence+' ('+s.inliers+'pts)'):'acquiring…')):'';}catch(e){}},1500);
   let frozen=false;
   window.toggleFreeze=()=>{frozen=!frozen;
     img.src=frozen?('/snapshot.png?t='+Date.now()):'/stream.mjpg';

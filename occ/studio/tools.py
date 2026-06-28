@@ -202,6 +202,61 @@ def clear_annotations() -> dict:
     return {"status": "success", "cleared_overlays": n, "ui": "annotations"}
 
 
+def stabilize_annotations(enabled: bool = True, detector: str = "orb") -> dict:
+    """PIN zones & lines to the SCENE (not the frame) so they re-localize to the right place
+    and size when the camera PANS/TILTS/ZOOMS. On enable, the current view is anchored via
+    trackable image keypoints (`detector`: orb=fast default, sift=robust to big moves, akaze);
+    each frame a reference->current homography re-draws the geometry. Use when the camera can
+    move. Turn off to go back to fixed frame coordinates."""
+    res = ctx().pipe.set_stabilize(bool(enabled), detector=detector or None)
+    return {"status": "success", "ui": "annotations", **res,
+            "text": ("Zones/lines are now pinned to the scene — they'll follow the camera."
+                     if res.get("enabled") else "Annotation stabilization off.")}
+
+
+def reanchor_annotations(detector: str = "") -> dict:
+    """Re-capture the CURRENT view as the reference the zones/lines are pinned to. Call after
+    you (re)draw annotations to match the current camera, or when tracking confidence drops
+    after a big scene change, to reset the anchor baseline."""
+    res = ctx().pipe.anchor_scene(detector=detector or None)
+    return {"status": "success" if res.get("ok") else "error", "ui": "annotations", **res,
+            "text": ("Re-anchored — zones/lines are pinned to the scene as it looks now."
+                     if res.get("ok") else f"Could not anchor: {res.get('error','no frame')}")}
+
+
+def annotation_tracking() -> dict:
+    """Report annotation-stabilization status: whether it's enabled/anchored, the keypoint
+    detector, and the live tracking confidence + inlier count (low confidence = the camera
+    moved too far / the scene changed; consider reanchor_annotations)."""
+    return {"status": "success", "ui": "annotations", **ctx().pipe.tracking_status()}
+
+
+def set_dwell(seconds: float = 1.0) -> dict:
+    """Set the DEFAULT dwell-time threshold in SECONDS (how long a track must stay in a zone
+    to count as dwelling). Applies to zones without their own value; per-zone overrides win."""
+    res = ctx().pipe.set_dwell_default(seconds)
+    return {"status": "success", "ui": "annotations", **res,
+            "text": f"Default dwell time set to {res['default_dwell']:g}s."}
+
+
+def reset_dwell() -> dict:
+    """RESET all running dwell timers to zero — every occupant's in-zone counter restarts now.
+    Use to start a fresh dwell measurement."""
+    ctx().pipe.reset_dwell()
+    return {"status": "success", "ui": "annotations", "text": "Dwell timers reset to zero."}
+
+
+def camera_sim(mode: str = "none", degrees: float = 0.0) -> dict:
+    """SIMULATE a camera move on the live stream to SEE zones/lines redraw correctly — the
+    frame is flipped/rotated and the geometry is re-localized by the exact transform. `mode`:
+    none | flipv (upside-down) | fliph (mirror) | rotate180 | rotate (use `degrees`)."""
+    res = ctx().pipe.set_camera_sim(mode or "none", degrees or 0.0)
+    return {"status": "success", "ui": "annotations", **res,
+            "text": (f"Camera simulated: {res['camera_sim']}"
+                     + (f" {res['degrees']:g}°" if res['camera_sim'] == 'rotate' else "")
+                     + " — zones/lines redrawn to match.")}
+
+
 def clear_overlays() -> dict:
     """Remove ALL dynamic OpenCV overlays (keep zones/lines). Use to wipe the
     rings/heatmaps/trails without touching counting zones or lines."""
@@ -420,7 +475,8 @@ def _load_catalogs():
     base = os.path.dirname(__file__)
     out = {}
     for store, key, fn in (("apparel", "garments", "garments.json"),
-                           ("eyewear", "eyewear", "eyewear.json")):
+                           ("eyewear", "eyewear", "eyewear.json"),
+                           ("unrwly", "garments", "unrwly.json")):    # Etsy shop → generative try-on
         try:
             d = _json.loads(open(os.path.join(base, fn)).read())
             items = d.get(key, [])
@@ -445,7 +501,7 @@ def _search_catalog(query: str, store: str | None = None, limit: int = 8):
     toks = [t for t in _re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 1]
     want_shape = _query_shape(query)         # shape-accurate eyewear search
     cats = _load_catalogs()
-    pool = cats.get(store, []) if store else (cats["apparel"] + cats["eyewear"])
+    pool = cats.get(store, []) if store else (cats["apparel"] + cats["eyewear"] + cats.get("unrwly", []))
     scored = []
     for it in pool:
         title = (it.get("title", "") or "").lower()
@@ -1816,7 +1872,7 @@ def direct_story(brief: str, scenes: int = 3, mode: str = "fast",
 
 ALL_TOOLS = [
     plan, drive_ui, set_source, set_detector, set_task, set_tracker, set_detect_every, set_render, set_detection,
-    draw_zone, draw_line, clear_annotations,
+    draw_zone, draw_line, clear_annotations, stabilize_annotations, reanchor_annotations, annotation_tracking, camera_sim, set_dwell, reset_dwell,
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays, go_live,
     apply_face_filter, try_eyewear, try_jewelry, set_lens_tint, lens_reflection, lens_movie, shop_search, try_product, gesture_browse, live_control,
     checkout, shipping_profile, list_orders,
