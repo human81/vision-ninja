@@ -604,6 +604,11 @@
           <button data-cam=rotate onclick="camSim('rotate',camNextDeg())" title="Rotate +30° (⤺ reset to undo)">⟳</button>
           <button onclick="camSim('none')" title="Reset camera">⤺ reset</button>
           <span class=muted id=stabhint style=font-size:10px></span>
+          <span class=vsep></span>
+          <span class=fbl title="Open-vocab grounding (LocateAnything-3B, on-device)">🔍</span>
+          <input id=locq placeholder="locate… e.g. forklift" style="width:130px" onkeydown="if(event.key==='Enter')doLocate()">
+          <button onclick="doLocate()" title="Find every match in the live frame (~15s on-device) and draw the boxes">Locate</button>
+          <button onclick="doLocate(true)" title="Locate + drop a counting zone around the matches">＋zone</button>
         </div>
         <div class=filterbar id=filterbar style=display:none>
           <span class=fbl title="Face try-on">😎</span>
@@ -1992,6 +1997,19 @@ function applyTimeline(d){ // agent-driven (Co-Director)
     try{await fetch('/camera_sim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode,degrees:deg||0})});
       document.querySelectorAll('.drawbar button[data-cam]').forEach(b=>b.classList.toggle('on',b.dataset.cam===mode));
       toast(mode==='none'?'🎥 camera reset':('🎥 '+mode+(mode==='rotate'?(' '+(deg||0)+'°'):'')+' — zones follow'));}catch(e){}};
+  /* 🔍 open-vocab grounding via LocateAnything-3B (on-device sidecar) */
+  window.doLocate=async(zone)=>{
+    const p=($('locq').value||'').trim(); if(!p){toast('type what to locate');return;}
+    toast('🔍 locating "'+p+'" on-device… (~15s)');
+    try{
+      const r=await(await fetch('/locate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:p,zone:!!zone})})).json();
+      if(r.status==='success'){
+        const name=(r.output||'').split('/').pop();
+        if(name&&typeof setCanvas==='function')setCanvas('image','/download/'+name,r.prompt+': '+r.count);
+        toast('🔍 '+r.count+' '+r.prompt+' in '+r.secs+'s'+(zone?' · zoned':''));
+        try{pollOverlays&&pollOverlays();renderAnnList&&renderAnnList();}catch(e){}
+      }else toast('locate: '+(r.error||'failed — is the sidecar running?'));
+    }catch(e){toast('locate failed: '+e);}};
   setInterval(async()=>{if(!PIN)return;try{const s=await fetch('/stabilize').then(r=>r.json());let h=$('stabhint');
     if(h)h.textContent=s.enabled?('· '+(s.tracking?('tracking ✓ conf '+s.confidence+' ('+s.inliers+'pts)'):'acquiring…')):'';}catch(e){}},1500);
   let frozen=false;

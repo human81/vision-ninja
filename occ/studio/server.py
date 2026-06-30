@@ -561,6 +561,17 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     def dwell_reset():
         return JSONResponse(pipe.reset_dwell())
 
+    @app.post("/locate")
+    async def locate_route(req: Request):
+        """Open-vocab grounding via the LocateAnything-3B sidecar. {prompt, zone?}."""
+        from .tools import locate
+        import asyncio as _aio
+        import functools as _ft
+        b = await req.json()
+        res = await _aio.get_event_loop().run_in_executor(None, _ft.partial(
+            locate, prompt=b.get("prompt", ""), make_zone=bool(b.get("zone", False))))
+        return JSONResponse(res)
+
     # ---------- overlays ----------
     @app.get("/overlays")
     def get_overlays():

@@ -143,7 +143,7 @@ def vision_describe(image_jpg: bytes, prompt: str, model=None, timeout: int = 12
 LOCAL_CORE_TOOLS = {
     "live_control", "gesture_browse", "shop_search", "try_eyewear", "try_jewelry", "try_product",
     "virtual_try_on", "apply_face_filter", "analyze_scene", "describe_image", "medical_image",
-    "create_overlay", "clear_overlays", "set_render", "set_detection", "nano_banana",
+    "create_overlay", "clear_overlays", "set_render", "set_detection", "nano_banana", "locate",
     "generate_video", "set_lens_tint", "snapshot", "go_live",
     "checkout", "shipping_profile", "list_orders",       # agentic purchase (Stripe Checkout)
     "draw_zone", "draw_line", "clear_annotations",       # the agent draws counting geometry

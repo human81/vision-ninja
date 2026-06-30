@@ -873,6 +873,51 @@ def test_image(label: str = "") -> dict:
                 tags=["test"])
 
 
+def locate(prompt: str = "", make_zone: bool = False) -> dict:
+    """OPEN-VOCAB GROUNDING with LocateAnything-3B (local, on-device, $0): find EVERY instance
+    of `prompt` — any phrase, e.g. 'forklift', 'person in a yellow vest', 'the loading dock' —
+    in the live frame, draw the boxes, and show it on the canvas. make_zone=True also drops a
+    counting zone around what it finds. Runs on the M5 via a sidecar (~15-20s/frame), so it's
+    for one-shot grounding/zoning, NOT live detection — use set_detector('owlv2') for live."""
+    from . import la3b
+    if not (prompt or "").strip():
+        return {"status": "error", "error": "what should I locate?"}
+    if not la3b.health():
+        return {"status": "error", "ui": "overlays", "error":
+                "LocateAnything sidecar isn't running — start it: "
+                ".venv-la3b/bin/python scripts/la3b_server.py"}
+    jpg, frame = _frame_jpg("frame", "")
+    if jpg is None:
+        return {"status": "error", "error": "no live frame yet"}
+    try:
+        r = la3b.ground(jpg, prompt.strip())
+    except Exception as e:
+        return {"status": "error", "error": f"grounding failed: {type(e).__name__}: {e}"}
+    boxes = r.get("boxes", [])
+    h, w = frame.shape[:2]
+    vis = frame.copy()
+    t = max(2, round(w / 640))
+    for (x1, y1, x2, y2) in boxes:
+        cv2.rectangle(vis, (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h)),
+                      (60, 220, 250), t, cv2.LINE_AA)
+    cv2.putText(vis, f"{prompt}: {len(boxes)}", (int(14 * w / 640), int(46 * w / 640)),
+                cv2.FONT_HERSHEY_SIMPLEX, w / 640.0, (60, 220, 250), t, cv2.LINE_AA)
+    out = _save_png(vis, "locate")
+    if make_zone and boxes:                      # one counting zone around everything found
+        x1 = min(b[0] for b in boxes); y1 = min(b[1] for b in boxes)
+        x2 = max(b[2] for b in boxes); y2 = max(b[3] for b in boxes)
+        ctx().pipe.add_annotation({"type": "active_zone", "id": "loc_" + prompt.strip()[:8],
+                                   "display_name": prompt.strip()[:20],
+                                   "vertices": [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]})
+    _meter("vision_brain", units={"synthesis": 1}, label=f"locate:{prompt[:20]}")
+    return _lib({"status": "success", "kind": "image", "output": out, "count": len(boxes),
+                 "prompt": prompt, "secs": r.get("secs"),
+                 "caption": f"locate {prompt} ({len(boxes)})",
+                 "text": (f"Located {len(boxes)} '{prompt}' in {r.get('secs')}s with "
+                          f"LocateAnything-3B" + (" + zoned it" if make_zone and boxes else "") + ".")},
+                caption=f"locate {prompt}", tags=["locate"], source="locateanything")
+
+
 def display_media(kind: str, src: str = "", caption: str = "") -> dict:
     """Show something on the center CANVAS. kind: 'image' | 'video' | 'live'.
     src: a file produced by an export (path under out/studio or out/recordings),
@@ -1876,7 +1921,7 @@ ALL_TOOLS = [
     list_overlays, toggle_overlay, create_overlay, remove_overlay, clear_overlays, go_live,
     apply_face_filter, try_eyewear, try_jewelry, set_lens_tint, lens_reflection, lens_movie, shop_search, try_product, gesture_browse, live_control,
     checkout, shipping_profile, list_orders,
-    analyze_scene, analyze_image, describe_image, medical_image, display_media, test_image,
+    analyze_scene, analyze_image, describe_image, medical_image, locate, display_media, test_image,
     run_cv_code, run_cv_video, emit_proto,
     nano_banana, virtual_try_on, generate_video, eyewear_film, extend_video, narrate, generate_music,
     search_library, list_library, show_media, save_to_library,

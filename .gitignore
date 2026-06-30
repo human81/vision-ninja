@@ -22,3 +22,4 @@ out/
 .claude/settings.local.json
 .DS_Store
 vendor/
+.venv-la3b/
