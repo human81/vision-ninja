@@ -28,7 +28,7 @@ for usage.
 .venv/bin/python run.py run --source assets/videos/vehicles-2.mp4
 .venv/bin/python run.py run --config configs/highway_example.yaml --emit-proto out/run.pb \
     --analytics-csv out/counts.csv
-# override ANY config field: --set detector.model=yolo11s.pt --set runtime.detect_every=3
+# override ANY config field: --set detector.model=yolo26s.pt --set runtime.detect_every=3
 # shortcuts: --detector {yolo,rfdetr,owlv2} --tracker {bytetrack,botsort,ocsort,sort} --detect-every N
 
 .venv/bin/python run.py edit --source ... --annotations configs/cam.json   # draw zones/lines (GUI)
@@ -45,14 +45,14 @@ OCC_SOURCE=assets/videos/vehicles-2.mp4 .venv/bin/uvicorn occ.web:app --port 800
 OCC_SOURCE=assets/videos/market-square.mp4 .venv/bin/uvicorn occ.studio.server:app --port 8011  # studio only
 
 # tests
-.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 66/66)
+.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 169/169)
 .venv/bin/python test_proto_roundtrip.py test_phase2.py test_phase3.py test_phase4.py test_e2e_web.py
 # Level 6 folds in the AR try-on / face-filter / stylist regression (offline phase).
 # Run it standalone for the FULL stack (+endpoints/WS/UI) once the studio is up:
-STUDIO_URL=http://127.0.0.1:8011 .venv/bin/python test_studio_tryon.py   # 49/49 offline+online+UI
+STUDIO_URL=http://127.0.0.1:8011 .venv/bin/python test_studio_tryon.py   # full offline+online+UI regression
 ```
 
-After any change, run `fishfood.py` and expect **ALL PASS — 66/66** (levels 1–6;
+After any change, run `fishfood.py` and expect **ALL PASS — 169/169** (levels 1–6;
 level 6 = studio AR try-on, SKIPs without the `[face]` extra). It also writes
 `out/fishfood/RUNBOOK.md` (a command per check) and a gallery of annotated frames.
 
@@ -64,7 +64,8 @@ level 6 = studio AR try-on, SKIPs without the `[face]` extra). It also writes
 | `sources.py` | `FileSource` + newest-frame-wins `StreamSource` (RTSP/cam, auto-reconnect). |
 | `detectors/` | `build_detector(cfg)`; `yolo` (Ultralytics, MPS), `rfdetr` (HF transformers, MPS), `owlv2` (open-vocab, MPS). **All return `supervision.Detections`** so the tracker is detector-agnostic. |
 | `tracking.py` | Factory over **roboflow/trackers**; signature-filters params (config is a permissive superset). ByteTrack/BoT-SORT/OC-SORT/SORT. |
-| `geometry.py` | `GeometryEngine`: zones (point-in-polygon), line crossing (right-hand-rule sign flip), dwell, full-frame counts. Uses each track's **bottom-center anchor**. |
+| `geometry.py` | `GeometryEngine`: zones (point-in-polygon), line crossing (**segment∩segment** test — right-hand-rule direction, NOT infinite-line side-flip), **robust per-occupant dwell** (`_DwellTracker`: re-associates the same person across id-changes/occlusions via cost assignment + velocity prediction + edge hysteresis), full-frame counts. Uses each track's **bottom-center anchor**. |
+| `stabilize.py` | `SceneStabilizer`: pin zones/lines to the SCENE — ORB/SIFT/AKAZE → RANSAC homography (EMA-smoothed) re-localizes annotations when the camera pans/tilts/rotates; `sim_transform`/`warp_annset` flip/rotate the stream to test redraw. |
 | `emit.py` | `build_result()` → `OccupancyCountingPredictionResult`; `ResultWriter` (varint length-delimited `.pb` stream). |
 | `analytics.py` | Per-interval CSV (line crossings as deltas; zone/full-frame avg+peak) + JSON summary. |
 | `speed.py` | Homography speed (4-pt ground calibration) with discontinuity rejection. |
@@ -73,7 +74,7 @@ level 6 = studio AR try-on, SKIPs without the `[face]` extra). It also writes
 | `grounding/` | Open-vocab VLM grounders: `owlv2` (Mac/MPS default), `locate_anything`/`molmo2` (GCP/Linux). `run.py ground`. |
 | `web.py` + `web_ui.html` | FastAPI dashboard: live-reconfig, MJPEG, canvas draw/save, stats, timeline chart, snapshot/record. Live-reconfigurable via a dirty-flag rebuild loop. |
 | `proto/` (repo root, not under `occ/`) | Vendored, wire-identical `OccupancyCountingPredictionResult` (`visionai_annotations.proto` → `_pb2.py`). Regenerate: `python -m grpc_tools.protoc -Iproto --python_out=proto proto/visionai_annotations.proto`. |
-| `studio/` | **Agentic layer** (Google ADK). Self-contained (never imports `occ.web`). A "Vision Ninja" agent drives the pipeline + browser via tools + an NDJSON stream, mirroring the Momentum architecture: `neurons.py`+`ledger.py` (compute-**points** meter / Brand-Brain-style neuron graph), `brain.py` (Vision Brain = persistent scene memory), `settings.py` (sim axis `live/simulated/zero` + per-node modes), `overlays.py` (**the ninja** — hot-loads agent-authored `def draw(ctx)` cv2 code into the render loop), `ffmpeg_ops.py`, `tools.py`, `agent.py` (ADK + deterministic **SimRunner** so it runs with NO API key), `server.py`+`studio_ui.html`. Runs `$0` in sim mode; uses Gemini when `GOOGLE_API_KEY`/`GEMINI_API_KEY` is set. **Stop the studio server before running `fishfood.py`** — two CV pipelines contend for MPS and flake the level-5 e2e. |
+| `studio/` | **Agentic layer** (Google ADK). Self-contained (never imports `occ.web`). A "Vision Ninja" agent drives the pipeline + browser via tools + an NDJSON stream, mirroring the Momentum architecture: `neurons.py`+`ledger.py` (compute-**points** meter / Brand-Brain-style neuron graph), `brain.py` (Vision Brain = persistent scene memory), `settings.py` (sim axis `live/simulated/zero` + per-node modes), `overlays.py` (**the ninja** — hot-loads agent-authored `def draw(ctx)` cv2 code into the render loop), `ffmpeg_ops.py`, `tools.py`, `agent.py` (ADK + deterministic **SimRunner** so it runs with NO API key), `server.py`+`studio_ui.html`. Local/$0 model stack: `local_llm.py` (Gemma via LiteRT-LM :9379 — text brain), `gemma_vision.py`/`medgemma.py` (transformers/MPS vision + medical), `voice_local.py` (Whisper STT + local TTS), `offline.py` (`STUDIO_OFFLINE=1` airplane mode), `la3b.py` (LocateAnything-3B grounding sidecar :9393, `locate` tool). Try-on/commerce: `face_filters.py`+`facemesh.py` (eyewear AR), `jewelry.py` (nose ring/earrings/necklace), `genmedia.py`/`qwen_image.py` (Nano Banana / local image), `commerce.py` (Stripe checkout). Runs `$0` in sim mode; uses Gemini when `GOOGLE_API_KEY`/`GEMINI_API_KEY` is set. `run.py studio` boots the studio + litert + la3b sidecars together. **Stop the studio server (and sidecars) before running `fishfood.py`** — CV pipelines contend for MPS and flake the level-5 e2e. |
 
 Cost levers (💰 in `configs/default.yaml`): model tier, `detect_every`, `imgsz`, `half`, `max_long_side`.
 
