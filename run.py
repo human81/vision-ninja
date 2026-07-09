@@ -135,10 +135,14 @@ def main(argv=None):
     g.add_argument("--set", action="append", metavar="k.path=value")
     g.set_defaults(func=cmd_ground)
 
-    st = sub.add_parser("studio", help="agentic Vision Ninja studio (ADK + browser)")
+    st = sub.add_parser("studio", help="agentic Vision Ninja studio (ADK + browser) + sidecars")
     st.add_argument("--source", help="initial source.uri")
     st.add_argument("--port", type=int, default=8011)
     st.add_argument("--host", default="127.0.0.1")
+    st.add_argument("--no-voice", action="store_true",
+                    help="don't start litert-lm (local 🦙 voice brain, :9379)")
+    st.add_argument("--no-locate", action="store_true",
+                    help="don't start the LocateAnything-3B sidecar (🔍 locate, :9393)")
     st.set_defaults(func=cmd_studio)
 
     args = p.parse_args(argv)
@@ -146,12 +150,71 @@ def main(argv=None):
 
 
 def cmd_studio(args):
+    """Boot the studio + its optional sidecars (local voice brain, LocateAnything) together,
+    and shut them all down on exit. Skips a sidecar that's already up or unavailable."""
     import os
-    import uvicorn
+    import shutil
+    import subprocess
+    import time
+    import urllib.request
+
     if args.source:
         os.environ["OCC_SOURCE"] = args.source
+    os.makedirs("out/studio/logs", exist_ok=True)
+    procs = []
+
+    def _up(url):
+        try:
+            urllib.request.urlopen(url, timeout=1)
+            return True
+        except Exception:
+            return False
+
+    def spawn(label, cmd, log):
+        f = open(f"out/studio/logs/{log}", "w")
+        p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+        procs.append(p)
+        print(f"  ▸ started {label}  (log: out/studio/logs/{log})")
+
+    # 1) local 🦙 voice/agent brain (LiteRT-LM) — optional
+    if not args.no_voice:
+        if _up("http://127.0.0.1:9379/v1/models"):
+            print("  ▸ litert-lm already running (:9379)")
+        elif shutil.which("litert-lm"):
+            spawn("litert-lm voice brain (:9379)", ["litert-lm", "serve"], "litert.log")
+        else:
+            print("  ⚠ litert-lm not on PATH — local 🦙 voice disabled (uv tool install litert-lm)")
+
+    # 2) LocateAnything-3B grounding sidecar — optional
+    la3b_py = os.path.join(".venv-la3b", "bin", "python")
+    if not args.no_locate:
+        if _up("http://127.0.0.1:9393/health"):
+            print("  ▸ LocateAnything sidecar already running (:9393)")
+        elif os.path.exists(la3b_py):
+            spawn("LocateAnything-3B sidecar (:9393, warming ~30s)",
+                  [la3b_py, "scripts/la3b_server.py"], "la3b.log")
+        else:
+            print("  ⚠ .venv-la3b missing — 🔍 Locate disabled (see scripts/la3b_server.py)")
+
+    def cleanup():
+        for p in procs:
+            if p.poll() is None:
+                p.terminate()
+        deadline = time.time() + 4
+        for p in procs:
+            try:
+                p.wait(timeout=max(0.1, deadline - time.time()))
+            except Exception:
+                p.kill()
+
     print(f"🥷 Vision Ninja Studio → http://{args.host}:{args.port}")
-    uvicorn.run("occ.studio.server:app", host=args.host, port=args.port)
+    import uvicorn
+    try:
+        uvicorn.run("occ.studio.server:app", host=args.host, port=args.port)
+    finally:
+        if procs:
+            print("\n… stopping sidecars")
+            cleanup()
 
 
 if __name__ == "__main__":

@@ -37,9 +37,12 @@ for usage.
 # browser dashboard (live-reconfig, draw/save, snapshot, record, timeline chart)
 OCC_SOURCE=assets/videos/vehicles-2.mp4 .venv/bin/uvicorn occ.web:app --port 8001
 
-# AGENTIC studio: an ADK "Vision Ninja" drives the pipeline + UI via chat + tools
-.venv/bin/python run.py studio                 # → http://127.0.0.1:8011  ([studio] extra)
-OCC_SOURCE=assets/videos/market-square.mp4 .venv/bin/uvicorn occ.studio.server:app --port 8011
+# AGENTIC studio: an ADK "Vision Ninja" drives the pipeline + UI via chat + tools.
+# `run.py studio` also boots the optional sidecars — litert-lm (:9379, local 🦙 voice) and the
+# LocateAnything-3B grounding server (:9393, 🔍 locate) — and stops them on exit; idempotent
+# (skips ones already up). --no-voice / --no-locate to skip. Logs → out/studio/logs/.
+.venv/bin/python run.py studio                 # → http://127.0.0.1:8011  ([studio] extra) + sidecars
+OCC_SOURCE=assets/videos/market-square.mp4 .venv/bin/uvicorn occ.studio.server:app --port 8011  # studio only
 
 # tests
 .venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 66/66)
