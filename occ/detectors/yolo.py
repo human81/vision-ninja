@@ -15,6 +15,9 @@ from __future__ import annotations
 import numpy as np
 import supervision as sv
 from ultralytics import YOLO
+from ultralytics.cfg import DEFAULT_CFG_DICT
+
+from ..device import pick_device
 
 
 class YoloDetector:
@@ -24,8 +27,16 @@ class YoloDetector:
         d = cfg.section("detector")
         self.model = YOLO(d.get("model", "yolo11n.pt"))
         self.task = getattr(self.model, "task", "detect")  # detect|segment|pose|obb|classify
-        self.device = d.get("device", "mps")
-        self.half = bool(d.get("half", True))
+        self.device = pick_device(d.get("device", "mps"))      # mps → cuda → cpu fallback
+        self.half = bool(d.get("half", True)) and self.device != "cpu"   # no FP16 on CPU
+        # Ultralytics ≥8.4.1xx replaced `half` with `quantize` and warns on EVERY predict
+        # call if `half` is passed (log spam on Cloud Run). Use whichever this version knows.
+        if not self.half:
+            self._precision = {}
+        elif "quantize" in DEFAULT_CFG_DICT:
+            self._precision = {"quantize": 16}
+        else:
+            self._precision = {"half": True}
         self.imgsz = int(d.get("imgsz", 640))
         self.conf = float(d.get("conf", 0.25))
         self.iou = float(d.get("iou", 0.7))
@@ -41,7 +52,7 @@ class YoloDetector:
         result = self.model.predict(
             frame,
             device=self.device,
-            half=self.half,
+            **self._precision,
             imgsz=self.imgsz,
             conf=self.conf,
             iou=self.iou,

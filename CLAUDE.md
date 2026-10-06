@@ -47,7 +47,7 @@ OCC_SOURCE=assets/videos/vehicles-2.mp4 .venv/bin/uvicorn occ.web:app --port 800
 OCC_SOURCE=assets/videos/market-square.mp4 .venv/bin/uvicorn occ.studio.server:app --port 8011  # studio only
 
 # tests — plain scripts with `if __name__ == "__main__"` (NOT pytest); run each file directly
-.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 219/219)
+.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 297/297)
 .venv/bin/python fishfood.py --level 2  # stop after level N (1 smoke … 5 browser e2e, 6 studio try-on); --frames N
 .venv/bin/python test_phase3.py         # a single test file
 .venv/bin/python test_proto_roundtrip.py test_phase2.py test_phase3.py test_phase4.py test_e2e_web.py
@@ -58,9 +58,9 @@ STUDIO_AUTH=off .venv/bin/python run.py studio &  # then:
 STUDIO_URL=http://127.0.0.1:8011 .venv/bin/python test_studio_tryon.py   # full offline+online+UI regression
 ```
 
-After any change, run `fishfood.py` and expect **ALL PASS — 219/219** (levels 1–6;
+After any change, run `fishfood.py` and expect **ALL PASS — 297/297** (levels 1–6;
 level 6 = studio auth gate (`test_studio_auth.py`, fake Firebase) + agent-code policy
-(`test_studio_codepolicy.py`), both always run, + AR try-on
+(`test_studio_codepolicy.py`) + cloud-readiness (`test_cloud_ready.py`) + geometry/tracking invariants (`test_invariants.py`), all offline and always run, + AR try-on
 (SKIPs without the `[face]` extra)). If RF-DETR (level 3) fails with an HF 401 while the weights
 are cached, the stored HF token is stale: rerun with `HF_HUB_OFFLINE=1`. It also writes
 `out/fishfood/RUNBOOK.md` (a command per check) and a gallery of annotated frames.
@@ -144,6 +144,21 @@ Cost levers (💰 in `configs/default.yaml`): model tier, `detect_every`, `imgsz
   Agent-supplied URLs go to yt-dlp after `--` (else `--exec=…` would be an option).
 - litert-lm defaults to `0.0.0.0`; `run.py studio` starts it with `--host 127.0.0.1` — keep sidecars
   on loopback (they have no auth).
+
+## Cloud Run (`Dockerfile`, `cloudbuild.yaml`, `scripts/deploy_cloudrun.sh`)
+
+- `scripts/deploy_cloudrun.sh {cpu|gpu} [all|setup|secrets|build|deploy|domain]` → project
+  `vision-b5c97`, `us-central1`. Services `vision-ninja` (CPU, 4 vCPU/8Gi) and `vision-ninja-gpu`
+  (NVIDIA L4, 8 vCPU/32Gi). Both: **exactly one always-on instance** (the studio's pipeline +
+  agent + `StudioContext` live in process memory — never scale out), CPU always allocated,
+  `gs://<project>-<service>-out` mounted at `/app/out` (container disk is ephemeral).
+- Image: `VARIANT=cpu|gpu` picks the torch wheel index; `LOCAL_MODELS=on` (gpu) keeps the local
+  vision models. Secrets come from Secret Manager (copied from `.env` by the `secrets` step) —
+  `.env` is in `.dockerignore`/`.gcloudignore` and must stay there.
+- Host-independent levers: `pick_device()` (`occ/device.py`: mps → cuda → cpu, FP16 off on CPU);
+  `STUDIO_LOCAL_MODELS=off` hides/refuses Gemma/MedGemma/litert/Qwen models (`settings.py`);
+  `OCC_SET="a.b=v;c.d=w"` = config overrides without a CLI (server.py). Sidecars (litert, LA3B)
+  aren't in the image. Zones save via a symlink into `/app/out`.
 
 ## Git
 

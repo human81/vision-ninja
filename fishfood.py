@@ -355,7 +355,8 @@ def level6(frames):
     """Studio AR try-on — face landmarks, every filter, sponsored stylist + shape
     search (test_studio_tryon's OFFLINE phase, no server). SKIPs without [face].
     Also the studio auth gate (test_studio_auth, fake Firebase) and the agent-code
-    policy (test_studio_codepolicy) — both always run."""
+    policy (test_studio_codepolicy), cloud-readiness (test_cloud_ready) and the geometry/
+    tracking invariants (test_invariants) — all offline, always run."""
     try:
         import test_studio_auth
         for name, ok, detail in test_studio_auth.collect():
@@ -370,6 +371,20 @@ def level6(frames):
                    cmd=".venv/bin/python test_studio_codepolicy.py")
     except Exception as e:
         record(6, "agent-code policy", "FAIL", f"{type(e).__name__}: {e}")
+    try:
+        import test_cloud_ready
+        for name, ok, detail in test_cloud_ready.collect():
+            record(6, f"cloud-ready: {name}", "PASS" if ok else "FAIL", detail,
+                   cmd=".venv/bin/python test_cloud_ready.py")
+    except Exception as e:
+        record(6, "cloud-ready", "FAIL", f"{type(e).__name__}: {e}")
+    try:
+        import test_invariants
+        for name, ok, detail in test_invariants.collect():
+            record(6, f"invariant: {name}", "PASS" if ok else "FAIL", detail,
+                   cmd=".venv/bin/python test_invariants.py")
+    except Exception as e:
+        record(6, "invariants", "FAIL", f"{type(e).__name__}: {e}")
     try:
         import mediapipe  # noqa: F401  (the [face] extra)
     except Exception:

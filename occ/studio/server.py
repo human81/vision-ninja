@@ -45,9 +45,12 @@ TRACKERS = ["bytetrack", "botsort", "ocsort", "sort"]
 
 
 def create_studio_app(cfg: Config | None = None) -> FastAPI:
+    # OCC_SET="detector.imgsz=480;runtime.detect_every=3" — any dotted config override, for
+    # hosts where there's no CLI (Cloud Run). ';'-separated since values may contain commas.
+    extra = [o.strip() for o in os.environ.get("OCC_SET", "").split(";") if o.strip()]
     cfg = cfg or Config.load(overrides=[
         f"source.uri={os.environ.get('OCC_SOURCE', 'assets/videos/vehicles-2.mp4')}",
-        "source.loop=true"])
+        "source.loop=true", *extra])
 
     overlays = OverlayEngine()
     ledger = Ledger()
@@ -74,6 +77,14 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     from . import genmedia
     genmedia.prewarm()                 # create the genai client on the main thread
     pipe.start()
+    # STUDIO_PRELOAD=gemma-3-4b-it|medgemma-4b-it: load a local vision model in the background
+    # at boot (GPU service), so the first request doesn't wait ~1 min to read 8GB of weights.
+    preload = os.environ.get("STUDIO_PRELOAD", "").strip()
+    if preload:
+        import threading
+        from . import gemma_vision, medgemma
+        mod = medgemma if "medgemma" in preload else gemma_vision
+        threading.Thread(target=mod.available, name=f"preload:{preload}", daemon=True).start()
 
     video_files = sorted(str(p) for p in Path("assets/videos").glob("*.mp4"))
     app = FastAPI(title="Vision Ninja Studio")

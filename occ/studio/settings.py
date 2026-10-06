@@ -57,6 +57,23 @@ MODEL_OPTIONS = {
 }
 
 
+# Models that run ON THIS MACHINE (MPS/CUDA, or a local litert/sd.cpp sidecar). A CPU-only
+# cloud build sets STUDIO_LOCAL_MODELS=off: they're hidden from the dropdowns, a saved choice
+# falls back to the cloud default, and the loaders refuse (an ~8GB model would OOM the box).
+LOCAL_MODELS = {"gemma-4-12b-it", "gemma-4-e2b-it", "gemma-3-4b-it", "medgemma-4b-it",
+                "qwen-image-edit"}
+
+
+def local_models_enabled() -> bool:
+    return os.environ.get("STUDIO_LOCAL_MODELS", "").strip().lower() not in (
+        "0", "off", "false", "no")
+
+
+def model_options() -> dict:
+    if local_models_enabled():
+        return MODEL_OPTIONS
+    return {k: [m for m in v if m not in LOCAL_MODELS] for k, v in MODEL_OPTIONS.items()}
+
 @dataclass
 class StudioSettings:
     agent_model: str = "gemini-2.5-flash"  # legacy alias for models['agent']
@@ -69,7 +86,10 @@ class StudioSettings:
     models: dict = field(default_factory=lambda: dict(DEFAULT_MODELS))  # per-task
 
     def model_for(self, task: str) -> str:
-        return (self.models or {}).get(task) or DEFAULT_MODELS.get(task, "gemini-2.5-flash")
+        m = (self.models or {}).get(task) or DEFAULT_MODELS.get(task, "gemini-2.5-flash")
+        if m in LOCAL_MODELS and not local_models_enabled():
+            return DEFAULT_MODELS.get(task, "gemini-2.5-flash")
+        return m
 
     # ---- persistence ----
     @classmethod
@@ -79,7 +99,9 @@ class StudioSettings:
             try:
                 d = json.loads(p.read_text())
                 known = {f for f in cls().__dict__}
-                return cls(**{k: v for k, v in d.items() if k in known})
+                st = cls(**{k: v for k, v in d.items() if k in known})
+                st.agent_model = st.model_for("agent")   # a saved local model may be off here
+                return st
             except Exception:
                 pass
         return cls()
@@ -102,7 +124,7 @@ class StudioSettings:
     def to_dict(self) -> dict:
         d = asdict(self)
         d["resolved_modes"] = {n["id"]: self.node_mode(n["id"]) for n in NEURONS}
-        d["model_options"] = MODEL_OPTIONS
+        d["model_options"] = model_options()
         return d
 
     def update(self, patch: dict):

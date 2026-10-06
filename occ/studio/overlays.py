@@ -287,6 +287,22 @@ _SAFE_BUILTINS = {k: (__builtins__[k] if isinstance(__builtins__, dict)
                       else getattr(__builtins__, k))
                   for k in _SAFE_BUILTIN_NAMES}
 
+_IMPORTABLE = {"numpy", "cv2", "math"}       # the sandbox already holds np/cv2 objects
+
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """`__import__` for sandboxed code. Needed even when the code never says `import`:
+    numpy ≥2.5's C methods (e.g. `ndarray.sum`) lazily import submodules through the
+    *calling frame's* builtins, so without this every overlay touching them raises
+    KeyError('__import__') on Linux/Cloud Run. Only numpy/cv2/math (+ their submodules)."""
+    if level == 0 and name.split(".")[0] in _IMPORTABLE:
+        import builtins
+        return builtins.__import__(name, globals, locals, fromlist, level)
+    raise ImportError(f"import of {name!r} is not allowed in overlay code")
+
+
+_SAFE_BUILTINS["__import__"] = _safe_import
+
 
 def compile_overlay(code: str):
     """Compile agent code that defines `def draw(ctx): ...`; return the function."""

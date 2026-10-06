@@ -1,9 +1,9 @@
 """Pipeline: source → detect-every-N → track-every-frame → render.
 
 Detect/skip cadence is the main real-time lever: the detector runs every
-`runtime.detect_every` frames; on the in-between frames the tracker updates with
-empty detections so its Kalman filter predicts positions, keeping IDs and overlays
-smooth at full frame rate for a fraction of the detector cost.
+`runtime.detect_every` frames; on the in-between frames the last tracked result is
+HELD (not replaced by empty detections, which would make ByteTrack drop every track),
+keeping IDs and overlays steady at full frame rate for a fraction of the detector cost.
 """
 
 from __future__ import annotations

@@ -1,0 +1,44 @@
+name: CI
+
+# The offline, CPU-only suites: no video clips, no GPU, no API keys. (The full gate —
+# fishfood.py over six real clips, incl. a Playwright browser e2e — runs locally.)
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  offline-suites:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: System libraries (OpenCV / MediaPipe)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libegl1 ffmpeg
+
+      - name: Python 3.12 + CPU torch + app deps
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          uv pip install --python .venv/bin/python -e ".[cv,web,studio,face,pay]"
+
+      - name: Protobuf contract
+        run: .venv/bin/python test_proto_roundtrip.py
+
+      - name: Auth gate (fake Firebase)
+        run: .venv/bin/python test_studio_auth.py
+
+      - name: Agent-code policy + injection guards
+        run: .venv/bin/python test_studio_codepolicy.py
+
+      - name: Cloud readiness (no-MPS / CUDA host simulation)
+        run: .venv/bin/python test_cloud_ready.py
+
+      - name: Geometry & tracking invariants
+        run: .venv/bin/python test_invariants.py

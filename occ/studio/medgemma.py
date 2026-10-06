@@ -125,18 +125,43 @@ SPECIALTIES = {
 }
 
 
+def unload():
+    """Free the model (and its GPU memory). Next use reloads it."""
+    global _STATE
+    with _LOCK:
+        if isinstance(_STATE, tuple):
+            _STATE = None
+            import gc
+            gc.collect()
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+
 def _load():
     global _STATE
+    if _STATE is None:
+        import torch
+        if torch.cuda.is_available():
+            # L4 = 24GB: Gemma 3 + MedGemma (~8.6GB each) + LocateAnything-3B (~7GB) + YOLO
+            # don't all fit, and only one vision model is ever selected — swap, don't stack.
+            # (Called before taking our lock, so two concurrent loads can't deadlock.)
+            from . import gemma_vision
+            gemma_vision.unload()
     with _LOCK:
         if _STATE is not None:
             return _STATE if _STATE != "off" else None
+        from .settings import local_models_enabled
+        if not local_models_enabled():          # CPU cloud build: ~8GB model would OOM the box
+            return None
         try:
             import torch
             from transformers import AutoModelForImageTextToText, AutoProcessor
             from .offline import offline
             lfo = offline()                                  # cache-only when wifi is off
-            dev = "mps" if torch.backends.mps.is_available() else "cpu"
-            dt = torch.bfloat16 if dev == "mps" else torch.float32
+            from ..device import pick_device
+            dev = pick_device("auto")                        # mps (Mac) / cuda (L4) / cpu
+            dt = torch.bfloat16 if dev != "cpu" else torch.float32
             proc = AutoProcessor.from_pretrained(model_id(), local_files_only=lfo)
             model = AutoModelForImageTextToText.from_pretrained(
                 model_id(), dtype=dt, local_files_only=lfo).to(dev).eval()

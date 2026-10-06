@@ -46,8 +46,9 @@ _S: dict = {}
 def _load():
     if _S:
         return _S
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    dtype = torch.bfloat16 if device == "mps" else torch.float32
+    device = ("mps" if torch.backends.mps.is_available()          # Mac
+              else "cuda" if torch.cuda.is_available() else "cpu")  # Cloud Run L4 / fallback
+    dtype = torch.bfloat16 if device != "cpu" else torch.float32
     print(f"[la3b] loading {MODEL} → {device}/{dtype} …", flush=True)
     tok = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)
     proc = AutoProcessor.from_pretrained(MODEL, trust_remote_code=True)

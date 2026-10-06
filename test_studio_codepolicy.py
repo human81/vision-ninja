@@ -105,6 +105,19 @@ def collect() -> list[tuple[str, bool, str]]:
             drew = False
             calls_made.append(f"{type(e).__name__}: {e}")
         check("sim: highlight overlay actually draws", drew, str(calls_made))
+
+        # --- sandbox imports: numpy ≥2.5 lazily imports inside C methods via the caller's
+        #     builtins, so `__import__` must exist — but only for numpy/cv2/math ---
+        probe = compile_overlay("def draw(ctx):\n"
+                                "    import math\n"
+                                "    return int(np.array([True, True]).sum()) + int(math.floor(0.5))\n")
+        check("sandbox: numpy method + `import math` work", probe(None) == 2)
+        evil = compile_overlay("def draw(ctx):\n    import os\n    return os.getcwd()\n")
+        try:
+            evil(None)
+            check("sandbox: `import os` refused", False, "imported os")
+        except ImportError:
+            check("sandbox: `import os` refused", True)
         check("sim: ordinary label unchanged",
               "ctx.mask('forklift')" in SimRunner._highlight_overlay(None, "forklift")["code"])
 

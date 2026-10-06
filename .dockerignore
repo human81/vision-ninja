@@ -1,0 +1,19 @@
+# Secrets — Cloud Run injects them from Secret Manager; they must never be in an image.
+.env
+.env.*
+!.env.example
+
+# Local environments, caches, outputs, large local-only assets
+.git
+.venv
+.venv-*
+__pycache__
+*.pyc
+*.egg-info
+out
+vendor
+assets/videos
+*.pt
+*.onnx
+screenshots
+.claude

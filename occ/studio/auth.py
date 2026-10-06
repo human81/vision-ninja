@@ -18,7 +18,7 @@ Env:
                                       signed-in user. EMPTY = nobody (fail closed — the
                                       agent can exec code, so "any Google account" is opt-in).
   STUDIO_FIREBASE_API_KEY / _AUTH_DOMAIN / _PROJECT_ID / _APP_ID   web SDK config for /login
-  GOOGLE_APPLICATION_CREDENTIALS      service-account JSON locally; ADC on Cloud Run
+  GOOGLE_APPLICATION_CREDENTIALS      optional; else gcloud ADC locally / the service account on Cloud Run
 """
 
 from __future__ import annotations
@@ -81,10 +81,9 @@ def _admin_auth():
     with _init_lock:
         if not firebase_admin._apps:
             opts = {"projectId": web_config()["projectId"]} if web_config()["projectId"] else None
-            sa = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-            cred = (credentials.Certificate(sa) if sa and os.path.exists(sa)
-                    else credentials.ApplicationDefault())
-            firebase_admin.initialize_app(cred, opts)
+            # ADC covers every case: GOOGLE_APPLICATION_CREDENTIALS (service-account OR
+            # gcloud user file), gcloud's default login, and the Cloud Run service account.
+            firebase_admin.initialize_app(credentials.ApplicationDefault(), opts)
     return auth
 
 

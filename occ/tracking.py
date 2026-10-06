@@ -48,8 +48,9 @@ def build_tracker(algorithm: str, params: dict | None = None):
 class Tracker:
     """Thin wrapper so the pipeline calls one stable interface regardless of algo.
 
-    On detector-skip frames, call `update` with `sv.Detections.empty()` and the
-    underlying Kalman filter predicts positions for still-alive tracks."""
+    Call `update` only on frames the detector ran. On skip frames the loops HOLD the last
+    tracked result instead — feeding `sv.Detections.empty()` would make ByteTrack treat
+    every object as gone and drop all tracks (asserted in test_invariants.py)."""
 
     def __init__(self, algorithm: str, params: dict | None = None):
         self.algorithm = algorithm

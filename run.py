@@ -187,7 +187,8 @@ def cmd_studio(args):
             print("  ⚠ litert-lm not on PATH — local 🦙 voice disabled (uv tool install litert-lm)")
 
     # 2) LocateAnything-3B grounding sidecar — optional
-    la3b_py = os.path.join(".venv-la3b", "bin", "python")
+    # its own env (pins transformers 4.57); the Cloud Run GPU image points LA3B_PYTHON at it
+    la3b_py = os.environ.get("LA3B_PYTHON") or os.path.join(".venv-la3b", "bin", "python")
     if not args.no_locate:
         if _up("http://127.0.0.1:9393/health"):
             print("  ▸ LocateAnything sidecar already running (:9393)")

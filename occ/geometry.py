@@ -243,7 +243,12 @@ class GeometryEngine:
             # --- lines (2-pt or polyline): count a crossing ONLY when the object's
             #     movement (prev anchor -> current anchor) actually intersects the line
             #     segment, with right-hand-rule direction from the side it ends on. ---
-            p0 = self._prev_pos.get(tid)
+            #     An anchor exactly ON a line has no side: it's neither evaluated nor kept as
+            #     the reference, so positive→touch→positive counts nothing (it used to count
+            #     one negative AND one positive), while positive→touch→negative counts once.
+            touching = any(_side(v[j], v[j + 1], p) == 0
+                           for v in lines_px.values() for j in range(len(v) - 1))
+            p0 = None if touching else self._prev_pos.get(tid)
             if p0 is not None and (p[0] - p0[0]) ** 2 + (p[1] - p0[1]) ** 2 <= max_jump2:
                 for ln in self.ann.lines():
                     verts = lines_px[ln.id]
@@ -255,7 +260,8 @@ class GeometryEngine:
                             else:
                                 self._line_counts[ln.id]["negative"][cls] += 1
                             break                                # one crossing per line per step
-            self._prev_pos[tid] = (float(p[0]), float(p[1]))
+            if not touching:
+                self._prev_pos[tid] = (float(p[0]), float(p[1]))
 
             # --- zones: occupancy + dwell candidates (with edge hysteresis & box size) ---
             bw = float(det.xyxy[i][2] - det.xyxy[i][0])

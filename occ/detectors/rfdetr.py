@@ -13,6 +13,8 @@ import supervision as sv
 import torch
 from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
+from ..device import pick_device
+
 
 class RfDetrDetector:
     name = "rfdetr"
@@ -31,11 +33,7 @@ class RfDetrDetector:
 
     @staticmethod
     def _pick_device(pref: str) -> str:
-        if pref == "mps" and torch.backends.mps.is_available():
-            return "mps"
-        if pref == "cuda" and torch.cuda.is_available():
-            return "cuda"
-        return "cpu"
+        return pick_device(pref)
 
     @torch.no_grad()
     def detect(self, frame: np.ndarray) -> sv.Detections:
