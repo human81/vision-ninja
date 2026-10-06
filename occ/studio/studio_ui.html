@@ -470,6 +470,7 @@
   <a class=pill href="/eyewear/lab" target=_blank style="text-decoration:none" title="Eyewear Try-on Lab — pipeline dashboard + bad-case dataset">🔬 Lab</a>
   <span class=pill>points <b id=pts>0</b> / <span id=ptsbud>100k</span></span>
   <span class=pill>brain $<b id=usd>0</b></span>
+  <span id=who class=pill hidden><b id=who-email></b> · <a href="#" id=signout style="color:inherit">sign out</a></span>
 </header>
 
 <div class="grid" id=grid>
@@ -793,8 +794,12 @@
 </div>
 <div id=toast></div>
 
+<script src="/auth/guard.js"></script>
 <script>
 const $=id=>document.getElementById(id);
+fetch('/auth/me').then(r=>r.json()).then(m=>{if(!m.auth)return;
+  $('who-email').textContent=m.email||'signed in';$('who').hidden=false;
+  $('signout').onclick=async e=>{e.preventDefault();await fetch('/auth/logout',{method:'POST'});location.replace('/login')}}).catch(()=>{});
 const PANELS={live:'panel-live',chat:'panel-chat',meter:'panel-right',brain:'panel-right',
   overlays:'panel-live',right:'panel-right'};
 

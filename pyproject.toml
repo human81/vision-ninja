@@ -50,6 +50,7 @@ studio = [
     "google-adk>=2.2",
     "python-dotenv>=1.0",     # loads a gitignored .env (GEMINI_API_KEY, …) on boot
     "yt-dlp>=2025.1",         # YouTube / live-stream ingestion as a source
+    "firebase-admin>=6.5",    # STUDIO_AUTH=on: Firebase session-cookie sign-in (occ/studio/auth.py)
 ]
 # AR face filters / virtual try-on (dense 478-pt FaceLandmarker). Pulls
 # opencv-contrib-python (a superset of opencv-python) — both coexist at the same

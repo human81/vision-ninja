@@ -29,7 +29,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Respons
                                StreamingResponse)
 
 from ..config import Config
-from . import STUDIO_DIR, neurons
+from . import STUDIO_DIR, auth, neurons
 from .agent import StudioAgent, _HAS_KEY
 from .brain import VisionBrain
 from .ledger import Ledger
@@ -77,6 +77,7 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
 
     video_files = sorted(str(p) for p in Path("assets/videos").glob("*.mp4"))
     app = FastAPI(title="Vision Ninja Studio")
+    auth.install(app)                  # Firebase session-cookie gate (STUDIO_AUTH=on)
     app.state.pipe = pipe
     app.state.agent = agent
     app.state.ledger = ledger
@@ -442,6 +443,9 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
             import stripe
             if secret:
                 event = stripe.Webhook.construct_event(payload, sig, secret)
+            elif auth.enabled():                    # deployed: the webhook is public → must be signed
+                return JSONResponse({"error": "STRIPE_WEBHOOK_SECRET not configured"},
+                                    status_code=503)
             else:                                   # no secret configured → trust body (dev only)
                 event = json.loads(payload)
         except Exception as e:

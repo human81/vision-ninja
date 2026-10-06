@@ -353,7 +353,23 @@ def level5(frames):
 
 def level6(frames):
     """Studio AR try-on — face landmarks, every filter, sponsored stylist + shape
-    search (test_studio_tryon's OFFLINE phase, no server). SKIPs without [face]."""
+    search (test_studio_tryon's OFFLINE phase, no server). SKIPs without [face].
+    Also the studio auth gate (test_studio_auth, fake Firebase) and the agent-code
+    policy (test_studio_codepolicy) — both always run."""
+    try:
+        import test_studio_auth
+        for name, ok, detail in test_studio_auth.collect():
+            record(6, f"studio auth: {name}", "PASS" if ok else "FAIL", detail,
+                   cmd=".venv/bin/python test_studio_auth.py")
+    except Exception as e:
+        record(6, "studio auth", "FAIL", f"{type(e).__name__}: {e}")
+    try:
+        import test_studio_codepolicy
+        for name, ok, detail in test_studio_codepolicy.collect():
+            record(6, f"agent-code policy: {name}", "PASS" if ok else "FAIL", detail,
+                   cmd=".venv/bin/python test_studio_codepolicy.py")
+    except Exception as e:
+        record(6, "agent-code policy", "FAIL", f"{type(e).__name__}: {e}")
     try:
         import mediapipe  # noqa: F401  (the [face] extra)
     except Exception:

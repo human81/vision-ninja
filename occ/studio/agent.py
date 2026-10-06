@@ -678,14 +678,16 @@ class SimRunner:
         return term
 
     def _highlight_overlay(self, cls: str) -> dict:
+        # `cls` comes from the user's chat text and is spliced into SOURCE CODE: keep only
+        # label-ish characters and embed it as a repr() literal, never raw.
+        cls = re.sub(r"[^A-Za-z0-9 _-]", "", cls).strip()[:40] or "object"
         code = (
             "def draw(ctx):\n"
-            "    import math\n"
-            f"    m = ctx.mask('{cls}')\n"
-            "    r = 24 + int(6*math.sin(ctx.t*0.2))\n"
+            f"    m = ctx.mask({cls!r})\n"
+            "    r = 24 + int(6*np.sin(ctx.t*0.2))\n"   # no `import` in the sandbox
             "    for (cx, cy) in ctx.anchors[m]:\n"
             "        ctx.ring((cx, cy-20), r, 'magenta', 2, glow=True)\n"
-            f"    ctx.text(f'{cls}: '+str(int(m.sum())), (12, 60), 'magenta', 0.7)\n")
+            f"    ctx.text({cls + ': '!r}+str(int(m.sum())), (12, 60), 'magenta', 0.7)\n")
         return {"name": f"highlight_{cls}", "intent": f"ring every {cls}", "code": code}
 
 

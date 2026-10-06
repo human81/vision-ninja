@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from .codepolicy import DISABLED, agent_code_enabled
+
 COLORS = {
     "red": (60, 60, 240), "green": (90, 230, 90), "blue": (240, 160, 60),
     "yellow": (60, 220, 250), "cyan": (230, 230, 60), "magenta": (230, 90, 230),
@@ -302,6 +304,8 @@ class OverlayEngine:
         self.overlays: dict[str, Overlay] = {}
 
     def add(self, name: str, intent: str, code: str, builtin: bool = False) -> Overlay:
+        if not builtin and not agent_code_enabled():   # repo presets only, unless opted in
+            raise PermissionError(DISABLED)
         fn = compile_overlay(code)            # raises on bad code (caught by caller)
         ov = Overlay(name=name, intent=intent, code=code, fn=fn, builtin=builtin)
         with self._lock:

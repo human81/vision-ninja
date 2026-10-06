@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 
 from . import ffmpeg_ops as ff
+from .codepolicy import DISABLED as _CODE_DISABLED, agent_code_enabled
 from .overlays import BUILTINS
 from .runtime import ctx
 
@@ -1371,6 +1372,8 @@ def run_cv_code(code: str, target: str = "frame") -> dict:
     an http URL. Your `code` gets `img` (BGR np.ndarray) + `cv2`,`np`; set `out` to a
     result image (BGR or gray) OR `result` to a dict/number/string.
     Example: `out = cv2.Canny(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 100, 200)`."""
+    if not agent_code_enabled():
+        return {"status": "error", "error": _CODE_DISABLED}
     img = _resolve_image(target)
     if img is None:
         return {"status": "error", "error": f"could not load target {target!r}"}
@@ -1400,6 +1403,8 @@ def run_cv_video(code: str, which: str = "source", max_seconds: float = 10.0) ->
     """Apply ARBITRARY OpenCV code to EVERY frame of a clip -> a new video. `code` gets
     `img` (BGR) per frame and must set `out` (BGR or gray). which: 'source'|'recording'.
     e.g. `out = cv2.Canny(img, 80, 160)` edge-detects the whole clip."""
+    if not agent_code_enabled():
+        return {"status": "error", "error": _CODE_DISABLED}
     src = _resolve_target(which)
     if not src:
         return {"status": "error", "error": f"no {which} file"}
@@ -1564,7 +1569,7 @@ def load_youtube(url: str, seconds: int = 30) -> dict:
             "--no-playlist", "--quiet", "--no-warnings", "--force-overwrites"]
     if seconds and int(seconds) > 0:
         args += ["--download-sections", f"*0-{int(seconds)}"]
-    args.append(url)
+    args += ["--", url]          # "--": a "url" like "--exec=…" can never become an option
     try:
         p = subprocess.run(args, capture_output=True, text=True, timeout=300)
     except Exception as e:
@@ -1776,9 +1781,9 @@ def _resolve_youtube(url: str) -> tuple[str, str]:
     # to clear the "confirm you're not a bot" gate. Try cheap → heavy.
     ejs = ["--remote-components", "ejs:github"]
     attempts = [
-        ["-g", "-f", fmt, *ejs, url],
-        ["-g", "-f", fmt, *ejs, "--cookies-from-browser", "chrome", url],
-        ["-g", "-f", fmt, *ejs, "--cookies-from-browser", "safari", url],
+        ["-g", "-f", fmt, *ejs, "--", url],
+        ["-g", "-f", fmt, *ejs, "--cookies-from-browser", "chrome", "--", url],
+        ["-g", "-f", fmt, *ejs, "--cookies-from-browser", "safari", "--", url],
     ]
     last = ""
     for extra in attempts:

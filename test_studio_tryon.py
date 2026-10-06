@@ -18,6 +18,7 @@ import sys
 import time
 import json
 import inspect
+import urllib.error
 import urllib.request
 
 import cv2
@@ -773,8 +774,13 @@ def _post(path, body):
 
 def _server_up():
     try:
-        urllib.request.urlopen(STUDIO_URL + "/", timeout=3)
-        return True
+        urllib.request.urlopen(STUDIO_URL + "/auth/me", timeout=3)
+        return True                        # STUDIO_AUTH=off (the gated /auth/me needs a session)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            print(f"[ONLINE] skipped — {STUDIO_URL} requires sign-in; "
+                  "start it with STUDIO_AUTH=off to run the online phase")
+        return False
     except Exception:
         return False
 

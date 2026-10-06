@@ -181,7 +181,8 @@ def cmd_studio(args):
         if _up("http://127.0.0.1:9379/v1/models"):
             print("  ▸ litert-lm already running (:9379)")
         elif shutil.which("litert-lm"):
-            spawn("litert-lm voice brain (:9379)", ["litert-lm", "serve"], "litert.log")
+            spawn("litert-lm voice brain (:9379)", ["litert-lm", "serve", "--host", "127.0.0.1"],
+                  "litert.log")                 # its default is 0.0.0.0 (LAN-exposed, no auth)
         else:
             print("  ⚠ litert-lm not on PATH — local 🦙 voice disabled (uv tool install litert-lm)")
 
@@ -207,7 +208,9 @@ def cmd_studio(args):
             except Exception:
                 p.kill()
 
-    print(f"🥷 Vision Ninja Studio → http://{args.host}:{args.port}")
+    # "localhost", not 127.0.0.1: only localhost is a Firebase-authorized sign-in domain
+    shown = "localhost" if args.host in ("127.0.0.1", "localhost") else args.host
+    print(f"🥷 Vision Ninja Studio → http://{shown}:{args.port}")
     import uvicorn
     try:
         uvicorn.run("occ.studio.server:app", host=args.host, port=args.port)

@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 Local, real-time occupancy & traffic analytics on
 Apple Silicon (M5 Pro / MPS): capture → detect → track → spatial math → emit the
@@ -43,31 +43,20 @@ OCC_SOURCE=assets/videos/vehicles-2.mp4 .venv/bin/uvicorn occ.web:app --port 800
 # `run.py studio` also boots the optional sidecars — litert-lm (:9379, local 🦙 voice) and the
 # LocateAnything-3B grounding server (:9393, 🔍 locate) — and stops them on exit; idempotent
 # (skips ones already up). --no-voice / --no-locate to skip. Logs → out/studio/logs/.
-.venv/bin/python run.py studio                 # → http://localhost:8011 (sign-in)  ([studio] extra) + sidecars
+.venv/bin/python run.py studio                 # → http://127.0.0.1:8011  ([studio] extra) + sidecars
 OCC_SOURCE=assets/videos/market-square.mp4 .venv/bin/uvicorn occ.studio.server:app --port 8011  # studio only
 
-# tests — plain scripts with `if __name__ == "__main__"` (NOT pytest); run each file directly
-.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 219/219)
-.venv/bin/python fishfood.py --level 2  # stop after level N (1 smoke … 5 browser e2e, 6 studio try-on); --frames N
-.venv/bin/python test_phase3.py         # a single test file
+# tests
+.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 169/169)
 .venv/bin/python test_proto_roundtrip.py test_phase2.py test_phase3.py test_phase4.py test_e2e_web.py
-.venv/bin/python studio_selftest.py     # every studio agent tool + endpoint + NLE (stop the studio first)
 # Level 6 folds in the AR try-on / face-filter / stylist regression (offline phase).
 # Run it standalone for the FULL stack (+endpoints/WS/UI) once the studio is up:
-STUDIO_AUTH=off .venv/bin/python run.py studio &  # then:
 STUDIO_URL=http://127.0.0.1:8011 .venv/bin/python test_studio_tryon.py   # full offline+online+UI regression
 ```
 
-After any change, run `fishfood.py` and expect **ALL PASS — 219/219** (levels 1–6;
-level 6 = studio auth gate (`test_studio_auth.py`, fake Firebase) + agent-code policy
-(`test_studio_codepolicy.py`), both always run, + AR try-on
-(SKIPs without the `[face]` extra)). If RF-DETR (level 3) fails with an HF 401 while the weights
-are cached, the stored HF token is stale: rerun with `HF_HUB_OFFLINE=1`. It also writes
+After any change, run `fishfood.py` and expect **ALL PASS — 169/169** (levels 1–6;
+level 6 = studio AR try-on, SKIPs without the `[face]` extra). It also writes
 `out/fishfood/RUNBOOK.md` (a command per check) and a gallery of annotated frames.
-
-After a reboot, `./scripts/start_studio.sh [source] [--no-voice] [--no-locate]` wraps `run.py studio`
-(studio :8011 + litert :9379 + la3b :9393). The la3b sidecar needs its own `.venv-la3b`
-(see `scripts/la3b_server.py`).
 
 ## Architecture (`occ/`)
 
@@ -90,7 +79,7 @@ After a reboot, `./scripts/start_studio.sh [source] [--no-voice] [--no-locate]` 
 | `grounding/` | Open-vocab VLM grounders: `owlv2` (Mac/MPS default), `locate_anything`/`molmo2` (GCP/Linux). `run.py ground`. |
 | `web.py` + `web_ui.html` | FastAPI dashboard: live-reconfig, MJPEG, canvas draw/save, stats, timeline chart, snapshot/record. Live-reconfigurable via a dirty-flag rebuild loop. |
 | `proto/` (repo root, not under `occ/`) | Vendored, wire-identical `OccupancyCountingPredictionResult` (`visionai_annotations.proto` → `_pb2.py`). Regenerate: `python -m grpc_tools.protoc -Iproto --python_out=proto proto/visionai_annotations.proto`. |
-| `studio/` | **Agentic layer** (Google ADK). Self-contained (never imports `occ.web`). Has its **own** live loop, `studio/pipeline.py` (`StudioPipeline`: detect→track→geometry→render + scene stabilization + agent overlays + ledger metering), separate from `occ/pipeline.py` and `occ/web.py`. **Pipeline invariants (detect_every hold, persistent `GeometryEngine`) must be kept in all three.** Tools share state via `runtime.py`'s module-level `StudioContext` (set once at agent-build time, reached by all tool functions). Core: `neurons.py`+`ledger.py` (compute-points meter / neuron graph), `brain.py` (persistent scene memory), `settings.py` (sim axis `live/simulated/zero`), `overlays.py` (hot-loads agent-authored `def draw(ctx)` cv2 code into the render loop), `tools.py`, `agent.py` (ADK + deterministic **SimRunner** — no API key needed), `server.py`+`studio_ui.html`. Local/$0 model stack: `local_llm.py` (Gemma via LiteRT-LM :9379), `gemma_vision.py`/`medgemma.py` (MPS vision + medical), `voice_local.py` (Whisper STT + local TTS), `offline.py` (`STUDIO_OFFLINE=1`), `la3b.py` (LocateAnything-3B :9393). Live voice: `live.py` (Gemini BIDI, `GEMINI_API_KEY`), `live_openai.py` (OpenAI Realtime, `OPENAI_API_KEY` — better for Haitian Creole). Gesture browse: `gestures.py` (`GestureBrowser` — hand *position* drives store browsing, not noisy gesture classification). Media: `library.py` (auto-registers every snapshot/recording/gif with caption+tags; agent searches in natural language; persisted to `out/studio/library.json`). NLE: `nle.py` (ffmpeg `filter_complex` timeline assembly). Try-on/commerce: `face_filters.py`+`facemesh.py` (eyewear AR), `jewelry.py` (nose ring/earrings/necklace), `genmedia.py`/`qwen_image.py` (Nano Banana / local image), `commerce.py` (Stripe checkout), `eyewear_lab.py` (flag-based bad-case dataset under `out/studio/tryon_flags/`). Runs `$0` in sim mode; uses Gemini when `GOOGLE_API_KEY`/`GEMINI_API_KEY` is set. `run.py studio` boots the studio + litert + la3b sidecars together. **Stop the studio server (and sidecars) before running `fishfood.py`** — CV pipelines contend for MPS and flake the level-5 e2e. |
+| `studio/` | **Agentic layer** (Google ADK). Self-contained (never imports `occ.web`). Tools share state via `runtime.py`'s module-level `StudioContext` (set once at agent-build time, reached by all tool functions). Core: `neurons.py`+`ledger.py` (compute-points meter / neuron graph), `brain.py` (persistent scene memory), `settings.py` (sim axis `live/simulated/zero`), `overlays.py` (hot-loads agent-authored `def draw(ctx)` cv2 code into the render loop), `tools.py`, `agent.py` (ADK + deterministic **SimRunner** — no API key needed), `server.py`+`studio_ui.html`. Local/$0 model stack: `local_llm.py` (Gemma via LiteRT-LM :9379), `gemma_vision.py`/`medgemma.py` (MPS vision + medical), `voice_local.py` (Whisper STT + local TTS), `offline.py` (`STUDIO_OFFLINE=1`), `la3b.py` (LocateAnything-3B :9393). Live voice: `live.py` (Gemini BIDI, `GEMINI_API_KEY`), `live_openai.py` (OpenAI Realtime, `OPENAI_API_KEY` — better for Haitian Creole). Gesture browse: `gestures.py` (`GestureBrowser` — hand *position* drives store browsing, not noisy gesture classification). Media: `library.py` (auto-registers every snapshot/recording/gif with caption+tags; agent searches in natural language; persisted to `out/studio/library.json`). NLE: `nle.py` (ffmpeg `filter_complex` timeline assembly). Try-on/commerce: `face_filters.py`+`facemesh.py` (eyewear AR), `jewelry.py` (nose ring/earrings/necklace), `genmedia.py`/`qwen_image.py` (Nano Banana / local image), `commerce.py` (Stripe checkout), `eyewear_lab.py` (flag-based bad-case dataset under `out/studio/tryon_flags/`). Runs `$0` in sim mode; uses Gemini when `GOOGLE_API_KEY`/`GEMINI_API_KEY` is set. `run.py studio` boots the studio + litert + la3b sidecars together. **Stop the studio server (and sidecars) before running `fishfood.py`** — CV pipelines contend for MPS and flake the level-5 e2e. |
 
 Cost levers (💰 in `configs/default.yaml`): model tier, `detect_every`, `imgsz`, `half`, `max_long_side`.
 
@@ -121,29 +110,6 @@ Cost levers (💰 in `configs/default.yaml`): model tier, `detect_every`, `imgsz
 - **Studio env vars**: `GOOGLE_API_KEY`/`GEMINI_API_KEY` (Gemini brain + Live voice),
   `OPENAI_API_KEY` (OpenAI Realtime voice backend), `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`
   (checkout), `STUDIO_OFFLINE=1` (airplane mode). Loaded from a gitignored `.env` via python-dotenv.
-- **Studio auth** (`occ/studio/auth.py`, Momentum's Firebase session-cookie pattern, project
-  `vision-b5c97`): **ON by default** — the whole studio is behind sign-in. `/login` (Firebase web
-  SDK, config from `STUDIO_FIREBASE_API_KEY/_AUTH_DOMAIN/_PROJECT_ID/_APP_ID`) → `POST /auth/session`
-  mints an httpOnly `__session` cookie; a pure-ASGI middleware gates **every** HTTP route + WebSocket
-  (cookie, plus same-origin check on WS). Every page loads `/auth/guard.js` (401 → back to /login).
-  `STUDIO_AUTH_ALLOW` = emails / `@domain` / `*`; **empty = nobody**. New public routes must be
-  added to `auth.PUBLIC` deliberately. With auth on, `/stripe/webhook` requires
-  `STRIPE_WEBHOOK_SECRET`. Admin creds: `GOOGLE_APPLICATION_CREDENTIALS` or ADC.
-  `STUDIO_AUTH=off` = local dev: no sign-in but **loopback clients only**, and anything proxied
-  (X-Forwarded-For/Forwarded) is refused — so a misconfigured deploy fails closed. Sign in via
-  `http://localhost:…`, not 127.0.0.1 (only `localhost` is a Firebase-authorized domain).
-  `studio_selftest.py` defaults to off; the `test_studio_tryon.py` ONLINE phase needs a studio
-  started with `STUDIO_AUTH=off` (it skips, with a message, against a gated one).
-- **Agent-authored code** (`create_overlay`, `run_cv_code`, `run_cv_video`) is **OFF unless
-  `STUDIO_AGENT_CODE=on`** (`occ/studio/codepolicy.py`; checked in `OverlayEngine.add` for
-  non-builtin code and at the top of both cv tools). The restricted-builtins "sandbox" is NOT a
-  security boundary: via `np`/`cv2` it can read any file (incl. `.env`). The local `.env` turns it
-  on; never enable it on Cloud Run, and keep `.env` out of any image. Repo presets (`BUILTINS`)
-  and native face filters always work. Never splice user/chat text into generated source
-  (SimRunner `_highlight_overlay` sanitizes + `repr()`s it); the sandbox has no `import`.
-  Agent-supplied URLs go to yt-dlp after `--` (else `--exec=…` would be an option).
-- litert-lm defaults to `0.0.0.0`; `run.py studio` starts it with `--host 127.0.0.1` — keep sidecars
-  on loopback (they have no auth).
 
 ## Git
 

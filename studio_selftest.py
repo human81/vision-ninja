@@ -17,6 +17,8 @@ import time
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+os.environ.setdefault("STUDIO_AUTH", "off")      # in-process client = loopback; no sign-in
+os.environ.setdefault("STUDIO_AGENT_CODE", "on")  # exercises create_overlay / run_cv_code
 
 from occ.studio.server import create_studio_app           # noqa: E402
 from occ.studio import tools as T, nle                     # noqa: E402

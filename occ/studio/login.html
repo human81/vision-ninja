@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1">
+<title>Vision Ninja Studio · Sign in</title>
+<style>
+  :root{--bg:#0a0d13;--panel:#121822;--line:#202938;--fg:#e6edf3;--mut:#8b97a7;
+        --accent:#3fb950;--blue:#4d8cf5;--danger:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;
+       font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;
+       background:var(--bg);color:var(--fg)}
+  .card{width:100%;max-width:360px;background:var(--panel);border:1px solid var(--line);
+        border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:12px}
+  h1{font-size:17px;margin:0 0 4px}
+  p{margin:0;color:var(--mut)}
+  button,input{font:inherit;border-radius:8px;padding:10px 12px;border:1px solid var(--line)}
+  input{background:#0e131c;color:var(--fg);width:100%}
+  button{cursor:pointer;background:#1b2230;color:var(--fg);font-weight:600}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  button:disabled{opacity:.55;cursor:default}
+  .or{display:flex;align-items:center;gap:8px;color:var(--mut);font-size:12px}
+  .or::before,.or::after{content:"";flex:1;border-top:1px solid var(--line)}
+  #msg{min-height:1.2em;font-size:13px}
+  #msg.err{color:var(--danger)} #msg.ok{color:var(--accent)}
+</style>
+</head>
+<body>
+<main class=card>
+  <h1>🥷 Vision Ninja Studio</h1>
+  <p>Sign in to continue.</p>
+  <button id=google class=primary>Continue with Google</button>
+  <div class=or>or</div>
+  <form id=pw style="display:flex;flex-direction:column;gap:8px">
+    <input id=email type=email placeholder=Email autocomplete=username required>
+    <input id=pass type=password placeholder=Password autocomplete=current-password required>
+    <button type=submit>Sign in with email</button>
+  </form>
+  <div id=msg role=status></div>
+</main>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script>
+const msg=(t,c='')=>{const m=document.getElementById('msg');m.textContent=t;m.className=c};
+const busy=on=>document.querySelectorAll('button').forEach(b=>b.disabled=on);
+const next=(()=>{const n=new URLSearchParams(location.search).get('next')||'/';
+  return n.startsWith('/')&&!n.startsWith('//')?n:'/'})();   // same-origin only
+
+(async()=>{
+  const cfg=await (await fetch('/auth/config')).json();
+  if(!cfg.apiKey){msg('Sign-in is not configured on this server (STUDIO_FIREBASE_*).','err');busy(true);return}
+  firebase.initializeApp(cfg);
+  const auth=firebase.auth();
+  // The server session cookie is the only session; don't keep a second one in the browser.
+  await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
+
+  async function finish(cred){
+    const u=cred.user;
+    if(u.providerData.some(p=>p.providerId==='password')&&!u.emailVerified){
+      await u.sendEmailVerification().catch(()=>{});
+      await auth.signOut();
+      msg('Check your inbox and verify your email, then sign in again.','err');return;
+    }
+    const r=await fetch('/auth/session',{method:'POST',headers:{'Content-Type':'application/json'},
+                         body:JSON.stringify({idToken:await u.getIdToken()})});
+    await auth.signOut();
+    if(!r.ok){msg((await r.json().catch(()=>({}))).error||'Sign-in failed.','err');return}
+    msg('Signed in — loading the studio…','ok');location.replace(next);
+  }
+  async function run(fn){
+    busy(true);msg('');
+    try{await finish(await fn())}
+    catch(e){msg((e&&e.message||'Sign-in failed.').replace(/^Firebase: /,''),'err')}
+    finally{busy(false)}
+  }
+  document.getElementById('google').onclick=()=>run(()=>auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()));
+  document.getElementById('pw').onsubmit=e=>{e.preventDefault();
+    run(()=>auth.signInWithEmailAndPassword(email.value.trim(),pass.value))};
+})();
+</script>
+</body>
+</html>
