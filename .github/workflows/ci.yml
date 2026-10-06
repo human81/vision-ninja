@@ -17,16 +17,16 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: pyproject.toml
+          cache-dependency-glob: requirements.lock
 
       - name: System libraries (OpenCV / MediaPipe)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libegl1 ffmpeg
 
-      - name: Python 3.12 + CPU torch + app deps
+      - name: Python 3.12 + the locked deps (same versions as the dev venv)
         run: |
           uv venv --python 3.12 .venv
-          uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch torchvision
-          uv pip install --python .venv/bin/python -e ".[cv,web,studio,face,pay]"
+          uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu "torch==2.12.0" "torchvision==0.27.0"
+          uv pip install --python .venv/bin/python --no-deps -r requirements.lock
 
       - name: Protobuf contract
         run: .venv/bin/python test_proto_roundtrip.py

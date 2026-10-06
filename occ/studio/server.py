@@ -10,6 +10,7 @@ applies as UI mutations, plus REST panels (/usage, /brain, /graph, /overlays,
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -48,6 +49,11 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     # OCC_SET="detector.imgsz=480;runtime.detect_every=3" — any dotted config override, for
     # hosts where there's no CLI (Cloud Run). ';'-separated since values may contain commas.
     extra = [o.strip() for o in os.environ.get("OCC_SET", "").split(";") if o.strip()]
+    # OCC_TORCH_THREADS: cap inference threads so CPU-only YOLO can't starve the web server
+    # (on a 4-vCPU Cloud Run instance, leave a core for requests/WebSockets).
+    if os.environ.get("OCC_TORCH_THREADS"):
+        import torch
+        torch.set_num_threads(max(1, int(os.environ["OCC_TORCH_THREADS"])))
     cfg = cfg or Config.load(overrides=[
         f"source.uri={os.environ.get('OCC_SOURCE', 'assets/videos/vehicles-2.mp4')}",
         "source.loop=true", *extra])
@@ -101,15 +107,25 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     def index():
         return _UI.read_text()
 
+    # Open MJPEG viewers. On Cloud Run every open stream holds one of the instance's request
+    # slots, so a stream must end the moment its viewer goes away; /stats reports the count.
+    streams = {"open": 0}
+
     @app.get("/stream.mjpg")
-    def stream():
-        def gen():
+    async def stream(request: Request):
+        async def gen():
             boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-            while not pipe._stop.is_set():
-                j = pipe.latest_jpeg()
-                if j:
-                    yield boundary + j + b"\r\n"
-                time.sleep(0.03)
+            streams["open"] += 1
+            try:
+                while not pipe._stop.is_set():
+                    if await request.is_disconnected():
+                        break
+                    j = pipe.latest_jpeg()
+                    if j:
+                        yield boundary + j + b"\r\n"
+                    await asyncio.sleep(0.03)      # async: no threadpool thread per viewer
+            finally:
+                streams["open"] -= 1
         return StreamingResponse(gen(),
                                  media_type="multipart/x-mixed-replace; boundary=frame")
 
@@ -118,7 +134,7 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get("/stats")
     def stats():
-        return JSONResponse({**pipe.stats(), "boot": boot_id})
+        return JSONResponse({**pipe.stats(), "boot": boot_id, "streams": streams["open"]})
 
     @app.post("/render")
     async def set_render_route(req: Request):
@@ -858,6 +874,8 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
         except WebSocketDisconnect:
             pass
         except Exception as e:
+            import logging
+            logging.getLogger("studio.live").exception("live voice (%s) failed", backend)
             try:
                 await ws.send_text(json.dumps({"type": "error",
                     "message": f"{type(e).__name__}: {e}"}))

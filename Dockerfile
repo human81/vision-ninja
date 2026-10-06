@@ -24,8 +24,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PORT=8080 \
     HOME=/app \
     YOLO_CONFIG_DIR=/app/.ultralytics \
-    HF_HOME=/app/out/hf
+    HF_HOME=/app/out/hf \
+    HF_MODULES_CACHE=/tmp/hf_modules
 
+# HF_MODULES_CACHE stays on local disk: transformers chmods the remote-code files it copies
+# there, and the GCS FUSE bucket mount (HF_HOME) doesn't support chmod.
 # ffmpeg: NLE/clip tools + video decode; libgl/glib/egl: OpenCV + MediaPipe on Linux.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg libgl1 libglib2.0-0 libegl1 curl ca-certificates \
@@ -35,16 +38,24 @@ COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# torch first, from the variant's wheel index (the CPU wheels skip ~2GB of CUDA libs).
+# Parity with the working local .venv: the SAME versions, never "whatever is newest at build
+# time" (that drift broke Live Voice in production). torch/torchvision match the local venv,
+# from the variant's wheel index (the CPU wheels skip ~2GB of CUDA libs).
+ARG TORCH=2.12.0
+ARG TORCHVISION=0.27.0
 RUN if [ "$VARIANT" = "gpu" ]; then IDX=https://download.pytorch.org/whl/cu126; \
     else IDX=https://download.pytorch.org/whl/cpu; fi; \
-    uv pip install --index-url "$IDX" torch torchvision
+    uv pip install --index-url "$IDX" "torch==$TORCH" "torchvision==$TORCHVISION"
 
-# Then the app deps (dependency layer cached until pyproject.toml changes).
-COPY pyproject.toml ./
-RUN EXTRAS="--extra cv --extra web --extra studio --extra face --extra seg --extra pay"; \
-    if [ "$VARIANT" = "gpu" ]; then EXTRAS="$EXTRAS --extra rfdetr --extra vlm --extra med"; fi; \
-    uv pip install -r pyproject.toml $EXTRAS
+# Everything else from requirements.lock (scripts/lock_requirements.sh freezes the local venv).
+# --no-deps: replicate the frozen set EXACTLY. The working venv isn't strictly resolvable
+# (e.g. opentelemetry-api 1.45.1 vs google-adk 2.2.0's declared <=1.41.1), so a fresh resolve
+# would refuse — or "fix" it into a set that was never tested. The import check fails the
+# build if the replica is broken.
+COPY requirements.lock ./
+RUN uv pip install --no-deps -r requirements.lock \
+    && python -c "import cv2, mediapipe, ultralytics, supervision, trackers, google.adk, \
+         google.genai, fastapi, firebase_admin, stripe, rembg; print('deps ok')"
 
 # gpu: the Mac's sidecars too. litert-lm (local Gemma 4 brain) + a LocateAnything-3B env that
 # reuses the system torch/cu126 but pins the transformers its remote code needs (plus lmdb/peft,

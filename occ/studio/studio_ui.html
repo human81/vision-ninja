@@ -2050,7 +2050,9 @@ setInterval(()=>{if($('pane-graph').classList.contains('active'))drawGraph();},1
     setTimeout(()=>{ if(img.style.display!=='none' && ($('canvasmode').textContent||'live')==='live')
       img.src='/stream.mjpg?t='+Date.now(); busy=false; }, 500); }
   img.addEventListener('error',reconnect);
-  img.addEventListener('stalled',reconnect);
+  // NOT 'stalled': it fires whenever frames slow down (a busy CPU instance), and every
+  // reconnect opened another long-lived stream — on Cloud Run that piled up until the one
+  // instance hit its request limit and refused everything, Live Voice included.
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden)reconnect(); });
   setInterval(async()=>{ try{
     const s=await(await fetch('/stats')).json();

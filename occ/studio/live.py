@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 
 from .agent import SYSTEM_PROMPT, frames_for
@@ -33,6 +34,8 @@ from .runtime import ctx
 # Tool-capable Gemini Live model (Gemini API). gemini-3.1-flash-live-preview is
 # the cascade model that reliably function-calls mid-session (Momentum's default).
 # Override via env; native-audio models sound better but tool-call less reliably.
+log = logging.getLogger("studio.live")
+
 LIVE_MODEL = os.environ.get("STUDIO_LIVE_MODEL", "gemini-3.1-flash-live-preview")
 
 _VOICE_HINT = (
@@ -128,6 +131,9 @@ class LiveBridge:
                         live_request_queue=queue, run_config=run_config):
                     await self._emit_event(ws, event)
             except Exception as e:
+                # Logged server-side too: in production the browser is the only other
+                # place this surfaced, which made BIDI failures invisible in Cloud Logging.
+                log.exception("Gemini Live session failed (model=%s)", LIVE_MODEL)
                 await self._safe_send(ws, {"type": "error",
                                            "message": f"{type(e).__name__}: {e}"})
 

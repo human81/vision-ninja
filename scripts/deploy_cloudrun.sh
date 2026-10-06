@@ -131,15 +131,17 @@ deploy() {
     size=(--cpu 8 --memory 32Gi --gpu 1 --gpu-type nvidia-l4 --no-gpu-zonal-redundancy)
   else
     # CPU levers: nano model, detect every 2nd frame (tracker predicts between), ≤1280px.
-    env="$env|OCC_SET=detector.device=cpu;detector.model=yolo26n.pt;runtime.detect_every=2;source.max_long_side=1280"
+    env="$env|OCC_SET=detector.device=cpu;detector.model=yolo26n.pt;runtime.detect_every=2;source.max_long_side=1280|OCC_TORCH_THREADS=3"
     size=(--cpu 4 --memory 8Gi)
   fi
+  # concurrency 1000: MJPEG streams + WebSockets are long-lived and each holds a request slot;
+  # at 80 the single instance ran out and Cloud Run refused everything (BIDI included).
   echo "▸ deploying $SERVICE ($VARIANT) in $RUN_PROJECT"
   "${GR[@]}" run deploy "$SERVICE" --image "$IMAGE" --region "$REGION" \
     --service-account "$SA" --execution-environment gen2 \
     --no-invoker-iam-check \
     --min-instances 1 --max-instances 1 --no-cpu-throttling \
-    --concurrency 80 --timeout 3600 --port 8080 "${size[@]}" \
+    --concurrency 1000 --timeout 3600 --port 8080 "${size[@]}" \
     --add-volume "name=out,type=cloud-storage,bucket=$BUCKET" \
     --add-volume-mount "volume=out,mount-path=/app/out" \
     --set-env-vars "^|^$env" ${secrets_flag[@]+"${secrets_flag[@]}"}

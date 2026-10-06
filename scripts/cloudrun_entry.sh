@@ -8,6 +8,7 @@
 #     each downloads once (first boot is slow; later boots read from the bucket).
 set -eu
 cd /app
+export STUDIO_SIDECAR_LOG=stdout      # run.py: sidecars log to stdout, not to the bucket
 mkdir -p out/studio/logs
 
 case "${STUDIO_LOCAL_MODELS:-off}" in
@@ -21,7 +22,7 @@ case "${STUDIO_LOCAL_MODELS:-off}" in
             gemma-4-12B-it.litertlm gemma-4-12b-it
         fi
         exec litert-lm serve --host 127.0.0.1 --port 9379
-      ) >> out/studio/logs/litert.log 2>&1 &
+      ) 2>&1 | sed -u 's/^/[litert] /' &      # stdout → Cloud Logging (live, unlike a bucket file)
     fi
     # --no-voice: litert is handled above (import first, then serve).
     exec python run.py studio --host 0.0.0.0 --port "${PORT:-8080}" --no-voice

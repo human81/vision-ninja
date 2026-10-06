@@ -170,11 +170,15 @@ def cmd_studio(args):
         except Exception:
             return False
 
+    # STUDIO_SIDECAR_LOG=stdout (Cloud Run): inherit stdout so Cloud Logging shows the sidecar
+    # live — a log FILE on the GCS bucket mount only becomes visible once it's closed.
+    to_stdout = os.environ.get("STUDIO_SIDECAR_LOG") == "stdout"
+
     def spawn(label, cmd, log):
-        f = open(f"out/studio/logs/{log}", "w")
-        p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+        f = None if to_stdout else open(f"out/studio/logs/{log}", "w")
+        p = subprocess.Popen(cmd, stdout=f, stderr=None if to_stdout else subprocess.STDOUT)
         procs.append(p)
-        print(f"  ▸ started {label}  (log: out/studio/logs/{log})")
+        print(f"  ▸ started {label}  ({'stdout' if to_stdout else f'log: out/studio/logs/{log}'})")
 
     # 1) local 🦙 voice/agent brain (LiteRT-LM) — optional
     if not args.no_voice:
