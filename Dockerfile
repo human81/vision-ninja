@@ -47,12 +47,19 @@ RUN EXTRAS="--extra cv --extra web --extra studio --extra face --extra seg --ext
     uv pip install -r pyproject.toml $EXTRAS
 
 # gpu: the Mac's sidecars too. litert-lm (local Gemma 4 brain) + a LocateAnything-3B env that
-# reuses the system torch/cu126 but pins the transformers its remote code needs.
+# reuses the system torch/cu126 but pins the transformers its remote code needs (plus lmdb/peft,
+# which that remote code imports). --no-deps on purpose: resolving peft/transformers normally
+# pulls a SECOND torch (CUDA 13) from PyPI that breaks torchvision ("torchvision::nms does not
+# exist"); everything not listed here comes from the system site-packages.
 ENV LA3B_PYTHON=/opt/la3b/bin/python
 RUN if [ "$VARIANT" = "gpu" ]; then \
       uv pip install litert-lm \
       && uv venv --system-site-packages --python /usr/local/bin/python3.12 /opt/la3b \
-      && uv pip install --python /opt/la3b/bin/python "transformers==4.57.1"; \
+      && uv pip install --python /opt/la3b/bin/python --no-deps "transformers==4.57.1" \
+           "tokenizers==0.22.2" "huggingface-hub==0.36.2" "lmdb==2.2.1" "peft==0.19.1" \
+      && /opt/la3b/bin/python -c "import torch, torchvision, transformers; \
+           from torchvision.ops import nms; from transformers import AutoModel, AutoProcessor, AutoTokenizer; print('la3b env:', torch.__version__, \
+           torchvision.__version__, transformers.__version__)"; \
     fi
 
 # Demo clips (gitignored locally) + the default YOLO weights, baked in so a cold start
