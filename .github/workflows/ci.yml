@@ -42,3 +42,6 @@ jobs:
 
       - name: Geometry & tracking invariants
         run: .venv/bin/python test_invariants.py
+
+      - name: Live-stream capture resilience (stall watchdog, URL re-resolve)
+        run: .venv/bin/python test_live_capture.py

@@ -47,7 +47,7 @@ OCC_SOURCE=assets/videos/vehicles-2.mp4 .venv/bin/uvicorn occ.web:app --port 800
 OCC_SOURCE=assets/videos/market-square.mp4 .venv/bin/uvicorn occ.studio.server:app --port 8011  # studio only
 
 # tests — plain scripts with `if __name__ == "__main__"` (NOT pytest); run each file directly
-.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 297/297)
+.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 304/304)
 .venv/bin/python fishfood.py --level 2  # stop after level N (1 smoke … 5 browser e2e, 6 studio try-on); --frames N
 .venv/bin/python test_phase3.py         # a single test file
 .venv/bin/python test_proto_roundtrip.py test_phase2.py test_phase3.py test_phase4.py test_e2e_web.py
@@ -58,9 +58,10 @@ STUDIO_AUTH=off .venv/bin/python run.py studio &  # then:
 STUDIO_URL=http://127.0.0.1:8011 .venv/bin/python test_studio_tryon.py   # full offline+online+UI regression
 ```
 
-After any change, run `fishfood.py` and expect **ALL PASS — 297/297** (levels 1–6;
+After any change, run `fishfood.py` and expect **ALL PASS — 304/304** (levels 1–6;
 level 6 = studio auth gate (`test_studio_auth.py`, fake Firebase) + agent-code policy
-(`test_studio_codepolicy.py`) + cloud-readiness (`test_cloud_ready.py`) + geometry/tracking invariants (`test_invariants.py`), all offline and always run, + AR try-on
+(`test_studio_codepolicy.py`) + cloud-readiness (`test_cloud_ready.py`) + geometry/tracking invariants (`test_invariants.py`) + live-capture resilience
+(`test_live_capture.py`), all offline and always run, + AR try-on
 (SKIPs without the `[face]` extra)). If RF-DETR (level 3) fails with an HF 401 while the weights
 are cached, the stored HF token is stale: rerun with `HF_HUB_OFFLINE=1`. It also writes
 `out/fishfood/RUNBOOK.md` (a command per check) and a gallery of annotated frames.
@@ -118,6 +119,11 @@ Cost levers (💰 in `configs/default.yaml`): model tier, `detect_every`, `imgsz
   YT Live streams. A native crash in-process takes down the entire server and can't be caught in
   Python. The studio server spawns `capture_worker` as a child process and respawns it on death —
   never inline the capture loop into the server for live stream sources.
+  The parent only respawns a worker that EXITS, so `SubprocessStreamSource` also runs a stall
+  watchdog (no frame for 20s → kill → respawn) and, for YouTube, re-resolves the watch page
+  (`remember_page` / `resolve_youtube` in `occ/sources.py`, ≤1/min) instead of reopening the
+  expired HLS URL. Both were "frozen forever" bugs (`test_live_capture.py`); `[capture]` lines
+  in the server log show stalls/re-resolves.
 - **Studio env vars**: `GOOGLE_API_KEY`/`GEMINI_API_KEY` (Gemini brain + Live voice),
   `OPENAI_API_KEY` (OpenAI Realtime voice backend), `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`
   (checkout), `STUDIO_OFFLINE=1` (airplane mode). Loaded from a gitignored `.env` via python-dotenv.

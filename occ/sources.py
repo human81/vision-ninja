@@ -185,6 +185,61 @@ class StreamSource:
         self.cap.release()
 
 
+def resolve_youtube(url: str) -> tuple[str, str]:
+    """Resolve a YouTube watch URL to a direct stream/HLS URL via yt-dlp, trying a
+    few strategies (plain, then browser cookies which get past the bot-check).
+    Returns (stream_url, "") on success or ("", honest_error) on failure — the
+    real yt-dlp error is surfaced so a YouTube bot-check / geo-block / missing JS
+    runtime isn't masked as a generic 'not live' message."""
+    fmt = "best[height<=720]/best"
+    # yt-dlp's modern YouTube path needs (a) a JS runtime (deno) + the EJS remote
+    # challenge-solver script to compute the n-signature, and (b) browser cookies
+    # to clear the "confirm you're not a bot" gate. Try cheap → heavy.
+    ejs = ["--remote-components", "ejs:github"]
+    attempts = [
+        ["-g", "-f", fmt, *ejs, "--", url],
+        ["-g", "-f", fmt, *ejs, "--cookies-from-browser", "chrome", "--", url],
+        ["-g", "-f", fmt, *ejs, "--cookies-from-browser", "safari", "--", url],
+    ]
+    last = ""
+    for extra in attempts:
+        try:
+            p = subprocess.run([sys.executable, "-m", "yt_dlp", "--no-warnings", *extra],
+                               capture_output=True, text=True, timeout=60)
+        except Exception as e:
+            last = str(e); continue
+        for ln in reversed((p.stdout or "").strip().splitlines()):
+            ln = ln.strip()
+            if ln.startswith("http") and "youtube.com/watch" not in ln and "youtu.be" not in ln:
+                return ln, ""
+        # capture the real reason (last ERROR line) for an honest message
+        for ln in reversed((p.stderr or "").strip().splitlines()):
+            if "ERROR" in ln:
+                last = ln.split("ERROR:", 1)[-1].strip(); break
+    hint = ""
+    low = last.lower()
+    if "not a bot" in low or "sign in to confirm" in low:
+        hint = (" — YouTube is rate-limiting/bot-checking this host. Wait a few "
+                "minutes, or install a JS runtime (`brew install deno`) so yt-dlp "
+                "can solve the challenge.")
+    elif "no video formats" in low:
+        hint = " — yt-dlp needs a JS runtime to decode formats (`brew install deno`)."
+    elif "geo" in low or "not available in your" in low:
+        hint = " — the stream looks geo-blocked."
+    return "", (f"could not resolve YouTube stream: {last}{hint}"
+                if last else "could not resolve a playable stream from that YouTube URL "
+                             "(it may not be live, or geo-blocked).")
+
+
+# Resolved stream URL → the page it came from (e.g. a YouTube watch URL). A live HLS URL
+# is short-lived; SubprocessStreamSource re-resolves the page when the stream stalls/dies.
+_PAGE_FOR: dict[str, str] = {}
+
+
+def remember_page(stream_uri: str, page_url: str):
+    _PAGE_FOR[stream_uri] = page_url
+
+
 class SubprocessStreamSource:
     """Jitter-buffered, PROCESS-ISOLATED reader for HLS live (YouTube live, .m3u8).
 
@@ -203,10 +258,18 @@ class SubprocessStreamSource:
     never goes down. Old frames drop (bounded deque) so latency stays bounded.
     """
 
+    # No frame for this long = stalled (normal HLS segment gaps are ~2-6s). The worker can
+    # hang inside FFMPEG without exiting, and a blocking pipe read would wait forever.
+    STALL_SECONDS = 20.0
+    RESOLVE_EVERY = 60.0      # re-resolve the page at most this often (YouTube bot-checks)
+
     def __init__(self, uri: str, max_long_side: int = 0,
                  buffer_seconds: float = 14.0, prebuffer_seconds: float = 3.0,
-                 reconnect: bool = True):
+                 reconnect: bool = True, page_url: str | None = None):
         self.uri = uri
+        self.page_url = page_url            # e.g. the YouTube watch URL this stream came from
+        self._last_frame = time.time()
+        self._last_resolve = 0.0
         self.max_long_side = max_long_side
         self.reconnect = reconnect
         self.fps = 30.0
@@ -218,6 +281,40 @@ class SubprocessStreamSource:
         self._proc: subprocess.Popen | None = None
         self._thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._thread.start()
+        threading.Thread(target=self._stall_watchdog, daemon=True).start()
+
+    @staticmethod
+    def _log(msg: str):
+        print(f"[capture] {msg}", file=sys.stderr, flush=True)
+
+    def _stall_watchdog(self):
+        """Kill a worker that's alive but silent — that EOFs the reader, which respawns."""
+        while not self._stop.is_set():
+            time.sleep(2.0)
+            proc = self._proc
+            idle = time.time() - self._last_frame
+            if proc is not None and proc.poll() is None and idle > self.STALL_SECONDS:
+                self._log(f"no frames for {idle:.0f}s — restarting the capture worker")
+                self._last_frame = time.time()          # one kill per stall
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+    def _maybe_reresolve(self):
+        """A live HLS URL expires/rotates; reopening it forever just refreezes. Get a fresh
+        one from the page it came from (rate-limited)."""
+        if not self.page_url or time.time() - self._last_resolve < self.RESOLVE_EVERY:
+            return
+        self._last_resolve = time.time()
+        stream, err = resolve_youtube(self.page_url)
+        if stream:
+            if stream != self.uri:
+                self._log("re-resolved the live stream URL from its page")
+            self.uri = stream
+            remember_page(stream, self.page_url)
+        else:
+            self._log(f"re-resolve failed: {err[:160]}")
 
     def _spawn(self) -> subprocess.Popen:
         return subprocess.Popen(
@@ -237,7 +334,13 @@ class SubprocessStreamSource:
 
     def _reader_loop(self):
         backoff = 0.5
+        first = True
         while not self._stop.is_set():
+            if not first:
+                self._maybe_reresolve()        # the stream stalled or died: fresh URL first
+            first = False
+            self._last_frame = time.time()     # startup grace for the stall watchdog
+            started = time.time()
             try:
                 self._proc = self._spawn()
             except Exception:
@@ -253,6 +356,8 @@ class SubprocessStreamSource:
                 pass
             if self._stop.is_set() or not self.reconnect:
                 break
+            if time.time() - started > 30:     # it was healthy for a while: retry fast
+                backoff = 0.5
             time.sleep(backoff)
             backoff = min(backoff * 2, 5.0)
 
@@ -277,6 +382,7 @@ class SubprocessStreamSource:
                 continue
             with self._lock:
                 self._buf.append(frame)
+            self._last_frame = time.time()
 
     def frames(self) -> Iterator[np.ndarray]:
         # build an initial cushion so the first segment-gap doesn't underrun.
@@ -406,7 +512,8 @@ def open_source(cfg):
               or "/manifest/" in low or "manifest.googlevideo" in low)
     if is_hls:
         return SubprocessStreamSource(uri, max_long_side=max_long,
-                                      reconnect=bool(s.get("reconnect", True)))
+                                      reconnect=bool(s.get("reconnect", True)),
+                                      page_url=_PAGE_FOR.get(uri))
     # Local files / finite http VODs (resolved YouTube *progressive* URLs) read
     # sequentially, looping. FileSource reopens the capture on read-failure.
     return FileSource(uri, loop=bool(s.get("loop", True)), max_long_side=max_long)

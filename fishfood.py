@@ -386,6 +386,13 @@ def level6(frames):
     except Exception as e:
         record(6, "invariants", "FAIL", f"{type(e).__name__}: {e}")
     try:
+        import test_live_capture
+        for name, ok, detail in test_live_capture.collect():
+            record(6, f"live capture: {name}", "PASS" if ok else "FAIL", detail,
+                   cmd=".venv/bin/python test_live_capture.py")
+    except Exception as e:
+        record(6, "live capture", "FAIL", f"{type(e).__name__}: {e}")
+    try:
         import mediapipe  # noqa: F401  (the [face] extra)
     except Exception:
         record(6, "studio AR try-on", "SKIP", "mediapipe not installed ([face] extra)")

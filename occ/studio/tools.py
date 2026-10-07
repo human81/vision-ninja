@@ -1764,55 +1764,17 @@ def use_source(item_id: int = 0, query: str = "") -> dict:
         stream, err = _resolve_youtube(url)
         if not stream:
             return {"status": "error", "error": err}
+        from ..sources import remember_page
+        remember_page(stream, url)     # lets a stalled/expired stream re-resolve itself
         url = stream
     ctx().pipe.reconfigure({"source.uri": url})
     return {"status": "success", "source": url, "name": item["caption"], "ui": "config"}
 
 
 def _resolve_youtube(url: str) -> tuple[str, str]:
-    """Resolve a YouTube watch URL to a direct stream/HLS URL via yt-dlp, trying a
-    few strategies (plain, then browser cookies which get past the bot-check).
-    Returns (stream_url, "") on success or ("", honest_error) on failure — the
-    real yt-dlp error is surfaced so a YouTube bot-check / geo-block / missing JS
-    runtime isn't masked as a generic 'not live' message."""
-    fmt = "best[height<=720]/best"
-    # yt-dlp's modern YouTube path needs (a) a JS runtime (deno) + the EJS remote
-    # challenge-solver script to compute the n-signature, and (b) browser cookies
-    # to clear the "confirm you're not a bot" gate. Try cheap → heavy.
-    ejs = ["--remote-components", "ejs:github"]
-    attempts = [
-        ["-g", "-f", fmt, *ejs, "--", url],
-        ["-g", "-f", fmt, *ejs, "--cookies-from-browser", "chrome", "--", url],
-        ["-g", "-f", fmt, *ejs, "--cookies-from-browser", "safari", "--", url],
-    ]
-    last = ""
-    for extra in attempts:
-        try:
-            p = subprocess.run([sys.executable, "-m", "yt_dlp", "--no-warnings", *extra],
-                               capture_output=True, text=True, timeout=60)
-        except Exception as e:
-            last = str(e); continue
-        for ln in reversed((p.stdout or "").strip().splitlines()):
-            ln = ln.strip()
-            if ln.startswith("http") and "youtube.com/watch" not in ln and "youtu.be" not in ln:
-                return ln, ""
-        # capture the real reason (last ERROR line) for an honest message
-        for ln in reversed((p.stderr or "").strip().splitlines()):
-            if "ERROR" in ln:
-                last = ln.split("ERROR:", 1)[-1].strip(); break
-    hint = ""
-    low = last.lower()
-    if "not a bot" in low or "sign in to confirm" in low:
-        hint = (" — YouTube is rate-limiting/bot-checking this host. Wait a few "
-                "minutes, or install a JS runtime (`brew install deno`) so yt-dlp "
-                "can solve the challenge.")
-    elif "no video formats" in low:
-        hint = " — yt-dlp needs a JS runtime to decode formats (`brew install deno`)."
-    elif "geo" in low or "not available in your" in low:
-        hint = " — the stream looks geo-blocked."
-    return "", (f"could not resolve YouTube stream: {last}{hint}"
-                if last else "could not resolve a playable stream from that YouTube URL "
-                             "(it may not be live, or geo-blocked).")
+    """YouTube watch URL → direct stream URL (see occ.sources.resolve_youtube)."""
+    from ..sources import resolve_youtube
+    return resolve_youtube(url)
 
 
 def _media_path(name: str) -> str:
