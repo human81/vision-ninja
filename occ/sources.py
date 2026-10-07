@@ -262,6 +262,7 @@ class SubprocessStreamSource:
     # hang inside FFMPEG without exiting, and a blocking pipe read would wait forever.
     STALL_SECONDS = 20.0
     RESOLVE_EVERY = 60.0      # re-resolve the page at most this often (YouTube bot-checks)
+    YTDLP = True              # pages stream through yt-dlp (see occ/capture_worker.py)
 
     def __init__(self, uri: str, max_long_side: int = 0,
                  buffer_seconds: float = 14.0, prebuffer_seconds: float = 3.0,
@@ -270,6 +271,9 @@ class SubprocessStreamSource:
         self.page_url = page_url            # e.g. the YouTube watch URL this stream came from
         self._last_frame = time.time()
         self._last_resolve = 0.0
+        self._n_in = 0            # frames received from the worker
+        self._n_out = 0           # frames released to the pipeline
+        self._underruns = 0       # times the jitter buffer ran dry (= a visible freeze)
         self.max_long_side = max_long_side
         self.reconnect = reconnect
         self.fps = 30.0
@@ -282,6 +286,20 @@ class SubprocessStreamSource:
         self._thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._thread.start()
         threading.Thread(target=self._stall_watchdog, daemon=True).start()
+        if os.environ.get("OCC_CAPTURE_DEBUG"):
+            threading.Thread(target=self._debug_stats, daemon=True).start()
+
+    def _debug_stats(self):
+        """OCC_CAPTURE_DEBUG=1: every 5s, frames in/out, buffer depth, underruns."""
+        last_in = last_out = last_under = 0
+        while not self._stop.is_set():
+            time.sleep(5.0)
+            with self._lock:
+                depth = len(self._buf)
+            self._log(f"in={self._n_in - last_in}/5s out={self._n_out - last_out}/5s "
+                      f"buffer={depth} underruns+={self._underruns - last_under} "
+                      f"fps={self.fps:.1f} worker={'up' if self._proc and self._proc.poll() is None else 'down'}")
+            last_in, last_out, last_under = self._n_in, self._n_out, self._underruns
 
     @staticmethod
     def _log(msg: str):
@@ -304,7 +322,9 @@ class SubprocessStreamSource:
     def _maybe_reresolve(self):
         """A live HLS URL expires/rotates; reopening it forever just refreezes. Get a fresh
         one from the page it came from (rate-limited)."""
-        if not self.page_url or time.time() - self._last_resolve < self.RESOLVE_EVERY:
+        # (yt-dlp mode resolves the page itself on every spawn — nothing to do there)
+        if (not self.page_url or self.YTDLP
+                or time.time() - self._last_resolve < self.RESOLVE_EVERY):
             return
         self._last_resolve = time.time()
         stream, err = resolve_youtube(self.page_url)
@@ -317,9 +337,12 @@ class SubprocessStreamSource:
             self._log(f"re-resolve failed: {err[:160]}")
 
     def _spawn(self) -> subprocess.Popen:
+        # A YouTube page → yt-dlp's live downloader (OpenCV's HLS reader stalls on YouTube
+        # live after ~30-40s); anything else → the OpenCV/FFMPEG reader.
+        target = (["--ytdlp", str(self.page_url)] if self.page_url and self.YTDLP
+                  else [str(self.uri)])
         return subprocess.Popen(
-            [sys.executable, "-m", "occ.capture_worker",
-             str(self.uri), str(self.max_long_side)],
+            [sys.executable, "-m", "occ.capture_worker", *target, str(self.max_long_side)],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
 
     @staticmethod
@@ -383,6 +406,7 @@ class SubprocessStreamSource:
             with self._lock:
                 self._buf.append(frame)
             self._last_frame = time.time()
+            self._n_in += 1
 
     def frames(self) -> Iterator[np.ndarray]:
         # build an initial cushion so the first segment-gap doesn't underrun.
@@ -396,13 +420,19 @@ class SubprocessStreamSource:
             time.sleep(0.03)
         dt = 1.0 / (self.fps or 30.0)
         next_t = time.perf_counter()
+        dry = False
         while not self._stop.is_set():
             with self._lock:
                 frame = self._buf.popleft() if self._buf else None
             if frame is None:                 # underrun — wait for the next burst
+                if not dry:
+                    self._underruns += 1
+                    dry = True
                 time.sleep(0.01)
                 next_t = time.perf_counter()
                 continue
+            dry = False
+            self._n_out += 1
             yield frame
             # pace to real time so the buffer drains across the segment gap
             # instead of racing to the live edge and re-freezing.

@@ -47,7 +47,7 @@ OCC_SOURCE=assets/videos/vehicles-2.mp4 .venv/bin/uvicorn occ.web:app --port 800
 OCC_SOURCE=assets/videos/market-square.mp4 .venv/bin/uvicorn occ.studio.server:app --port 8011  # studio only
 
 # tests — plain scripts with `if __name__ == "__main__"` (NOT pytest); run each file directly
-.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 304/304)
+.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 306/306)
 .venv/bin/python fishfood.py --level 2  # stop after level N (1 smoke … 5 browser e2e, 6 studio try-on); --frames N
 .venv/bin/python test_phase3.py         # a single test file
 .venv/bin/python test_proto_roundtrip.py test_phase2.py test_phase3.py test_phase4.py test_e2e_web.py
@@ -58,7 +58,7 @@ STUDIO_AUTH=off .venv/bin/python run.py studio &  # then:
 STUDIO_URL=http://127.0.0.1:8011 .venv/bin/python test_studio_tryon.py   # full offline+online+UI regression
 ```
 
-After any change, run `fishfood.py` and expect **ALL PASS — 304/304** (levels 1–6;
+After any change, run `fishfood.py` and expect **ALL PASS — 306/306** (levels 1–6;
 level 6 = studio auth gate (`test_studio_auth.py`, fake Firebase) + agent-code policy
 (`test_studio_codepolicy.py`) + cloud-readiness (`test_cloud_ready.py`) + geometry/tracking invariants (`test_invariants.py`) + live-capture resilience
 (`test_live_capture.py`), all offline and always run, + AR try-on
@@ -119,11 +119,13 @@ Cost levers (💰 in `configs/default.yaml`): model tier, `detect_every`, `imgsz
   YT Live streams. A native crash in-process takes down the entire server and can't be caught in
   Python. The studio server spawns `capture_worker` as a child process and respawns it on death —
   never inline the capture loop into the server for live stream sources.
-  The parent only respawns a worker that EXITS, so `SubprocessStreamSource` also runs a stall
-  watchdog (no frame for 20s → kill → respawn) and, for YouTube, re-resolves the watch page
-  (`remember_page` / `resolve_youtube` in `occ/sources.py`, ≤1/min) instead of reopening the
-  expired HLS URL. Both were "frozen forever" bugs (`test_live_capture.py`); `[capture]` lines
-  in the server log show stalls/re-resolves.
+  **YouTube streams through yt-dlp, not OpenCV:** OpenCV's FFMPEG HLS reader stops fetching new
+  YouTube-live segments after ~30-40s (measured: freeze every cycle). `use_source` records the
+  watch page (`remember_page`), and the worker runs `yt-dlp -o -` → `ffmpeg` → JPEGs at a fixed
+  30 fps (`capture_worker --ytdlp`; measured steady 30 fps, 0 underruns over 3 min). Workers
+  exit with their parent (no orphan downloads). A stall watchdog (no frame for 20s → respawn)
+  stays as the safety net. Debug: `OCC_CAPTURE_DEBUG=1` logs `[capture] in/out/buffer/underruns`
+  every 5s. Tests: `test_live_capture.py`.
 - **Studio env vars**: `GOOGLE_API_KEY`/`GEMINI_API_KEY` (Gemini brain + Live voice),
   `OPENAI_API_KEY` (OpenAI Realtime voice backend), `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`
   (checkout), `STUDIO_OFFLINE=1` (airplane mode). Loaded from a gitignored `.env` via python-dotenv.

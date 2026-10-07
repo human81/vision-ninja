@@ -41,6 +41,7 @@ def _source(frames_per_worker: int, mode: str, page_url=None):
     class Probe(sources.SubprocessStreamSource):
         STALL_SECONDS = 1.5
         RESOLVE_EVERY = 0.0
+        YTDLP = False          # these exercise the OpenCV-path fallback (re-resolve)
 
         def _spawn(self):
             import subprocess
@@ -106,7 +107,27 @@ def collect() -> list[tuple[str, bool, str]]:
         check("steady stream: watchdog leaves it alone", len(spawned) == 1, f"spawns={len(spawned)}")
         src.release()
 
-        # 5) the page memory used by open_source
+        # 5) YouTube pages stream through yt-dlp (OpenCV's HLS reader stalls on YT live)
+        seen = []
+        real_popen = sources.subprocess.Popen
+        sources.subprocess.Popen = lambda args, **k: seen.append(args) or real_popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"], **k)
+        try:
+            yt = sources.SubprocessStreamSource("https://cdn.example/x.m3u8",
+                                                page_url="https://youtube.com/watch?v=Y")
+            _wait(lambda: seen, 3)
+            yt.release()
+            plain = sources.SubprocessStreamSource("https://cdn.example/x.m3u8")
+            _wait(lambda: len(seen) >= 2, 3)
+            plain.release()
+        finally:
+            sources.subprocess.Popen = real_popen
+        check("YouTube page → worker in --ytdlp mode on the PAGE url",
+              seen and seen[0][3:5] == ["--ytdlp", "https://youtube.com/watch?v=Y"], str(seen[:1]))
+        check("plain HLS → worker on the stream url (OpenCV reader)",
+              len(seen) >= 2 and seen[1][3] == "https://cdn.example/x.m3u8", str(seen[1:2]))
+
+        # 6) the page memory used by open_source
         sources.remember_page("https://cdn.example/a.m3u8", "https://youtube.com/watch?v=A")
         check("open_source can find a stream's page", sources._PAGE_FOR.get(
             "https://cdn.example/a.m3u8") == "https://youtube.com/watch?v=A")
