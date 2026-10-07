@@ -57,14 +57,19 @@ RUN uv pip install --no-deps -r requirements.lock \
     && python -c "import cv2, mediapipe, ultralytics, supervision, trackers, google.adk, \
          google.genai, fastapi, firebase_admin, stripe, rembg; print('deps ok')"
 
-# gpu: the Mac's sidecars too. litert-lm (local Gemma 4 brain) + a LocateAnything-3B env that
+# gpu: the Mac's sidecars too, each in its own env exactly as on the Mac: litert-lm (local Gemma 4
+# brain; needs protobuf 7.x vs the app's 6.x — sharing an env crashed it) + a LocateAnything-3B env that
 # reuses the system torch/cu126 but pins the transformers its remote code needs (plus lmdb/peft,
 # which that remote code imports). --no-deps on purpose: resolving peft/transformers normally
 # pulls a SECOND torch (CUDA 13) from PyPI that breaks torchvision ("torchvision::nms does not
 # exist"); everything not listed here comes from the system site-packages.
 ENV LA3B_PYTHON=/opt/la3b/bin/python
+COPY requirements-litert.lock ./
 RUN if [ "$VARIANT" = "gpu" ]; then \
-      uv pip install litert-lm \
+      uv venv --python /usr/local/bin/python3.12 /opt/litert \
+      && uv pip install --python /opt/litert/bin/python --no-deps -r requirements-litert.lock \
+      && ln -s /opt/litert/bin/litert-lm /usr/local/bin/litert-lm \
+      && /opt/litert/bin/python -c "import litert_lm; print('litert env ok')" \
       && uv venv --system-site-packages --python /usr/local/bin/python3.12 /opt/la3b \
       && uv pip install --python /opt/la3b/bin/python --no-deps "transformers==4.57.1" \
            "tokenizers==0.22.2" "huggingface-hub==0.36.2" "lmdb==2.2.1" "peft==0.19.1" \
@@ -83,6 +88,7 @@ COPY . .
 
 # Saved zones/lines live with the rest of the state on the out/ bucket mount.
 RUN python -c "from ultralytics import YOLO; YOLO('yolo26n.pt')" \
+    && rm -rf /tmp/Ultralytics \
     && mkdir -p out/studio \
     && ln -sf /app/out/studio/studio_annotations.json configs/studio_annotations.json \
     && useradd --uid 1000 --home-dir /app --no-create-home app \

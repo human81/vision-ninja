@@ -159,6 +159,19 @@ Cost levers (💰 in `configs/default.yaml`): model tier, `detect_every`, `imgsz
   `STUDIO_LOCAL_MODELS=off` hides/refuses Gemma/MedGemma/litert/Qwen models (`settings.py`);
   `OCC_SET="a.b=v;c.d=w"` = config overrides without a CLI (server.py). Sidecars (litert, LA3B)
   aren't in the image. Zones save via a symlink into `/app/out`.
+- **Version parity is enforced by locks.** `scripts/lock_requirements.sh` freezes the working
+  `.venv` → `requirements.lock` and the Mac's litert `uv tool` env → `requirements-litert.lock`;
+  images + CI install them with `--no-deps` (the venv isn't strictly resolvable). Re-run it after
+  changing local packages, then commit both. Unlocked builds silently pulled google-adk 2.11 /
+  mediapipe 1.1 / opencv 5 and broke things only in production.
+- **Each sidecar keeps its own env** in the GPU image, as on the Mac: litert-lm at `/opt/litert`
+  (needs protobuf 7.x; the app pins 6.x), LocateAnything-3B at `/opt/la3b` (transformers 4.57.1,
+  installed `--no-deps` so it can't pull a second CUDA-13 torch). Builds import-check both.
+- **Request slots:** every open MJPEG stream / WebSocket holds a Cloud Run request slot on the one
+  instance (concurrency 1000). Streams must end on disconnect (`/stats` → `streams`); never
+  reconnect the `<img>` on `stalled`. At concurrency 80 this exhausted slots → 429s → BIDI died.
+- **GCS FUSE quirks:** no `chmod` (hence `HF_MODULES_CACHE=/tmp/hf_modules`); files are only
+  visible once closed (sidecars log to stdout via `STUDIO_SIDECAR_LOG=stdout`).
 
 ## Git
 
