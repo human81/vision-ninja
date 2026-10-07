@@ -80,7 +80,11 @@ def _admin_auth():
     from firebase_admin import auth, credentials
     with _init_lock:
         if not firebase_admin._apps:
-            opts = {"projectId": web_config()["projectId"]} if web_config()["projectId"] else None
+            # httpTimeout: these calls run on the shared threadpool that every sync route and
+            # the session check use; with no timeout one stalled call can hold a thread forever.
+            opts = {"httpTimeout": 10}
+            if web_config()["projectId"]:
+                opts["projectId"] = web_config()["projectId"]
             # ADC covers every case: GOOGLE_APPLICATION_CREDENTIALS (service-account OR
             # gcloud user file), gcloud's default login, and the Cloud Run service account.
             firebase_admin.initialize_app(credentials.ApplicationDefault(), opts)

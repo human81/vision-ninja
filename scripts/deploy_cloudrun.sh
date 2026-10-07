@@ -134,6 +134,8 @@ deploy() {
     env="$env|OCC_SET=detector.device=cpu;detector.model=yolo26n.pt;runtime.detect_every=2;source.max_long_side=1280|OCC_TORCH_THREADS=3"
     size=(--cpu 4 --memory 8Gi)
   fi
+  # liveness: /healthz is a sync route (threadpool) behind the auth middleware, so a frozen
+  # loop or an exhausted threadpool fails it and Cloud Run replaces the instance in ~30s.
   # concurrency 1000: MJPEG streams + WebSockets are long-lived and each holds a request slot;
   # at 80 the single instance ran out and Cloud Run refused everything (BIDI included).
   echo "▸ deploying $SERVICE ($VARIANT) in $RUN_PROJECT"
@@ -142,6 +144,7 @@ deploy() {
     --no-invoker-iam-check \
     --min-instances 1 --max-instances 1 --no-cpu-throttling \
     --concurrency 1000 --timeout 3600 --port 8080 "${size[@]}" \
+    --liveness-probe "httpGet.path=/healthz,httpGet.port=8080,periodSeconds=10,timeoutSeconds=5,failureThreshold=3" \
     --add-volume "name=out,type=cloud-storage,bucket=$BUCKET" \
     --add-volume-mount "volume=out,mount-path=/app/out" \
     --set-env-vars "^|^$env" ${secrets_flag[@]+"${secrets_flag[@]}"}

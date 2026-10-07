@@ -95,6 +95,47 @@ def create_studio_app(cfg: Config | None = None) -> FastAPI:
     video_files = sorted(str(p) for p in Path("assets/videos").glob("*.mp4"))
     app = FastAPI(title="Vision Ninja Studio")
     auth.install(app)                  # Firebase session-cookie gate (STUDIO_AUTH=on)
+
+    # Hang watchdog. A blocked event loop (or an exhausted threadpool) freezes EVERY route,
+    # and on Cloud Run that only shows up as queued requests and 429 "Rate exceeded". If the
+    # loop stops answering for 10s, dump every thread's stack to stderr (→ Cloud Logging) so
+    # the hang explains itself. `kill -USR1 <pid>` dumps on demand.
+    import faulthandler
+    import signal
+    import sys
+    import threading
+
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
+
+    @app.on_event("startup")
+    async def _start_watchdog():
+        loop = asyncio.get_running_loop()
+
+        import anyio
+
+        def probe(make_coro, what):
+            try:
+                asyncio.run_coroutine_threadsafe(make_coro(), loop).result(timeout=10)
+                return None
+            except Exception:
+                return what
+
+        def watch():
+            stalled = False
+            while True:
+                time.sleep(2)
+                # event loop itself, then the threadpool every sync route + auth check uses
+                bad = (probe(lambda: asyncio.sleep(0), "event loop")
+                       or probe(lambda: anyio.to_thread.run_sync(lambda: None), "threadpool"))
+                if bad is None:
+                    stalled = False
+                elif not stalled:              # one dump per incident
+                    stalled = True
+                    print(f"WATCHDOG: {bad} unresponsive for 10s — thread dump:",
+                          file=sys.stderr, flush=True)
+                    faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+
+        threading.Thread(target=watch, name="loop-watchdog", daemon=True).start()
     app.state.pipe = pipe
     app.state.agent = agent
     app.state.ledger = ledger
