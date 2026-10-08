@@ -156,10 +156,15 @@ Cost levers (💰 in `configs/default.yaml`): model tier, `detect_every`, `imgsz
 ## Cloud Run (`Dockerfile`, `cloudbuild.yaml`, `scripts/deploy_cloudrun.sh`)
 
 - `scripts/deploy_cloudrun.sh {cpu|gpu} [all|setup|secrets|build|deploy|domain]` → project
-  `vision-b5c97`, `us-central1`. Services `vision-ninja` (CPU, 4 vCPU/8Gi) and `vision-ninja-gpu`
-  (NVIDIA L4, 8 vCPU/32Gi). Both: **exactly one always-on instance** (the studio's pipeline +
-  agent + `StudioContext` live in process memory — never scale out), CPU always allocated,
-  `gs://<project>-<service>-out` mounted at `/app/out` (container disk is ephemeral).
+  `vision-b5c97`, `us-central1`. Services `vision-ninja` (CPU, 2 vCPU/4Gi, **always on**, ~$115/mo)
+  and `vision-ninja-gpu` (NVIDIA L4, 8 vCPU/32Gi, runs in **`serious-glyph`** via
+  `RUN_PROJECT=serious-glyph` — vision-b5c97's L4 quota was denied; **scales to zero**: always-on
+  it's ~$1,000+/mo, so the cost is a ~7 min cold start — wake it before a demo). Both: **at most
+  one instance** (the studio's pipeline + agent + `StudioContext` live in process memory — never
+  scale out), CPU always allocated while running, label `app=vision-ninja` (a $300/mo budget on
+  the Jean Labs billing account filters on it), `gs://<project>-<service>-out` mounted at
+  `/app/out` (container disk is ephemeral). Every build leaves a full image in Artifact Registry
+  (CPU ~1 GB, GPU ~4.6 GB) — prune untagged digests after a burst of deploys.
 - Image: `VARIANT=cpu|gpu` picks the torch wheel index; `LOCAL_MODELS=on` (gpu) keeps the local
   vision models. Secrets come from Secret Manager (copied from `.env` by the `secrets` step) —
   `.env` is in `.dockerignore`/`.gcloudignore` and must stay there.

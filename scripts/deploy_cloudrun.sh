@@ -6,7 +6,7 @@
 #   scripts/deploy_cloudrun.sh cpu <step>     # one step: setup | secrets | build | deploy | domain
 #
 # What it creates (project $PROJECT, region $REGION):
-#   service      vision-ninja (cpu) / vision-ninja-gpu (gpu) — ONE always-on instance
+#   service      vision-ninja (cpu, always on) / vision-ninja-gpu (gpu, scales to zero) — at most ONE instance
 #                (the studio holds one live pipeline + agent in process memory)
 #   image        $REGION-docker.pkg.dev/$PROJECT/studio/vision-ninja:{cpu,gpu}
 #   bucket       gs://$PROJECT-<service>-out, mounted at /app/out (recordings, library,
@@ -123,16 +123,20 @@ deploy() {
     "${G[@]}" secrets describe "$name" >/dev/null 2>&1 && list="${list:+$list,}$name=$ref$name:latest"
   done
   [[ -n "$list" ]] && secrets_flag=(--set-secrets "$list")
-  local size=()
+  local size=() min=1
   if [[ "$VARIANT" == gpu ]]; then
     # Weights are pre-seeded into the bucket (scripts/seed_models.sh) → cache-only: no HF
     # rate limits (429 from Cloud Run's shared IPs) and no gated-model token needed.
     env="$env|OCC_SET=detector.device=cuda|HF_HUB_OFFLINE=1|TRANSFORMERS_OFFLINE=1|STUDIO_PRELOAD=gemma-3-4b-it"
     size=(--cpu 8 --memory 32Gi --gpu 1 --gpu-type nvidia-l4 --no-gpu-zonal-redundancy)
+    # Scale to zero when idle: an always-on L4 instance is ~$1,000+/month. The cost is a cold
+    # start (~7 min until LocateAnything-3B is loaded) — wake it before a demo.
+    min=0
   else
     # CPU levers: nano model, detect every 2nd frame (tracker predicts between), ≤1280px.
-    env="$env|OCC_SET=detector.device=cpu;detector.model=yolo26n.pt;runtime.detect_every=2;source.max_long_side=1280|OCC_TORCH_THREADS=3"
-    size=(--cpu 4 --memory 8Gi)
+    env="$env|OCC_SET=detector.device=cpu;detector.model=yolo26n.pt;runtime.detect_every=2;source.max_long_side=1280|OCC_TORCH_THREADS=1"
+    size=(--cpu 2 --memory 4Gi)      # ~$115/mo always-on; 1 inference thread leaves a core for requests
+    min=1
   fi
   # liveness: /healthz is a sync route (threadpool) behind the auth middleware, so a frozen
   # loop or an exhausted threadpool fails it and Cloud Run replaces the instance in ~30s.
@@ -142,7 +146,8 @@ deploy() {
   "${GR[@]}" run deploy "$SERVICE" --image "$IMAGE" --region "$REGION" \
     --service-account "$SA" --execution-environment gen2 \
     --no-invoker-iam-check \
-    --min-instances 1 --max-instances 1 --no-cpu-throttling \
+    --min-instances "$min" --max-instances 1 --no-cpu-throttling \
+    --labels app=vision-ninja \
     --concurrency 1000 --timeout 3600 --port 8080 "${size[@]}" \
     --liveness-probe "httpGet.path=/healthz,httpGet.port=8080,periodSeconds=10,timeoutSeconds=5,failureThreshold=3" \
     --add-volume "name=out,type=cloud-storage,bucket=$BUCKET" \
