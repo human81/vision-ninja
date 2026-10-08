@@ -1,6 +1,6 @@
 # Occupancy & Traffic Analytics — with an agentic CV studio
 
-[![CI](https://github.com/jeanlaboratories/occupancy_analysis/actions/workflows/ci.yml/badge.svg)](https://github.com/jeanlaboratories/occupancy_analysis/actions/workflows/ci.yml)
+[![CI](https://github.com/human81/vision-ninja/actions/workflows/ci.yml/badge.svg)](https://github.com/human81/vision-ninja/actions/workflows/ci.yml)
 
 Real-time occupancy and traffic analytics from any RTSP stream, video file or camera:
 **detect → track → spatial math → emit** the Vertex AI Vision
