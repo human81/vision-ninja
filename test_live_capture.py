@@ -127,7 +127,27 @@ def collect() -> list[tuple[str, bool, str]]:
         check("plain HLS → worker on the stream url (OpenCV reader)",
               len(seen) >= 2 and seen[1][3] == "https://cdn.example/x.m3u8", str(seen[1:2]))
 
-        # 6) the page memory used by open_source
+        # 6) a source switch must be able to wake a source that's waiting for frames. The
+        #    pipeline only checks for a switch BETWEEN frames; a camera feed whose browser
+        #    stopped sending (or a live stream in an underrun) never yielded again, so the
+        #    switch was saved but never applied — the canvas kept the old picture.
+        import threading
+        sources.PUSH.clear()
+        def ends_after_interrupt(src):
+            done = threading.Event()
+            threading.Thread(target=lambda: (list(src.frames()), done.set()), daemon=True).start()
+            time.sleep(0.3)
+            waiting = not done.is_set()
+            src.interrupt()
+            return waiting and done.wait(1.0)
+        check("silent camera feed returns on interrupt (source switch)",
+              ends_after_interrupt(sources.PushSource()))
+        src, spawned, resolved, _ = _source(0, "hang")          # worker that never sends a frame
+        check("live stream waiting in prebuffer/underrun returns on interrupt",
+              ends_after_interrupt(src))
+        src.release()
+
+        # 7) the page memory used by open_source
         sources.remember_page("https://cdn.example/a.m3u8", "https://youtube.com/watch?v=A")
         check("open_source can find a stream's page", sources._PAGE_FOR.get(
             "https://cdn.example/a.m3u8") == "https://youtube.com/watch?v=A")

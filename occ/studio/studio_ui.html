@@ -1157,7 +1157,14 @@ async function resetDwell(){try{await fetch('/dwell/reset',{method:'POST'});toas
 window.addSource=async()=>{let url=$('srcurl').value.trim();if(!url)return;
   await fetch('/sources',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,name:$('srcname').value.trim()})});
   $('srcurl').value='';$('srcname').value='';pollSources();};
-window.useSource=async(id)=>{await fetch('/sources/use',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});toast('switched to live source');pollConfig();};
+window.useSource=async(id)=>{
+  const r=await(await fetch('/sources/use',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})).json().catch(()=>({}));
+  if(r.status!=='success'){toast('could not switch: '+(r.error||'unknown error'));return;}  // e.g. YouTube refused
+  // Show it: the canvas may be on a still / clip / frozen frame, which would hide the live view.
+  if(window.isFrozen&&window.isFrozen())window.toggleFreeze();
+  setCanvas('live');
+  $('img').src='/stream.mjpg?t='+Date.now();
+  toast('switched to '+(r.name||'live source'));pollConfig();};
 window.rmSource=async(id)=>{await fetch('/sources/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});pollSources();};
 
 const TASK_LABEL={agent:'Agent Root — brain · text + tools',vision:'Vision — sees images',
@@ -2018,6 +2025,7 @@ function applyTimeline(d){ // agent-driven (Co-Director)
   setInterval(async()=>{if(!PIN)return;try{const s=await fetch('/stabilize').then(r=>r.json());let h=$('stabhint');
     if(h)h.textContent=s.enabled?('· '+(s.tracking?('tracking ✓ conf '+s.confidence+' ('+s.inliers+'pts)'):'acquiring…')):'';}catch(e){}},1500);
   let frozen=false;
+  window.isFrozen=()=>frozen;
   window.toggleFreeze=()=>{frozen=!frozen;
     img.src=frozen?('/snapshot.png?t='+Date.now()):'/stream.mjpg';
     if(frozen)window.setDrawEnabled(true);

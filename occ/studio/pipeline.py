@@ -189,12 +189,30 @@ class StudioPipeline:
 
     # ---- config ----
     def reconfigure(self, updates: dict):
+        new_uri = str(updates.get("source.uri", ""))
+        if new_uri and not new_uri.startswith("push:") and getattr(self, "_prev_source", None):
+            # Leaving camera mode for a real scene: camera mode switched analysis OFF (it's a
+            # selfie feed) — restore what was on before, or the scene plays with no detections.
+            self._detect_on = getattr(self, "_prev_detect", True)
+            self._prev_source = None
         with self._lock:
             for k, v in updates.items():
                 _set_dotted(self.cfg.data, k, v)
             self.cfg._apply_source_overrides(set(updates))
             self._status = "loading"
         self._dirty.set()
+        self._interrupt_source()
+
+    def _interrupt_source(self):
+        """The loop only sees `_dirty` between frames. A source that waits for frames without
+        yielding (camera push after the browser stops sending; a stalled/underrun live stream)
+        would hold it forever — the switch was saved but never applied. Wake it."""
+        src = getattr(self, "_src", None)
+        if src is not None and hasattr(src, "interrupt"):
+            try:
+                src.interrupt()
+            except Exception:
+                pass
 
     def set_render_flags(self, **flags) -> dict:
         """Toggle renderer draw flags LIVE (no rebuild/flash) — the Renderer reads the
@@ -294,6 +312,7 @@ class StudioPipeline:
 
     def shutdown(self):
         self._stop.set()
+        self._interrupt_source()
 
     # ---- recording ----
     def start_recording(self) -> str:
@@ -361,6 +380,7 @@ class StudioPipeline:
             uri = str(self.cfg.get("source.uri", ""))
             try:
                 src, det, trk, renderer, every = self._build()
+                self._src = src
             except Exception as e:
                 # never freeze: show a clear card, then retry (a new switch wins via dirty)
                 self._set_placeholder("cannot open source", os.path.basename(uri))

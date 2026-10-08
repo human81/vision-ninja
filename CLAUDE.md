@@ -47,7 +47,7 @@ OCC_SOURCE=assets/videos/vehicles-2.mp4 .venv/bin/uvicorn occ.web:app --port 800
 OCC_SOURCE=assets/videos/market-square.mp4 .venv/bin/uvicorn occ.studio.server:app --port 8011  # studio only
 
 # tests — plain scripts with `if __name__ == "__main__"` (NOT pytest); run each file directly
-.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 306/306)
+.venv/bin/python fishfood.py            # full dogfood, all clips, levels 1–6 (the green gate; expect 308/308)
 .venv/bin/python fishfood.py --level 2  # stop after level N (1 smoke … 5 browser e2e, 6 studio try-on); --frames N
 .venv/bin/python test_phase3.py         # a single test file
 .venv/bin/python test_proto_roundtrip.py test_phase2.py test_phase3.py test_phase4.py test_e2e_web.py
@@ -58,7 +58,7 @@ STUDIO_AUTH=off .venv/bin/python run.py studio &  # then:
 STUDIO_URL=http://127.0.0.1:8011 .venv/bin/python test_studio_tryon.py   # full offline+online+UI regression
 ```
 
-After any change, run `fishfood.py` and expect **ALL PASS — 306/306** (levels 1–6;
+After any change, run `fishfood.py` and expect **ALL PASS — 308/308** (levels 1–6;
 level 6 = studio auth gate (`test_studio_auth.py`, fake Firebase) + agent-code policy
 (`test_studio_codepolicy.py`) + cloud-readiness (`test_cloud_ready.py`) + geometry/tracking invariants (`test_invariants.py`) + live-capture resilience
 (`test_live_capture.py`), all offline and always run, + AR try-on

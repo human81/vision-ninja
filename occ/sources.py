@@ -282,6 +282,7 @@ class SubprocessStreamSource:
         self._prebuffer_secs = prebuffer_seconds
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._interrupt = threading.Event()   # frames() returns (the pipeline is switching)
         self._proc: subprocess.Popen | None = None
         self._thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._thread.start()
@@ -412,7 +413,7 @@ class SubprocessStreamSource:
         # build an initial cushion so the first segment-gap doesn't underrun.
         prebuffer = max(1, int(self.fps * self._prebuffer_secs))
         t0 = time.time()
-        while not self._stop.is_set():
+        while not (self._stop.is_set() or self._interrupt.is_set()):
             with self._lock:
                 have = len(self._buf)
             if have >= prebuffer or time.time() - t0 > 15.0:
@@ -421,7 +422,7 @@ class SubprocessStreamSource:
         dt = 1.0 / (self.fps or 30.0)
         next_t = time.perf_counter()
         dry = False
-        while not self._stop.is_set():
+        while not (self._stop.is_set() or self._interrupt.is_set()):
             with self._lock:
                 frame = self._buf.popleft() if self._buf else None
             if frame is None:                 # underrun — wait for the next burst
@@ -442,6 +443,10 @@ class SubprocessStreamSource:
                 time.sleep(min(slack, 0.5))
             else:
                 next_t = time.perf_counter()
+
+    def interrupt(self):
+        """Make frames() return now (it waits silently through underruns and the prebuffer)."""
+        self._interrupt.set()
 
     def release(self):
         self._stop.set()
@@ -509,6 +514,11 @@ class PushSource:
                 yield _maybe_downscale(frame, self.max_long_side)
             else:
                 time.sleep(0.005)        # nothing new yet; yield CPU
+
+    def interrupt(self):
+        """Make frames() return now. It only yields on a NEW pushed frame, so once the browser
+        stops sending, the pipeline loop would never get back to see a source switch."""
+        self._stop.set()
 
     def release(self):
         self._stop.set()
